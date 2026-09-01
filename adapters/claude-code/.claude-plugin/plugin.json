@@ -1,0 +1,15 @@
+{
+  "name": "shoulder-daemon",
+  "version": "0.1.1",
+  "description": "Quiet advisory context injection for Claude Code. Per-event hooks are pure HTTP callbacks to a local relay; one SessionStart script starts that relay if it is not running.",
+  "author": {
+    "name": "shoulder-daemon contributors"
+  },
+  "license": "MIT",
+  "keywords": [
+    "hooks",
+    "advisory",
+    "context-injection",
+    "http"
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "name": "shoulder-daemon",
+  "description": "Context advisor with horns",
+  "owner": {
+    "name": "Quitty"
+  },
+  "plugins": [
+    {
+      "name": "shoulder-daemon",
+      "source": "./"
+    }
+  ]
+}

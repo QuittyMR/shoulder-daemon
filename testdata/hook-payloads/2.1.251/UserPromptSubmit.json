@@ -1,0 +1,9 @@
+{
+  "session_id": "22222222-2222-4222-8222-222222222222",
+  "transcript_path": "/home/user/.claude/projects/-home-user-project/22222222-2222-4222-8222-222222222222.jsonl",
+  "cwd": "/home/user/project",
+  "prompt_id": "44444444-4444-4444-8444-444444444444",
+  "permission_mode": "bypassPermissions",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "Reply with only the word READY and nothing else."
+}

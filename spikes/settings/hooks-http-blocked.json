@@ -1,0 +1,163 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:8787/v1/hooks/claude-code/SessionStart",
+            "timeout": 2,
+            "headers": {
+              "X-Shoulder-Token": "literal-s3-abc",
+              "X-Env-Token": "${GC_TOKEN}"
+            }
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:8787/v1/hooks/claude-code/UserPromptSubmit",
+            "timeout": 2,
+            "headers": {
+              "X-Shoulder-Token": "literal-s3-abc",
+              "X-Env-Token": "${GC_TOKEN}"
+            }
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:8787/v1/hooks/claude-code/Stop",
+            "timeout": 2,
+            "headers": {
+              "X-Shoulder-Token": "literal-s3-abc",
+              "X-Env-Token": "${GC_TOKEN}"
+            }
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:8787/v1/hooks/claude-code/SubagentStop",
+            "timeout": 2,
+            "headers": {
+              "X-Shoulder-Token": "literal-s3-abc",
+              "X-Env-Token": "${GC_TOKEN}"
+            }
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:8787/v1/hooks/claude-code/PreCompact",
+            "timeout": 2,
+            "headers": {
+              "X-Shoulder-Token": "literal-s3-abc",
+              "X-Env-Token": "${GC_TOKEN}"
+            }
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:8787/v1/hooks/claude-code/SessionEnd",
+            "timeout": 2,
+            "headers": {
+              "X-Shoulder-Token": "literal-s3-abc",
+              "X-Env-Token": "${GC_TOKEN}"
+            }
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:8787/v1/hooks/claude-code/Notification",
+            "timeout": 2,
+            "headers": {
+              "X-Shoulder-Token": "literal-s3-abc",
+              "X-Env-Token": "${GC_TOKEN}"
+            }
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:8787/v1/hooks/claude-code/PreToolUse",
+            "timeout": 2,
+            "headers": {
+              "X-Shoulder-Token": "literal-s3-abc",
+              "X-Env-Token": "${GC_TOKEN}"
+            }
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:8787/v1/hooks/claude-code/PostToolUse",
+            "timeout": 2,
+            "headers": {
+              "X-Shoulder-Token": "literal-s3-abc",
+              "X-Env-Token": "${GC_TOKEN}"
+            }
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:8787/v1/hooks/claude-code/PostToolUseFailure",
+            "timeout": 2,
+            "headers": {
+              "X-Shoulder-Token": "literal-s3-abc",
+              "X-Env-Token": "${GC_TOKEN}"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "httpHookAllowedEnvVars": [
+    "GC_TOKEN"
+  ],
+  "allowedHttpHookUrls": [
+    "https://example.com/*"
+  ]
+}

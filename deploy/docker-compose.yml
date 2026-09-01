@@ -1,0 +1,31 @@
+name: shoulder-daemon
+
+services:
+  shoulderd:
+    build:
+      context: ../relay
+      dockerfile: Dockerfile
+    image: shoulder-daemon/shoulderd:local
+    restart: unless-stopped
+    # Host networking, deliberately. The relay must be reachable at
+    # 127.0.0.1:8787 (Claude Code hooks post there) and must itself reach the
+    # memory service on 127.0.0.1:8100. Host networking keeps both on loopback
+    # with no port published to any other interface, which is the property that
+    # matters here: Claude Code hooks carry no authentication by default, so a
+    # relay reachable off-box would let anything on the network inject text
+    # into a live coding session.
+    network_mode: host
+    # Resolved relative to this file, so a fresh clone works wherever it sits.
+    # Copy .env.example to .env and put your keys there, or point
+    # SHOULDER_ENV_FILE at a file you keep outside the repository.
+    env_file:
+      - ${SHOULDER_ENV_FILE:-.env}
+    environment:
+      SHOULDER_ADDR: "127.0.0.1:8787"
+      SHOULDER_MEMORY_URL: "http://127.0.0.1:8100"
+    healthcheck:
+      test: ["CMD", "/shoulderd", "doctor", "-liveness", "-addr", "http://127.0.0.1:8787"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s

@@ -1,0 +1,138 @@
+{
+  "description": "shoulder-daemon advisory hooks. Every per-event hook is a pure HTTP callback to the local relay (127.0.0.1:8787) with no executable component and no subprocess. The single exception is SessionStart, which runs one script whose only job is to start that relay if it is not already running: Claude Code refuses HTTP hooks for SessionStart, so there is no way to do it over HTTP. Nothing stops the relay; it exits by itself once no session has used it for a while, which is the only correct answer when several editors are open at once.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PLUGIN_ROOT\"/scripts/ensure-daemon.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:8787/v1/hooks/claude-code/UserPromptSubmit",
+            "timeout": 2,
+            "headers": {
+              "X-Shoulder-Token": "${SHOULDER_TOKEN}"
+            },
+            "allowedEnvVars": [
+              "SHOULDER_TOKEN"
+            ]
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:8787/v1/hooks/claude-code/PreToolUse",
+            "timeout": 2,
+            "headers": {
+              "X-Shoulder-Token": "${SHOULDER_TOKEN}"
+            },
+            "allowedEnvVars": [
+              "SHOULDER_TOKEN"
+            ]
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:8787/v1/hooks/claude-code/PostToolUse",
+            "timeout": 2,
+            "headers": {
+              "X-Shoulder-Token": "${SHOULDER_TOKEN}"
+            },
+            "allowedEnvVars": [
+              "SHOULDER_TOKEN"
+            ]
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:8787/v1/hooks/claude-code/PostToolUseFailure",
+            "timeout": 2,
+            "headers": {
+              "X-Shoulder-Token": "${SHOULDER_TOKEN}"
+            },
+            "allowedEnvVars": [
+              "SHOULDER_TOKEN"
+            ]
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:8787/v1/hooks/claude-code/Stop",
+            "timeout": 2,
+            "headers": {
+              "X-Shoulder-Token": "${SHOULDER_TOKEN}"
+            },
+            "allowedEnvVars": [
+              "SHOULDER_TOKEN"
+            ]
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:8787/v1/hooks/claude-code/PreCompact",
+            "timeout": 2,
+            "headers": {
+              "X-Shoulder-Token": "${SHOULDER_TOKEN}"
+            },
+            "allowedEnvVars": [
+              "SHOULDER_TOKEN"
+            ]
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:8787/v1/hooks/claude-code/SessionEnd",
+            "timeout": 2,
+            "headers": {
+              "X-Shoulder-Token": "${SHOULDER_TOKEN}"
+            },
+            "allowedEnvVars": [
+              "SHOULDER_TOKEN"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

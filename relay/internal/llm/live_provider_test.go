@@ -1,0 +1,68 @@
+package llm
+
+import (
+	"context"
+	"os"
+	"testing"
+	"time"
+)
+
+// TestLiveDecisionAcrossProviders checks the thing that actually breaks with
+// small models: whether they return a parseable decision document.
+func TestLiveDecisionAcrossProviders(t *testing.T) {
+	if os.Getenv("SHOULDER_LIVE") == "" {
+		t.Skip("set SHOULDER_LIVE=1")
+	}
+	cases := []struct{ name, preset string }{
+		{"glm-coding", "glm-coding"},
+		{"gemini", "gemini"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("SHOULDER_LLM", tc.preset)
+			p, err := FromEnv()
+			if err != nil {
+				t.Skipf("not configured: %v", err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			defer cancel()
+
+			d, err := Decide(ctx, p, liveContradictionWindow, liveContradictionRecall)
+			if err != nil {
+				t.Fatalf("decide: %v", err)
+			}
+			t.Logf("inject=%q facts=%d", d.Inject, len(d.Facts))
+			if d.Inject == "" {
+				t.Error("a stored constraint contradicting the turn should have produced an injection")
+			}
+		})
+	}
+}
+
+// TestLiveSilenceIsReachable is the more important half: an unremarkable turn
+// must produce no injection. A model that always speaks is useless here.
+func TestLiveSilenceIsReachable(t *testing.T) {
+	if os.Getenv("SHOULDER_LIVE") == "" {
+		t.Skip("set SHOULDER_LIVE=1")
+	}
+	for _, preset := range []string{"glm-coding", "gemini"} {
+		t.Run(preset, func(t *testing.T) {
+			t.Setenv("SHOULDER_LLM", preset)
+			p, err := FromEnv()
+			if err != nil {
+				t.Skipf("not configured: %v", err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			defer cancel()
+
+			d, err := Decide(ctx, p, "<user>what is 2+2</user>\n<assistant>4</assistant>", nil)
+			if err != nil {
+				t.Fatalf("decide: %v", err)
+			}
+			t.Logf("inject=%q facts=%d", d.Inject, len(d.Facts))
+			if d.Inject != "" {
+				t.Errorf("an unremarkable turn should stay silent, got %q", d.Inject)
+			}
+		})
+	}
+}

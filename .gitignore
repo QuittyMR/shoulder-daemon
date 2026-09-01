@@ -1,0 +1,23 @@
+spikes/bin/
+spikes/captures/
+spikes/results/*.log
+spikes/results/*-out.txt
+spikes/results/*-err.txt
+.omc/state/
+bin/
+*.db
+*.db-wal
+*.db-shm
+.env
+.omc
+
+# Compiled binaries. Go build drops these beside the source, and they embed the
+# absolute build path of whoever produced them.
+/advisor-echo/advisor-echo
+/relay/replay
+/relay/shoulderd
+/spikes/listener/spike
+
+# A convenience symlink to the newest spike log. It stores an absolute path, so
+# it leaks a home directory and is broken in any other checkout.
+spikes/results/latest

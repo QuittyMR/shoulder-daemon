@@ -1,93 +1,108 @@
+<p align="center">
+  <img src="docs/assets/hero.webp" width="900"
+       alt="A dark oil painting: a young person in a white collar looks away, while a small winged daemon perched on their shoulder leans in to whisper in their ear.">
+</p>
+
 # shoulder-daemon
 
+Persistent memory and context injection for coding agents. A local Go
+daemon watches your session, keeps a bucket of facts and injects one short
+note into the agent's context when something it holds is worth saying.
+The agent has no memory tool to forget to call. Storage and reasoning are both
+swappable, and neither has to leave your machine.
 
+- **The agent never manages memory.** It doesn't need to know your categories, doesn't
+  check whether a fact is already stored, and can't skip the docs or slurp all
+  of them at session start. Only relevant context is injected.
+- **Facts don't pile up.** When facts change, they supersede each-other.
+  A correction replaces what it corrects, so the agent can trust what it is
+  given without checking whether it is current.
+- **A small model does the work.** It reads each finished turn, decides whether
+  anything is worth saying, writes what is worth keeping, and stays quiet
+  otherwise. It can run locally.
 
-## Getting started
+## Install
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+Install the daemon, then the adapter for whichever editor you use. The adapters
+start the daemon when the editor launches, and it stops itself after fifteen
+minutes with no session. Opening several editors starts one daemon.
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+```bash
+go install gitlab.com/quittymr/shoulder-daemon/relay/cmd/shoulderd@latest
+```
 
-## Add your files
+**OpenCode** - copy one file into `~/.config/opencode/plugins/`, or into
+`.opencode/plugins/` for a single project. OpenCode loads both.
 
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+```bash
+mkdir -p ~/.config/opencode/plugins
+curl -o ~/.config/opencode/plugins/shoulder-daemon.js https://gitlab.com/quittymr/shoulder-daemon/-/raw/main/adapters/opencode/shoulder-daemon.js
+```
+
+**Claude Code** - add the marketplace and install the plugin.
 
 ```
-cd existing_repo
-git remote add origin https://gitlab.com/quittymr/shoulder-daemon.git
-git branch -M main
-git push -uf origin main
+/plugin marketplace add https://gitlab.com/quittymr/shoulder-daemon
+/plugin install shoulder-daemon
 ```
 
-## Integrate with your tools
+OpenCode's `ReasoningPart` carries reasoning text and the adapter forwards it as
+part of the turn. Claude Code does not expose thinking tokens, so that field is
+always empty there.
 
-* [Set up project integrations](https://gitlab.com/quittymr/shoulder-daemon/-/settings/integrations)
+Select a model:
 
-## Collaborate with your team
+```bash
+export SHOULDER_LLM=gemini          # and GEMINI_API_KEY
+export SHOULDER_MEMORY_URL=http://127.0.0.1:8100    # optional; without it nothing is stored
+```
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+Check it with `shoulderd doctor`.
 
-## Test and Deploy
+Running from a checkout, a container or a service manager is covered in
+[docs/INSTALL.md](docs/INSTALL.md), along with every setting.
 
-Use the built-in continuous integration in GitLab.
+## Use it
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+```bash
+$ shoulderd message "this is my git repository"
+main branch is master
 
-***
+$ shoulderd fact add --global "I prefer terse answers with no preamble"
+$ shoulderd fact add --local --category=structure "integration tests need a live Postgres"
+$ shoulderd fact list --local
+$ shoulderd digest                      # narrative summary; --local or --global to narrow
+```
 
-# Editing this README
+`message` records what it learns by default. `--update` forces it, `--no-update`
+answers without writing. Writes demand `--local` or `--global`; reads default to
+this project, except `digest`, which covers both. `shoulderd help` spells out
+each one.
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+## Alternatives
 
-## Suggestions for a good README
+| | What triggers it | Where it stores |
+|---|---|---|
+| **shoulder-daemon** | a small model reads each finished turn | any backend behind a five-method interface |
+| [Natural Memory Triggers](https://github.com/doobidoo/mcp-memory-service) | regex and keyword matches on your prompt | SQLite-vec, Cloudflare or Milvus |
+| [PowerContext](https://github.com/oceanbase/powercontext) | every prompt | SQLite, or OceanBase for teams |
+| [claude-code-semantic-memory](https://github.com/razor-ai/claude-code-semantic-memory) | embedding similarity on your prompt | SQLite with local Ollama embeddings |
+| [Letta Claude Subconscious](https://github.com/letta-ai/claude-subconscious) | a background agent reads each finished turn | Letta, self-hosted or theirs |
+| [ContextStream](https://github.com/contextstream/mcp-server) | tools the agent chooses to call, plus hooks | their hosted service, API key required |
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+## Docs
 
-## Name
-Choose a self-explaining name for your project.
+- [How it works](docs/ARCHITECTURE.md) - the hot path, the injection budget, why a hook can't block
+- [Install and configure](docs/INSTALL.md)
+- [Advisor protocol](docs/ADVISOR.md) - bring your own decision model
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+## Status
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+Working and tested against Claude Code 2.1.251 and OpenCode 1.18.25. More model
+and memory connectors are coming. Contributing notes and the house rules are in
+[docs/INSTALL.md](docs/INSTALL.md); issues and merge requests at
+<https://gitlab.com/quittymr/shoulder-daemon>.
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+## Licence
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+MIT. See [LICENSE](LICENSE).

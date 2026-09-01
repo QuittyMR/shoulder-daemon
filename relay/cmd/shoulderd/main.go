@@ -1,0 +1,256 @@
+// Command shoulderd is the shoulder-daemon relay: it absorbs hook traffic from a
+// coding harness in microseconds and talks to a swappable advisor off the hot
+// path. It has no third-party dependencies, so it builds and runs offline.
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/cliapi"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/config"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/httpapi"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/llm"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/memory"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/outbox"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/pipeline"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/session"
+)
+
+func main() {
+	if len(os.Args) > 1 {
+		c := &cli{out: os.Stdout, err: os.Stderr}
+		os.Exit(c.dispatch(os.Args[1], os.Args[2:]))
+	}
+	if err := serve(); err != nil {
+		fmt.Fprintln(os.Stderr, "shoulderd:", err)
+		os.Exit(1)
+	}
+}
+
+func serve() error {
+	cfg := config.Load()
+	log := newLogger(cfg.LogPath, cfg.LogLevel)
+
+	if cfg.Token == "" {
+		log.Warn("SHOULDER_TOKEN is unset; any local process can post events and read advice for a live session")
+	}
+
+	reg := session.NewRegistry(200)
+	box := outbox.New()
+	queue := make(chan session.Event, cfg.QueueSize)
+	srv := httpapi.New(reg, box, queue, cfg.Token, cfg.Budget)
+	srv.Log = log
+	provider, err := llm.FromEnv()
+	if err != nil {
+		return err
+	}
+	if provider == nil {
+		log.Warn("no decision model configured; shoulder-daemon will observe and stay silent",
+			"hint", "set SHOULDER_LLM to one of: "+strings.Join(llm.Presets(), ", "))
+	}
+
+	var mem memory.Connector = memory.Nop{}
+	if cfg.MemoryURL != "" {
+		store := memory.NewMCPMemory(cfg.MemoryURL, cfg.MemoryKey, 15*time.Second)
+		// What the store discards on the way to an answer is invisible from
+		// above it: a recall that returns nothing because the project's own
+		// session history outranks its facts looks exactly like a recall from
+		// an empty store.
+		store.Metrics = srv.Metrics
+		mem = store
+	} else {
+		log.Warn("no memory backend configured; nothing will be recalled or stored",
+			"hint", "set SHOULDER_MEMORY_URL to an mcp-memory-service base URL")
+	}
+	// Wrapping here is what makes local-or-global a property of the system: no
+	// caller above this line can reach a backend with a record that never chose.
+	mem = memory.Checked(mem)
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	pipe := &pipeline.Pipeline{
+		Cfg: cfg, Log: log, Metrics: srv.Metrics, Registry: reg,
+		IdleExit: cfg.IdleExit, OnIdle: stop,
+		Outbox: box, LLM: provider, Memory: mem, Queue: queue,
+	}
+	go pipe.Run(ctx)
+
+	// The CLI routes share the mux, the address and the token with the hooks,
+	// and live in another package only because this one may not import the
+	// advisor or the store.
+	mux := srv.Handler()
+	cliapi.New(pipe, cfg.Token).Mount(mux)
+
+	hs := &http.Server{
+		Addr:              cfg.Addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	go func() {
+		<-ctx.Done()
+		sctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = hs.Shutdown(sctx)
+	}()
+
+	log.Info("shoulderd listening",
+		"addr", cfg.Addr, "llm", providerName(provider), "memory", mem.Name(),
+		"dry_run", cfg.Budget.DryRun, "auth", cfg.Token != "")
+
+	if err := hs.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
+}
+
+// newLogger writes to a file when one is configured and to stderr otherwise.
+// It never writes to stdout: on the command-hook fallback path stdout belongs
+// to the harness, and polluting it is how the reference project corrupted its
+// own hook output.
+func newLogger(path string, level slog.Level) *slog.Logger {
+	opts := &slog.HandlerOptions{Level: level}
+	if path != "" {
+		if f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+			return slog.New(slog.NewJSONHandler(f, opts))
+		}
+	}
+	return slog.New(slog.NewJSONHandler(os.Stderr, opts))
+}
+
+func (c *cli) doctor(args []string) int {
+	fs := c.flags("doctor", doctorUsage)
+	base := fs.String("addr", "http://"+config.Load().Addr, "relay base URL")
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	liveness := fs.Bool("liveness", false, "only check that the relay is up; ignore whether hooks have fired")
+	if code := c.parse(fs, args); code >= 0 {
+		return code
+	}
+
+	client := &http.Client{Timeout: 3 * time.Second}
+	out := map[string]any{}
+	code := 0
+
+	resp, err := client.Get(*base + "/healthz")
+	if err != nil {
+		report(*asJSON, map[string]any{"relay": "unreachable", "error": err.Error()},
+			"relay unreachable at "+*base+": "+err.Error()+
+				"\nHooks fail open, so sessions still work — but nothing is being observed.")
+		return 1
+	}
+	_ = resp.Body.Close()
+	out["relay"] = "ok"
+
+	// Liveness is a strictly weaker question than readiness: "is the process
+	// serving?", not "has the harness ever called it?". Container healthchecks
+	// must ask the weaker one, or a correctly-running relay reports unhealthy
+	// until somebody happens to start a coding session.
+	if *liveness {
+		if *asJSON {
+			report(true, out, "")
+		} else {
+			fmt.Println("relay:   ok")
+		}
+		return 0
+	}
+
+	mresp, err := client.Get(*base + "/metrics")
+	if err != nil {
+		out["metrics"] = "unreachable"
+		code = 1
+	} else {
+		defer mresp.Body.Close()
+		buf := make([]byte, 1<<20)
+		n, _ := mresp.Body.Read(buf)
+		metrics := string(buf[:n])
+		out["metrics"] = "ok"
+
+		missing := []string{}
+		for _, e := range httpapi.RoutineEvents() {
+			if !strings.Contains(metrics, `event="`+e+`"`) {
+				missing = append(missing, e)
+			}
+		}
+		out["events_never_seen"] = missing
+		if len(missing) > 0 {
+			code = 1
+		}
+
+		// A rejected hook is counted after its latency is observed, so it looks
+		// exactly like a hook that fired. Without this check doctor reports a
+		// healthy relay while every event is being turned away at the door.
+		if n := counterValue(metrics, "shoulder_unauthorised_total"); n > 0 {
+			out["unauthorised"] = n
+			code = 1
+		}
+	}
+
+	if *asJSON {
+		report(true, out, "")
+		return code
+	}
+
+	fmt.Printf("relay:   %v\n", out["relay"])
+	fmt.Printf("metrics: %v\n", out["metrics"])
+	if n, ok := out["unauthorised"].(int); ok {
+		fmt.Printf("auth:    %d REJECTED: the token the harness sends does not match this daemon's\n", n)
+		fmt.Println("         SHOULDER_TOKEN must hold the same value here and wherever the harness")
+		fmt.Println("         runs. Hooks fail open, so a session looks normal while nothing is observed.")
+	}
+	if missing, ok := out["events_never_seen"].([]string); ok {
+		if len(missing) == 0 {
+			fmt.Println("hooks:   all expected events have fired at least once")
+		} else {
+			fmt.Printf("hooks:   NEVER FIRED: %v\n", missing)
+			fmt.Println("         Check that the plugin is installed, and that allowedHttpHookUrls")
+			fmt.Println("         either is unset or includes http://127.0.0.1:8787/*")
+		}
+	}
+	return code
+}
+
+// counterValue reads one Prometheus counter out of a scrape. It returns 0 when
+// the counter has never been incremented, which is indistinguishable from
+// absent and means the same thing here.
+func counterValue(scrape, name string) int {
+	for _, line := range strings.Split(scrape, "\n") {
+		rest, ok := strings.CutPrefix(line, name+" ")
+		if !ok {
+			continue
+		}
+		n, err := strconv.Atoi(strings.TrimSpace(rest))
+		if err != nil {
+			return 0
+		}
+		return n
+	}
+	return 0
+}
+
+func report(asJSON bool, v map[string]any, text string) {
+	if asJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(v)
+		return
+	}
+	fmt.Println(text)
+}
+
+func providerName(p llm.Provider) string {
+	if p == nil {
+		return "none"
+	}
+	return p.Name()
+}
