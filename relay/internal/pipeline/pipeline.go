@@ -131,6 +131,9 @@ func (p *Pipeline) Run(ctx context.Context) {
 				gone, left := p.Registry.CloseSession(ev.SessionID)
 				p.Outbox.Forget(ev.SessionID)
 				go p.forgetNotes(context.WithoutCancel(ctx), []session.Evicted{gone})
+				// The end of a session is the one moment the whole scope can be
+				// judged at once, and nothing is waiting on the answer.
+				go p.consolidateBoth(ctx, gone.Project)
 				if left == 0 {
 					p.Log.Info("last session ended; shutting down", "session", ev.SessionID)
 					if p.OnIdle != nil {
@@ -152,6 +155,14 @@ func (p *Pipeline) Run(ctx context.Context) {
 			if !p.Registry.ClaimAdvisor(ev.SessionID) {
 				p.Metrics.Inc("shoulder_advisor_skipped_inflight_total")
 				continue
+			}
+			// Every few turns, not only at the end: a long session writes all
+			// day and would otherwise carry its own clutter into every recall
+			// until it closes.
+			if ev.Kind == session.KindTurnEnd {
+				if turn := p.Registry.Turn(ev.SessionID); turn > 0 && turn%consolidateEvery == 0 {
+					go p.consolidateBoth(ctx, p.sessionProject([]session.Event{ev}))
+				}
 			}
 			go func(sessionID string) {
 				defer p.Registry.ReleaseAdvisor(sessionID)

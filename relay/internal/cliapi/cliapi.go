@@ -54,11 +54,24 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/cli/message", s.handleMessage)
 	mux.HandleFunc("/v1/cli/facts", s.handleFacts)
 	mux.HandleFunc("/v1/cli/digest", s.handleDigest)
+	mux.HandleFunc("/v1/cli/consolidate", s.handleConsolidate)
 }
 
 // The request and reply types below are the wire contract. They are exported
 // because cmd/shoulderd encodes against them: one definition of each shape
 // means the CLI and the daemon cannot drift apart field by field.
+// ConsolidateRequest asks for one tidying pass over a scope. Unlike a digest,
+// this one writes, so an unset scope is an omission rather than "everything".
+type ConsolidateRequest struct {
+	Scope   string `json:"scope"`
+	Project string `json:"project"`
+}
+
+type ConsolidateResponse struct {
+	Dropped int `json:"dropped"`
+	Merged  int `json:"merged"`
+}
+
 type MessageRequest struct {
 	Text    string `json:"text"`
 	Scope   string `json:"scope"`
@@ -428,4 +441,32 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_, _ = w.Write(b)
+}
+
+func (s *Server) handleConsolidate(w http.ResponseWriter, r *http.Request) {
+	if !s.authorised(w, r) || !s.methodIs(w, r, http.MethodPost) {
+		return
+	}
+	var req ConsolidateRequest
+	if !s.decode(w, r, &req) {
+		return
+	}
+	sc, err := scope.Parse(req.Scope)
+	if err != nil {
+		s.fail(w, http.StatusBadRequest, err)
+		return
+	}
+	if sc == scope.Local && req.Project == "" {
+		s.fail(w, http.StatusBadRequest, errors.New("--local names no project: run this inside one"))
+		return
+	}
+	if !s.requireModel(w) {
+		return
+	}
+	dropped, merged, err := s.Pipe.Consolidate(r.Context(), sc, req.Project)
+	if err != nil {
+		s.fail(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, ConsolidateResponse{Dropped: dropped, Merged: merged})
 }

@@ -64,6 +64,23 @@ func salvageInject(s string) (string, bool) {
 	return out, out != ""
 }
 
+// Unfence strips a code fence from around model output. Small models wrap JSON
+// in one however plainly they are told not to.
+func Unfence(s string) string {
+	i := strings.Index(s, "```")
+	if i < 0 {
+		return s
+	}
+	s = s[i+3:]
+	if j := strings.IndexByte(s, '\n'); j >= 0 {
+		s = s[j+1:]
+	}
+	if j := strings.Index(s, "```"); j >= 0 {
+		s = s[:j]
+	}
+	return s
+}
+
 // ParseDecision tolerates the things small models do to JSON: code fences,
 // leading prose, trailing commentary.
 func ParseDecision(raw string) (Decision, error) {
@@ -71,15 +88,7 @@ func ParseDecision(raw string) (Decision, error) {
 	if sanitize.IsSilent(s) {
 		return Decision{}, nil
 	}
-	if i := strings.Index(s, "```"); i >= 0 {
-		s = s[i+3:]
-		if j := strings.IndexByte(s, '\n'); j >= 0 {
-			s = s[j+1:]
-		}
-		if j := strings.Index(s, "```"); j >= 0 {
-			s = s[:j]
-		}
-	}
+	s = Unfence(s)
 	start := strings.IndexByte(s, '{')
 	end := strings.LastIndexByte(s, '}')
 	if start < 0 {

@@ -47,6 +47,8 @@ func (c *cli) dispatch(name string, args []string) int {
 		return c.fact(args)
 	case "digest":
 		return c.digest(args)
+	case "consolidate":
+		return c.consolidate(args)
 	case "help", "-h", "-help", "--help":
 		// Asking what the commands are is a question, and an answered question
 		// leaves by stdout with nothing to report to the shell.
@@ -71,6 +73,7 @@ const usage = `usage:
   shoulderd fact update --local|--global --id=ID [--category=C] [--tag=T]... "content"
   shoulderd fact list   [--local|--global] [--limit=N]
   shoulderd digest      [--local|--global]
+  shoulderd consolidate --local|--global
 
 --local is this project alone; --global follows you into every other one.
 ` + projectIs + `
@@ -167,6 +170,19 @@ Describe in prose everything a scope holds.
   --addr URL   relay base URL (default http://127.0.0.1:8787)
 
 With neither flag this covers both at once: this project and everything global.
+` + projectIs
+
+const consolidateUsage = `usage: shoulderd consolidate --local|--global [--addr=URL]
+
+Read one scope whole and tidy it: drop facts that have stopped being rules, and
+collapse several wordings of one rule into a single record.
+
+  --local      this project alone
+  --global     what follows you into every project
+  --addr URL   relay base URL (default http://127.0.0.1:8787)
+
+The daemon does this by itself when a session ends and every few turns. Running
+it by hand is for watching what it removes.
 ` + projectIs
 
 func (c *cli) message(args []string) int {
@@ -582,4 +598,33 @@ func (l *stringList) Set(v string) error {
 	}
 	*l = append(*l, v)
 	return nil
+}
+
+// consolidate runs one tidying pass by hand. The daemon does this on its own at
+// the end of a session and every few turns; this is for looking at the result,
+// and for a store that has been collecting clutter since before it did.
+func (c *cli) consolidate(args []string) int {
+	fs := c.flags("consolidate", consolidateUsage)
+	addr := bindAddr(fs)
+	var sf scopeFlags
+	sf.bind(fs)
+	if code := c.parse(fs, args); code >= 0 {
+		return code
+	}
+	if fs.NArg() > 0 {
+		return c.reject(fmt.Errorf("consolidate takes no arguments, got %q", fs.Arg(0)))
+	}
+	sc, project, err := sf.forWriting()
+	if err != nil {
+		return c.reject(err)
+	}
+
+	var reply cliapi.ConsolidateResponse
+	if code := c.call(*addr, http.MethodPost, "/v1/cli/consolidate", cliapi.ConsolidateRequest{
+		Scope: string(sc), Project: project,
+	}, &reply); code != 0 {
+		return code
+	}
+	fmt.Fprintf(c.out, "%d dropped, %d merged\n", reply.Dropped, reply.Merged)
+	return 0
 }
