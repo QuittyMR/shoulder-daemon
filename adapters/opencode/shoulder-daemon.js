@@ -18,7 +18,7 @@
  * caller keeps the array it already had.
  */
 
-import { mkdirSync, readFileSync, rmdirSync } from "node:fs";
+import { mkdirSync, readFileSync, rmdirSync, statSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -140,9 +140,28 @@ async function ensureDaemon() {
   if (await answering()) return;
 
   const lock = join(process.env.XDG_RUNTIME_DIR || tmpdir(), "shoulder-daemon.start.lock");
-  try {
-    mkdirSync(lock);
-  } catch {
+  // A lock left behind by a launch that died wedges every start that follows,
+  // for good: the daemon never comes back and nothing says why. A timer cannot
+  // be relied on to clear it, because the process holding the timer is exactly
+  // the one that may not survive. So it is broken on age instead: one older
+  // than staleLockMs belongs to a launch that is not coming back.
+  const staleLockMs = 60_000;
+  const take = () => {
+    try {
+      mkdirSync(lock);
+      return true;
+    } catch {}
+    try {
+      if (Date.now() - statSync(lock).mtimeMs > staleLockMs) {
+        rmdirSync(lock);
+        mkdirSync(lock);
+        return true;
+      }
+    } catch {}
+    return false;
+  };
+
+  if (!take()) {
     // Somebody else is starting it. Give them a moment, then stop caring: a
     // daemon that never arrives costs this session its advice and nothing else.
     for (let i = 0; i < 10; i++) {
@@ -151,12 +170,6 @@ async function ensureDaemon() {
     }
     return;
   }
-  // A killed launch must not leave the lock behind and wedge every later start.
-  setTimeout(() => {
-    try {
-      rmdirSync(lock);
-    } catch {}
-  }, 30_000).unref?.();
 
   try {
     const cmd = setting("SHOULDER_START_CMD");
@@ -172,6 +185,12 @@ async function ensureDaemon() {
     child.unref();
   } catch {
     /* starting the daemon is best effort; it is not this session's problem */
+  } finally {
+    // Released as soon as the start has been handed off, so a second editor
+    // opening moments later is not made to wait out the staleness window.
+    try {
+      rmdirSync(lock);
+    } catch {}
   }
 }
 

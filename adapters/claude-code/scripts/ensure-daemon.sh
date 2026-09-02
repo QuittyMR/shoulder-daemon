@@ -23,7 +23,23 @@ answering && exit 0
 # both start one. mkdir is atomic on every filesystem this runs on; whoever
 # loses the race waits briefly for the winner rather than racing to bind.
 LOCK="${XDG_RUNTIME_DIR:-/tmp}/shoulder-daemon.start.lock"
-if ! mkdir "${LOCK}" 2>/dev/null; then
+
+# A lock left behind by a launch that died wedges every start that follows, for
+# good: the daemon never comes back and nothing says why. It cannot be cleaned
+# up by a background reaper either - the harness kills a hook's process group
+# the moment the hook returns, so anything sleeping in the background dies with
+# it. So the lock is broken on age instead: one older than a minute belongs to a
+# launch that is not coming back.
+take() {
+  mkdir "${LOCK}" 2>/dev/null && return 0
+  if [ -n "$(find "${LOCK}" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+    rmdir "${LOCK}" 2>/dev/null || true
+    mkdir "${LOCK}" 2>/dev/null && return 0
+  fi
+  return 1
+}
+
+if ! take; then
   for _ in 1 2 3 4 5 6 7 8 9 10; do
     sleep 0.3
     answering && exit 0
@@ -31,9 +47,6 @@ if ! mkdir "${LOCK}" 2>/dev/null; then
   exit 0
 fi
 trap 'rmdir "${LOCK}" 2>/dev/null || true' EXIT
-
-# A stale lock from a killed launch would otherwise wedge every later start.
-( sleep 30; rmdir "${LOCK}" 2>/dev/null || true ) >/dev/null 2>&1 &
 
 if [ -n "${SHOULDER_START_CMD:-}" ]; then
   ( eval "${SHOULDER_START_CMD}" ) >/dev/null 2>&1 &

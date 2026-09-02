@@ -63,6 +63,11 @@ const (
 	noteOrphanAge = 6 * time.Hour
 )
 
+// activeWithin is how recently a session must have said something to count as
+// an editor somebody is using. It only decides whether a session may veto
+// another session's goodbye; nothing is evicted on a timer.
+const activeWithin = time.Minute
+
 // IdleEviction is how long a session may go untouched before its state and
 // pending advice are dropped.
 const IdleEviction = time.Hour
@@ -118,20 +123,33 @@ func (p *Pipeline) Run(ctx context.Context) {
 				// The harness has said this editor is done. If it was the last
 				// one there is nothing left to observe, so the daemon stops
 				// rather than sitting idle waiting to be noticed.
-				gone, left := p.Registry.CloseSession(ev.SessionID)
+				gone, _ := p.Registry.CloseSession(ev.SessionID)
 				p.Outbox.Forget(ev.SessionID)
 				go p.forgetNotes(context.WithoutCancel(ctx), []session.Evicted{gone})
 				// The end of a session is the one moment the whole scope can be
 				// judged at once, and nothing is waiting on the answer.
 				go p.consolidateBoth(ctx, gone.Project)
-				if left == 0 {
-					// Only the sessions this process has heard from are
-					// counted, so another editor may well still be open.
-					// Stopping anyway is deliberate: the adapters probe the
-					// port before every prompt and start one again, which is
-					// cheaper and more certain than a daemon guessing how long
-					// to linger.
-					p.Log.Info("last known session ended; shutting down", "session", ev.SessionID)
+
+				// A goodbye is the one moment worth asking whether anything is
+				// left, and the count alone does not answer it. A session that
+				// stopped posting without ever saying goodbye - an editor that
+				// crashed, one that was killed, a stray request - stays in the
+				// registry and vetoes every real goodbye that follows, so the
+				// last editor closes and the daemon carries on running. An
+				// editor being used posts on every prompt and every tool call,
+				// so anything silent for this long is not being used, and one
+				// that is merely idle gets a daemon back at its next prompt.
+				stale := p.Registry.Evict(activeWithin, ev.TS)
+				for _, s := range stale {
+					p.Outbox.Forget(s.ID)
+					p.Metrics.Inc("shoulder_sessions_evicted_total")
+				}
+				if len(stale) > 0 {
+					go p.forgetNotes(context.WithoutCancel(ctx), stale)
+				}
+				if p.Registry.Len() == 0 {
+					p.Log.Info("last session ended; shutting down",
+						"session", ev.SessionID, "also_dropped", len(stale))
 					if p.OnIdle != nil {
 						p.OnIdle()
 					}

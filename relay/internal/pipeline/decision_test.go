@@ -13,6 +13,7 @@ import (
 
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/memory"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/scope"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/session"
 )
 
 // keywordBody is a decision that says nothing and remembers nothing, carrying
@@ -549,5 +550,49 @@ func TestTheLastGoodbyeStopsTheDaemon(t *testing.T) {
 	case <-idle:
 	case <-time.After(3 * time.Second):
 		t.Fatal("the daemon outlived its only session")
+	}
+}
+
+// An editor that crashes, is killed, or never says goodbye stays in the
+// registry and vetoes every real goodbye that follows, so the last editor
+// closes and the daemon carries on running.
+func TestASilentSessionDoesNotVetoTheLastGoodbye(t *testing.T) {
+	ts := advisorServer(t, 0, decisionBody(t, ""))
+	s := newStack(t, ts.URL, 2*time.Second)
+	idle := make(chan struct{}, 1)
+	s.pipe.OnIdle = func() { idle <- struct{}{} }
+
+	// A session that arrived and was never heard from again. Observed directly:
+	// the hook path stamps everything with the time it arrives, which is the
+	// point - nothing in a payload can make a session look old.
+	s.pipe.Registry.Observe(session.Event{
+		SessionID: "ghost", Kind: session.KindUserPrompt, CWD: "/w",
+		TS: time.Now().Add(-2 * activeWithin),
+	})
+	s.post(t, "UserPromptSubmit", prompt("live", "working"))
+	s.post(t, "SessionEnd", `{"session_id":"live","hook_event_name":"SessionEnd"}`)
+
+	select {
+	case <-idle:
+	case <-time.After(3 * time.Second):
+		t.Fatal("a session nobody is in kept the daemon running")
+	}
+}
+
+// The other half: a session that is being used must still veto.
+func TestAWorkingSessionKeepsTheDaemonUp(t *testing.T) {
+	ts := advisorServer(t, 0, decisionBody(t, ""))
+	s := newStack(t, ts.URL, 2*time.Second)
+	idle := make(chan struct{}, 1)
+	s.pipe.OnIdle = func() { idle <- struct{}{} }
+
+	s.post(t, "UserPromptSubmit", prompt("a", "working"))
+	s.post(t, "UserPromptSubmit", prompt("b", "also working"))
+	s.post(t, "SessionEnd", `{"session_id":"a","hook_event_name":"SessionEnd"}`)
+
+	select {
+	case <-idle:
+		t.Fatal("the daemon stopped while another editor was working")
+	case <-time.After(500 * time.Millisecond):
 	}
 }
