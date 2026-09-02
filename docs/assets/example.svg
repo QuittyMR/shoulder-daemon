@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="336" viewBox="0 0 760 336" role="img" aria-label="Terminal demo: the user mentions in passing that the branch is called master, shoulder-daemon stores it, and in a later session it tells the agent before the agent gets it wrong.">
+<title>shoulder-daemon learns a fact once and supplies it in a later session</title>
+<defs><clipPath id="c0"><rect id="r0" x="28.0" y="48.0" height="23.0" width="356.16999999999996"/></clipPath><clipPath id="c3"><rect id="r3" x="28.0" y="198.0" height="23.0" width="311.02"/></clipPath></defs>
+<style>
+text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"DejaVu Sans Mono",monospace;font-size:15.0px;white-space:pre}
+#r0{animation:t0 14.0s infinite steps(39);animation-fill-mode:both}
+@keyframes t0{0.0%{width:0} 3.5714%{width:0} 15.2714%{width:356.17px} 100.0%{width:356.17px}}
+#k0{animation:x0 14.0s infinite steps(39),o0 14.0s infinite;animation-fill-mode:both}
+@keyframes x0{0.0%{x:28.0px} 3.5714%{x:28.0px} 15.2714%{x:380.17px} 100.0%{x:380.17px}}
+@keyframes o0{0.0%{opacity:0} 3.5%{opacity:0} 3.5714%{opacity:1} 18.4857%{opacity:1} 18.5571%{opacity:0} 100.0%{opacity:0}}
+#l1{animation:a1 14.0s infinite;animation-fill-mode:both}
+@keyframes a1{0.0%{opacity:0} 16.7857%{opacity:0} 18.5714%{opacity:1} 100.0%{opacity:1}}
+#l2{animation:a2 14.0s infinite;animation-fill-mode:both}
+@keyframes a2{0.0%{opacity:0} 26.0714%{opacity:0} 27.8571%{opacity:1} 100.0%{opacity:1}}
+#r3{animation:t3 14.0s infinite steps(34);animation-fill-mode:both}
+@keyframes t3{0.0%{width:0} 34.2857%{width:0} 44.4857%{width:311.02px} 100.0%{width:311.02px}}
+#k3{animation:x3 14.0s infinite steps(34),o3 14.0s infinite;animation-fill-mode:both}
+@keyframes x3{0.0%{x:28.0px} 34.2857%{x:28.0px} 44.4857%{x:335.02px} 100.0%{x:335.02px}}
+@keyframes o3{0.0%{opacity:0} 34.2143%{opacity:0} 34.2857%{opacity:1} 47.7%{opacity:1} 47.7714%{opacity:0} 100.0%{opacity:0}}
+#l4{animation:a4 14.0s infinite;animation-fill-mode:both}
+@keyframes a4{0.0%{opacity:0} 48.2143%{opacity:0} 50.0%{opacity:1} 100.0%{opacity:1}}
+#l5{animation:a5 14.0s infinite;animation-fill-mode:both}
+@keyframes a5{0.0%{opacity:0} 57.5%{opacity:0} 59.2857%{opacity:1} 100.0%{opacity:1}}
+.scene{animation:fade 14.0s infinite}
+@keyframes fade{0.0%{opacity:1} 88.5714%{opacity:1} 93.5714%{opacity:0} 99.9286%{opacity:0} 100.0%{opacity:1}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important}}
+</style>
+<rect width="760" height="336" rx="10" fill="#0d1117" stroke="#30363d"/>
+<path d="M0 10a10 10 0 0 1 10-10h740a10 10 0 0 1 10 10v28H0z" fill="#161b22"/>
+<line x1="0" y1="38" x2="760" y2="38" stroke="#30363d"/>
+<circle cx="22" cy="19" r="6" fill="#ff5f57"/><circle cx="42" cy="19" r="6" fill="#febc2e"/><circle cx="62" cy="19" r="6" fill="#28c840"/>
+<g class="scene"><rect id="k0" x="28.0" y="49.0" width="9.03" height="19.0" fill="#e6edf3" opacity="0"/><text id="l0" x="28.0" y="62.0" clip-path="url(#c0)" textLength="352.17" lengthAdjust="spacing"><tspan fill="#58a6ff">› </tspan><tspan fill="#e6edf3">actually we use master here, not main</tspan></text><text id="l1" x="28.0" y="92.0" textLength="568.89" lengthAdjust="spacing"><tspan fill="#3fb950">  INFO </tspan><tspan fill="#8b949e">fact stored (local): the main branch is master, not main</tspan></text><text id="l2" x="28.0" y="152.0" textLength="297.99" lengthAdjust="spacing"><tspan fill="#6e7681">  — a new session, a week later —</tspan></text><rect id="k3" x="28.0" y="199.0" width="9.03" height="19.0" fill="#e6edf3" opacity="0"/><text id="l3" x="28.0" y="212.0" clip-path="url(#c3)" textLength="307.02" lengthAdjust="spacing"><tspan fill="#58a6ff">› </tspan><tspan fill="#e6edf3">rebase this onto the main branch</tspan></text><text id="l4" x="28.0" y="272.0" textLength="496.65" lengthAdjust="spacing"><tspan fill="#d29922">  shoulder-daemon → </tspan><tspan fill="#e6edf3">the main branch is master, not main</tspan></text><text id="l5" x="28.0" y="302.0" textLength="207.69" lengthAdjust="spacing"><tspan fill="#8b949e">  Rebasing onto master.</tspan></text></g>
+</svg>

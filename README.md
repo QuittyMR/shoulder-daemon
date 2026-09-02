@@ -23,6 +23,14 @@ Storage and reasoning are both modular, and local-only is supported.
 - **Retrieval and updates are smart.** A small, low-latency model determines when facts need to be updated,
   injected into the session or created from scratch. Local inference is fully supported.
 
+Something you mention once in passing comes back in a later session, without the agent
+having to ask for it.
+
+<p align="center">
+  <img src="docs/assets/example.svg" width="760"
+       alt="Animated terminal transcript. The user mentions in passing that the branch here is called master rather than main; shoulder-daemon logs that it stored the fact. A week later, in a new session, the user asks to rebase onto the main branch, shoulder-daemon tells the agent the branch is master, and the agent rebases onto master.">
+</p>
+
 ## Install
 
 Install the daemon, then the adapter for whichever editor you use. The adapters
