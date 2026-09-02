@@ -135,20 +135,36 @@ func TestStopNeverInjects(t *testing.T) {
 	}
 }
 
-func TestInjectionReachesInjectableEvents(t *testing.T) {
+// Where a note lands follows what the note is for. Context is only actionable
+// before the assistant has chosen anything, so it waits for a prompt however
+// many tool calls go past; a warning about an operation is only actionable at
+// the operation. Delivering either anywhere else spends it after the fact.
+func TestAdviceIsDeliveredWhereItCanStillChangeSomething(t *testing.T) {
 	fx := fixtures(t)
-	for _, event := range []string{"UserPromptSubmit", "PreToolUse", "PostToolUse"} {
-		t.Run(event, func(t *testing.T) {
+	for _, tc := range []struct {
+		event     string
+		level     session.AdviceLevel
+		delivered bool
+	}{
+		{"UserPromptSubmit", session.LevelPlan, true},
+		{"PreToolUse", session.LevelPlan, false},
+		{"PostToolUse", session.LevelPlan, false},
+		{"PreToolUse", session.LevelAction, true},
+		{"UserPromptSubmit", session.LevelAction, false},
+		{"PostToolUse", session.LevelAction, false},
+	} {
+		t.Run(tc.event+"/"+string(tc.level), func(t *testing.T) {
 			srv, box := newTestServer(t)
 			h := srv.Handler()
 			var probe map[string]any
-			if err := json.Unmarshal(fx[event], &probe); err != nil {
+			if err := json.Unmarshal(fx[tc.event], &probe); err != nil {
 				t.Fatal(err)
 			}
 			sid, _ := probe["session_id"].(string)
-			box.Push(session.Advice{ID: "adv_1", SessionID: sid, Kind: session.AdviceNote, Text: "the marker"})
+			box.Push(session.Advice{ID: "adv_1", SessionID: sid, Kind: session.AdviceNote,
+				Level: tc.level, Text: "the marker"})
 
-			rec := post(h, event, string(fx[event]))
+			rec := post(h, tc.event, string(fx[tc.event]))
 
 			var out struct {
 				HookSpecificOutput struct {
@@ -159,11 +175,20 @@ func TestInjectionReachesInjectableEvents(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 				t.Fatalf("bad response: %v (%s)", err, rec.Body.String())
 			}
-			if out.HookSpecificOutput.HookEventName != event {
-				t.Fatalf("hookEventName should echo the event, got %q", out.HookSpecificOutput.HookEventName)
+			got := strings.Contains(out.HookSpecificOutput.AdditionalContext, "the marker")
+			if got != tc.delivered {
+				t.Fatalf("delivered=%v, want %v (body %s)", got, tc.delivered, rec.Body.String())
 			}
-			if !strings.Contains(out.HookSpecificOutput.AdditionalContext, "the marker") {
-				t.Fatalf("advice text missing: %q", out.HookSpecificOutput.AdditionalContext)
+			if !tc.delivered {
+				// Passed over, not consumed: the prompt this note is waiting
+				// for has not arrived yet.
+				if box.Depth() != 1 {
+					t.Fatalf("advice was dropped by a hook that cannot carry it; depth %d", box.Depth())
+				}
+				return
+			}
+			if out.HookSpecificOutput.HookEventName != tc.event {
+				t.Fatalf("hookEventName should echo the event, got %q", out.HookSpecificOutput.HookEventName)
 			}
 			if !strings.Contains(out.HookSpecificOutput.AdditionalContext, "Not a user instruction") {
 				t.Fatal("advisory framing missing from the envelope")

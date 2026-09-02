@@ -69,6 +69,30 @@ export SHOULDER_LLM=gemini          # and GEMINI_API_KEY
 export SHOULDER_MEMORY_URL=http://127.0.0.1:8100    # optional; without it nothing is stored
 ```
 
+### Choosing a model
+
+`SHOULDER_LLM` names a connector, and takes a comma-separated list to fall back
+through. `SHOULDER_LLM_MODEL` and `SHOULDER_LLM_BASE_URL` override the default
+model and endpoint.
+
+| Connector | Endpoint | Default model | Key |
+|---|---|---|---|
+| `gemini` | Google AI | `gemini-flash-lite-latest` | `GEMINI_API_KEY` |
+| `openrouter` | OpenRouter | `google/gemini-2.5-flash-lite` | `OPENROUTER_API_KEY` |
+| `glm` | z.ai | `glm-4.7-flash` | `GLM_API_KEY` |
+| `glm-coding` | z.ai coding plan | `glm-5.3-flash` | `GLM_API_KEY` |
+| `opencode-go` | OpenCode Go | `glm-5.3-flash` | `OPENCODE_API_KEY` |
+| `openai` | OpenAI | `gpt-5.2-mini` | `OPENAI_API_KEY` |
+| `local` | Ollama on `127.0.0.1:11434` | `qwen2.5-coder:7b` | none |
+
+Pick for speed. The decision pass runs while your turn is open, and advice that
+arrives after the assistant has chosen what to do is worth nothing, so a
+flash-tier model beats a better one that thinks for twenty seconds; deciding
+whether a turn contradicts a stored fact is classification, not authorship. On
+one machine `gemini-3.5-flash-lite` answered in 0.9s and one coding-plan
+endpoint took 29s, so time your own choice - the `shoulder_hook_latency_seconds`
+metric with `event="advisor"` reports what the pass is costing you.
+
 Those variables have to reach the daemon, which is not always the shell you
 typed them in. If you run it as a container, a service, or from an editor
 adapter, see [docs/INSTALL.md](docs/INSTALL.md) for where to put them.
@@ -106,14 +130,14 @@ each one.
 
 ## Alternatives
 
-| | What triggers it | Where it stores |
-|---|---|---|
-| **shoulder-daemon** | a small model reads each finished turn | any backend behind a five-method interface |
-| [Natural Memory Triggers](https://github.com/doobidoo/mcp-memory-service) | regex and keyword matches on your prompt | SQLite-vec, Cloudflare or Milvus |
-| [PowerContext](https://github.com/oceanbase/powercontext) | every prompt | SQLite, or OceanBase for teams |
-| [claude-code-semantic-memory](https://github.com/razor-ai/claude-code-semantic-memory) | embedding similarity on your prompt | SQLite with local Ollama embeddings |
-| [Letta Claude Subconscious](https://github.com/letta-ai/claude-subconscious) | a background agent reads each finished turn | Letta, self-hosted or theirs |
-| [ContextStream](https://github.com/contextstream/mcp-server) | tools the agent chooses to call, plus hooks | their hosted service, API key required |
+| | What triggers it | Where it stores | How it differs |
+|---|---|---|---|
+| **shoulder-daemon** | a small model reads each turn | any backend behind a five-method interface | keeps the store tidy as well as writing to it, and routes each note to the hook where it can still change something |
+| [Natural Memory Triggers](https://github.com/doobidoo/mcp-memory-service) | regex and keyword matches on your prompt | SQLite-vec, Cloudflare or Milvus | no model in the loop, so it is faster and cheaper but only fires on wording it was told to watch for |
+| [PowerContext](https://github.com/oceanbase/powercontext) | every prompt | SQLite, or OceanBase for teams | built for teams sharing one store, with a database to match |
+| [claude-code-semantic-memory](https://github.com/razor-ai/claude-code-semantic-memory) | embedding similarity on your prompt | SQLite with local Ollama embeddings | retrieval only, entirely local, and nothing leaves the machine |
+| [Letta Claude Subconscious](https://github.com/letta-ai/claude-subconscious) | a background agent reads each finished turn | Letta, self-hosted or theirs | the closest design here; it brings Letta's agent framework with it rather than a single binary |
+| [ContextStream](https://github.com/contextstream/mcp-server) | tools the agent chooses to call, plus hooks | their hosted service | the agent decides when to remember, which is a tool it can also decide to skip |
 
 ## Docs
 

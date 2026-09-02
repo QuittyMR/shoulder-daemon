@@ -29,23 +29,37 @@ func (b *Box) Push(a session.Advice) {
 	b.pending[a.SessionID] = append(q, a)
 }
 
-// Take pops the first advice for the session that has not expired at this turn.
-// Expired entries are discarded on the way past.
-func (b *Box) Take(sessionID string, turn uint64) (session.Advice, bool) {
+// Take pops the first advice for the session that this event kind may carry and
+// that has not expired at this turn.
+//
+// Advice the kind cannot carry is left in the queue rather than dropped: a note
+// meant for the next prompt is passed over by every tool call in between, and
+// is still there when the prompt arrives. Expired entries are discarded on the
+// way past.
+func (b *Box) Take(sessionID string, turn uint64, kind session.Kind) (session.Advice, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	q := b.pending[sessionID]
-	for len(q) > 0 {
-		a := q[0]
-		q = q[1:]
-		if a.Expired(turn) {
-			continue
+	kept := q[:0:0]
+	var found session.Advice
+	ok := false
+	for _, a := range q {
+		switch {
+		case ok:
+			kept = append(kept, a)
+		case a.Expired(turn):
+		case kind.Delivers(a.Level):
+			found, ok = a, true
+		default:
+			kept = append(kept, a)
 		}
-		b.pending[sessionID] = q
-		return a, true
 	}
-	delete(b.pending, sessionID)
-	return session.Advice{}, false
+	if len(kept) == 0 {
+		delete(b.pending, sessionID)
+	} else {
+		b.pending[sessionID] = kept
+	}
+	return found, ok
 }
 
 func (b *Box) Forget(sessionID string) {

@@ -22,16 +22,39 @@ const (
 	KindSessionEnd       Kind = "session_end"
 )
 
-// CarriesAdvice reports whether a response to this event may carry an
-// injection. The three boundary kinds are capture-only: a turn end could only
-// inject by also denying the stop, which takes the turn away from the user, and
-// a compact or session end has no live turn left to advise.
-func (k Kind) CarriesAdvice() bool {
-	switch k {
-	case KindTurnEnd, KindCompact, KindSessionEnd:
-		return false
+// AdviceLevel says where in a turn a piece of advice is still worth delivering.
+type AdviceLevel string
+
+const (
+	// LevelPlan is context: something the assistant should know before it
+	// decides what to do. It is only useful before it has decided, so it is
+	// delivered at the prompt and nowhere else.
+	LevelPlan AdviceLevel = "plan"
+
+	// LevelAction is about an operation that is about to happen. It is
+	// delivered at a tool call, which is the last point anything can be
+	// stopped.
+	LevelAction AdviceLevel = "action"
+)
+
+// Delivers reports whether a response to this event may carry advice of this
+// level.
+//
+// Advice used to drain on whichever hook fired first, which put context in
+// front of an assistant that had already chosen its next several tool calls -
+// too late to change the plan, and unable to recall the calls already in
+// flight. Where a note lands has to follow what the note is for: context is
+// only actionable before the assistant has committed to anything, and a warning
+// about an operation is only actionable at the operation. Everything else - a
+// tool result, an assistant message, a turn end - is after the fact, and
+// spending a note there is the same as discarding it.
+func (k Kind) Delivers(level AdviceLevel) bool {
+	switch level {
+	case LevelAction:
+		return k == KindToolCall
+	default:
+		return k == KindUserPrompt
 	}
-	return true
 }
 
 // Event is one observation from a coding session. Adapters translate their
@@ -74,13 +97,14 @@ const (
 
 // Advice is one pending advisory message for a session.
 type Advice struct {
-	ID          string     `json:"id"`
-	SessionID   string     `json:"session_id"`
-	Kind        AdviceKind `json:"kind"`
-	Text        string     `json:"text"`
-	CreatedTurn uint64     `json:"created_turn"`
-	TTLTurns    int        `json:"ttl_turns"`
-	CreatedAt   time.Time  `json:"created_at"`
+	ID          string      `json:"id"`
+	SessionID   string      `json:"session_id"`
+	Kind        AdviceKind  `json:"kind"`
+	Level       AdviceLevel `json:"level,omitempty"`
+	Text        string      `json:"text"`
+	CreatedTurn uint64      `json:"created_turn"`
+	TTLTurns    int         `json:"ttl_turns"`
+	CreatedAt   time.Time   `json:"created_at"`
 }
 
 // Expired reports whether the advice has sat unclaimed for longer than its TTL.

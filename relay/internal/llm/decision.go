@@ -18,7 +18,10 @@ import (
 // session, what to remember from it, and the keywords that carry this turn
 // forward to the next one.
 type Decision struct {
-	Inject   string       `json:"inject"`
+	Inject string `json:"inject"`
+	// Level decides where the injection is delivered: "action" at the tool call
+	// it is about, anything else at the next prompt. Empty is the common case.
+	Level    string       `json:"level,omitempty"`
 	Facts    []facts.Fact `json:"facts"`
 	Keywords []string     `json:"keywords,omitempty"`
 }

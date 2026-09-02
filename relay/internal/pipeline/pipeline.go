@@ -266,7 +266,7 @@ func (p *Pipeline) Consult(ctx context.Context, sessionID string) {
 		return
 	}
 
-	p.queueInjection(sessionID, turn, decision.Inject)
+	p.queueInjection(sessionID, turn, decision.Inject, decision.Level)
 	p.persist(ctx, sessionID, project, decision.Facts, recalled)
 	p.rememberKeywords(ctx, sessionID, project, window+decision.Inject, decision.Keywords)
 }
@@ -691,7 +691,7 @@ func (p *Pipeline) recall(ctx context.Context, text, project string, scopes []sc
 	return merged
 }
 
-func (p *Pipeline) queueInjection(sessionID string, turn uint64, raw string) {
+func (p *Pipeline) queueInjection(sessionID string, turn uint64, raw, level string) {
 	if sanitize.IsSilent(raw) {
 		p.Metrics.Inc("shoulder_advice_silent_total")
 		return
@@ -705,6 +705,7 @@ func (p *Pipeline) queueInjection(sessionID string, turn uint64, raw string) {
 		ID:          "adv_" + randomID(),
 		SessionID:   sessionID,
 		Kind:        session.AdviceNote,
+		Level:       adviceLevel(level),
 		Text:        text,
 		CreatedTurn: turn,
 		TTLTurns:    2,
@@ -1147,4 +1148,15 @@ func randomID() string {
 		return fmt.Sprintf("%d", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(b)
+}
+
+// adviceLevel reads the model's choice of where the note belongs. Anything it
+// does not recognise is context, which is both the common case and the safe
+// one: a note delivered at the prompt is early, and a note delivered at a tool
+// call the model did not mean is noise in front of an action.
+func adviceLevel(s string) session.AdviceLevel {
+	if session.AdviceLevel(strings.ToLower(strings.TrimSpace(s))) == session.LevelAction {
+		return session.LevelAction
+	}
+	return session.LevelPlan
 }

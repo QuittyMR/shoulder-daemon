@@ -131,7 +131,7 @@ func TestLiveBranchScenario(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer cancel()
 		p.Consult(ctx, sid)
-		if a, ok := box.Take(sid, reg.Turn(sid)); ok {
+		if a, ok := box.Take(sid, reg.Turn(sid), session.KindUserPrompt); ok {
 			t.Logf("    INJECT: %q", textutil.Clip(a.Text, 100))
 		} else {
 			t.Logf("    INJECT: (none)")

@@ -125,8 +125,8 @@ func (s *Server) handleClaudeCode(w http.ResponseWriter, r *http.Request) {
 
 	s.ingest(ev)
 
-	if ev.Kind.CarriesAdvice() {
-		if a, ok := s.collect(ev.SessionID); ok {
+	{
+		if a, ok := s.collect(ev.SessionID, ev.Kind); ok {
 			s.saidAdvice(ev.SessionID, event, a)
 			writeJSON(w, inject(event, a))
 			return
@@ -176,8 +176,8 @@ func (s *Server) handleNeutral(w http.ResponseWriter, r *http.Request) {
 
 	s.ingest(ev)
 
-	if ev.Kind.CarriesAdvice() {
-		if a, ok := s.collect(ev.SessionID); ok {
+	{
+		if a, ok := s.collect(ev.SessionID, ev.Kind); ok {
 			s.saidAdvice(ev.SessionID, string(ev.Kind), a)
 			writeJSON(w, map[string]any{"advice": a})
 			return
@@ -205,9 +205,9 @@ func (s *Server) ingest(ev session.Event) {
 }
 
 // collect pops one piece of advice if the budget gate allows it at this turn.
-func (s *Server) collect(sessionID string) (session.Advice, bool) {
+func (s *Server) collect(sessionID string, kind session.Kind) (session.Advice, bool) {
 	turn := s.Registry.Turn(sessionID)
-	a, ok := s.Outbox.Take(sessionID, turn)
+	a, ok := s.Outbox.Take(sessionID, turn, kind)
 	if !ok {
 		return session.Advice{}, false
 	}
