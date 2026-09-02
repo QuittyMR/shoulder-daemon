@@ -116,6 +116,18 @@ Bad:  "README restructured: two-line pitch up top, explanation moved under How i
 Bad:  "Fixed the memory List decoder to handle the results envelope." The bug is gone;
       the sentence will only ever be wrong.
 
+A durable fact next to a momentary one is not half right, it is wrong: the whole
+entry is recalled and the stale half is asserted with the same confidence as the
+rest. Split them and keep only the lasting part. Anything that is true of a thing
+right now and will be untrue once the work in front of you lands - a branch being
+behind, a service being down, a file not existing yet, a task being unfinished -
+is the momentary half.
+
+Good: "This repository pushes to two remotes, origin and origingh."
+Bad:  "This repository pushes to two remotes, origin and origingh; origingh lags
+      and needs its full history pushed." The second half stops being true the
+      moment it is pushed, which is the next thing that happens.
+
 If a new fact contradicts a stored one, set "supersedes" to that fact's id -
 but only when that stored fact carries the same scope you are giving the new one. A local
 fact never replaces a global one, or the preference stops applying everywhere else.
