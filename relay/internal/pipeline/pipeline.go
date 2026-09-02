@@ -57,11 +57,24 @@ const (
 	// if it dawdles.
 	shutdownSweep = 5 * time.Second
 
+	// lastSessionGrace is how long the daemon waits after its last known session
+	// closes before believing it.
+	//
+	// The registry holds the sessions this process has heard from, which is not
+	// the same as the sessions that are open. A daemon that started twenty
+	// seconds ago knows about one editor however many are running, and
+	// `claude -p` fires SessionEnd at the end of every invocation, so taking the
+	// first goodbye at face value has the daemon exit under every other live
+	// editor - which restarts it, which exits again on the next goodbye. Any
+	// traffic at all disarms this.
 	// noteOrphanAge is how old a note must be before another session may
 	// remove it. It is well past IdleEviction so that a note still being
 	// written by a live session in the same project can never match.
 	noteOrphanAge = 6 * time.Hour
 )
+
+// lastSessionGrace is a var so a test can shorten it; nothing else writes it.
+var lastSessionGrace = 15 * time.Second
 
 // IdleEviction is how long a session may go untouched before its state and
 // pending advice are dropped.
@@ -83,8 +96,22 @@ const IdleExit = 15 * time.Minute
 func (p *Pipeline) Run(ctx context.Context) {
 	janitor := time.NewTicker(5 * time.Minute)
 	defer janitor.Stop()
+	// nil until the last known session says goodbye, and nil again the moment
+	// anything else arrives. A nil channel never fires, which is the disarmed
+	// state.
+	var leaving <-chan time.Time
 	for {
 		select {
+		case <-leaving:
+			leaving = nil
+			if p.Registry.Len() > 0 {
+				continue
+			}
+			p.Log.Info("no other session appeared; shutting down")
+			if p.OnIdle != nil {
+				p.OnIdle()
+			}
+			return
 		case <-ctx.Done():
 			// The notes of sessions still live at shutdown have no other
 			// handle: the ids live in memory and die with this process. On a
@@ -135,11 +162,9 @@ func (p *Pipeline) Run(ctx context.Context) {
 				// judged at once, and nothing is waiting on the answer.
 				go p.consolidateBoth(ctx, gone.Project)
 				if left == 0 {
-					p.Log.Info("last session ended; shutting down", "session", ev.SessionID)
-					if p.OnIdle != nil {
-						p.OnIdle()
-					}
-					return
+					p.Log.Info("last known session ended; waiting to see if another is open",
+						"session", ev.SessionID, "grace", lastSessionGrace)
+					leaving = time.After(lastSessionGrace)
 				}
 				continue
 			}
