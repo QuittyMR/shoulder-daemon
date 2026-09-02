@@ -513,21 +513,43 @@ func TestRecallQueryUsesProseNotToolNoise(t *testing.T) {
 	s.pipe.Memory = mem
 
 	s.post(t, "UserPromptSubmit", prompt("s1", "deploy this to production"))
-	s.post(t, "PreToolUse", `{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"/etc/hosts"}}`)
-	s.post(t, "Stop", stop("s1", "Deploying now."))
 	<-s.consults
+	s.post(t, "PreToolUse", `{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"/etc/hosts"}}`)
+
+	// The prompt and the end of the turn both trigger a pass, and one is
+	// refused while the other still holds the advisor claim - which is released
+	// after the consult is announced, so receiving above does not mean the next
+	// post will be taken. The turn-end pass is the one that can see the reply,
+	// so ask until it runs rather than asserting on whichever pass happened to
+	// win.
+	deadline := time.After(2 * time.Second)
+	for done := false; !done; {
+		s.post(t, "Stop", stop("s1", "Deploying now."))
+		select {
+		case <-s.consults:
+			done = true
+		case <-deadline:
+			t.Fatal("the turn-end pass never ran")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
 
 	_, _, queries := mem.snapshot()
 	if len(queries) == 0 {
 		t.Fatal("expected a recall search")
 	}
+	full := false
 	for _, q := range queries {
-		if !strings.Contains(q.Text, "production") || !strings.Contains(q.Text, "Deploying") {
-			t.Errorf("recall query should carry the prose: %q", q.Text)
+		if !strings.Contains(q.Text, "production") {
+			t.Errorf("recall query should carry the prompt: %q", q.Text)
 		}
 		if strings.Contains(q.Text, "/etc/hosts") {
 			t.Errorf("recall query should not carry tool noise: %q", q.Text)
 		}
+		full = full || strings.Contains(q.Text, "Deploying")
+	}
+	if !full {
+		t.Errorf("no recall query carried the assistant's reply: %+v", queries)
 	}
 }
 
@@ -592,14 +614,16 @@ func TestRefusedCorrectionBecomesASupersede(t *testing.T) {
 		map[string]any{"content": "the release branch is release/stable, not main", "category": "decision", "scope": "global"}))
 	s := newStack(t, ts.URL, 2*time.Second)
 	mem := &refusingMemory{refuseWith: "abc123def4567890"}
-	// The blocking record is one this session recalled, in the scope being
-	// written. Its wording is unrelated: the store judges similarity its own
-	// way, which is the only reason this path exists.
-	mem.recalled = map[scope.Scope][]memory.Record{
-		scope.Global: {{ID: "abc123def4567890", Scope: scope.Global,
-			Content: "the integration tests need a live Postgres"}},
-	}
-	s.pipe.Memory = mem
+	// The blocking record is in the scope being written. Its wording is
+	// unrelated: the store judges similarity its own way, which is the only
+	// reason this path exists.
+	blocking := memory.Record{ID: "abc123def4567890", Scope: scope.Global,
+		Content: "the integration tests need a live Postgres"}
+	mem.recalled = map[scope.Scope][]memory.Record{scope.Global: {blocking}}
+	mem.listed = map[scope.Scope][]memory.Record{scope.Global: {blocking}}
+	// Through the boundary, as in production: it is what confirms the record
+	// the store named is one this scope may correct.
+	s.pipe.Memory = memory.Checked(mem)
 
 	s.post(t, "UserPromptSubmit", prompt("s1", "which branch do we release from"))
 	s.post(t, "Stop", stop("s1", "done"))
@@ -1091,14 +1115,18 @@ func TestALocalFactNeverSupersedesAnotherProjectsRecall(t *testing.T) {
 
 // The refusal names a record found by the store's own search, which spans
 // everything it holds. Project B storing what project A already knows must lose
-// the write rather than recover it by re-tagging A's record as B's.
-func TestARefusalNamingAnUnrecalledRecordDropsTheWrite(t *testing.T) {
+// the write rather than recover it by re-tagging A's record as B's. The scope
+// the named record is actually in is settled against the store, so a store that
+// cannot place it refuses the correction.
+func TestARefusalNamingARecordOutsideThisScopeDropsTheWrite(t *testing.T) {
 	dir := t.TempDir()
 	ts := advisorServer(t, 0, decisionBody(t, "",
 		map[string]any{"content": "the main branch is master", "category": "structure", "scope": "local"}))
 	s := newStack(t, ts.URL, 2*time.Second)
 	mem := &refusingMemory{refuseWith: "mem_in_project_a"}
-	s.pipe.Memory = mem
+	// Nothing is listed under this project, so the boundary cannot place the
+	// record the store named and refuses to move it here.
+	s.pipe.Memory = memory.Checked(mem)
 
 	s.post(t, "UserPromptSubmit", promptIn("s1", "which branch is the main one", dir))
 	s.post(t, "Stop", stop("s1", "master."))

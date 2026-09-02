@@ -387,8 +387,16 @@ func (p *Pipeline) rememberKeywords(ctx context.Context, sessionID, project, tur
 		p.Metrics.Inc("shoulder_session_keywords_no_project_total")
 		return
 	}
-	prevID, all := p.Registry.AddKeywords(sessionID, words)
-	if len(all) == 0 {
+	prevID, note, unchanged := p.Registry.AddKeywords(sessionID, words)
+	if note == "" {
+		return
+	}
+	if unchanged {
+		// This turn named nothing the session had not already named, so the
+		// record already holds exactly what a write would put there. Sending it
+		// anyway is refused by any backend that deduplicates, and the refusal
+		// reads as the turn having been lost.
+		p.Metrics.Inc("shoulder_session_keywords_unchanged_total")
 		return
 	}
 	if p.Cfg.Budget.DryRun {
@@ -398,7 +406,7 @@ func (p *Pipeline) rememberKeywords(ctx context.Context, sessionID, project, tur
 		// out.
 		p.Metrics.Inc("shoulder_session_keywords_dry_run_total")
 		p.Log.Info("dry run: would record what this session is about",
-			"session", sessionID, "project", scope.Label(project), "keywords", strings.Join(all, ", "))
+			"session", sessionID, "project", scope.Label(project), "keywords", note)
 		return
 	}
 
@@ -406,7 +414,7 @@ func (p *Pipeline) rememberKeywords(ctx context.Context, sessionID, project, tur
 	defer cancel()
 
 	rec := memory.Record{
-		Content: strings.Join(all, ", "),
+		Content: note,
 		Kind:    memory.KindSession,
 		Session: sessionID,
 		Scope:   scope.Local,
@@ -423,6 +431,13 @@ func (p *Pipeline) rememberKeywords(ctx context.Context, sessionID, project, tur
 	}
 	id, counter, err := p.writeNote(wctx, sessionID, project, prevID, rec)
 	if err != nil {
+		if errors.Is(err, memory.ErrDuplicateExact) {
+			// The store already holds this note, so the session has what it
+			// needs and the id it is holding is still good.
+			p.Metrics.Inc("shoulder_session_keywords_unchanged_total")
+			p.Registry.SetKeywordRecord(sessionID, project, prevID, note)
+			return
+		}
 		if !errors.Is(err, memory.ErrNoBackend) {
 			p.Metrics.Inc("shoulder_memory_write_error_total")
 			p.Log.Warn("session keywords not written; the next turn loses this turn's context",
@@ -430,7 +445,7 @@ func (p *Pipeline) rememberKeywords(ctx context.Context, sessionID, project, tur
 		}
 		return
 	}
-	p.Registry.SetKeywordRecord(sessionID, project, id)
+	p.Registry.SetKeywordRecord(sessionID, project, id, note)
 	p.Metrics.Inc(counter)
 }
 
@@ -800,6 +815,8 @@ func (p *Pipeline) writeFact(ctx context.Context, origin, project, key string, f
 			p.Log.Warn("supersede refused: the named fact is in another scope; the write is dropped rather than moving it here",
 				"origin", origin, "supersedes", f.Supersedes, "scope", f.Scope,
 				"project", scope.Label(project), "content", f.Content)
+		case errors.Is(err, memory.ErrDuplicateExact):
+			p.Metrics.Inc("shoulder_facts_duplicate_total")
 		case errors.Is(err, memory.ErrNoBackend):
 			p.Metrics.Inc("shoulder_facts_nowhere_total")
 		default:
@@ -833,14 +850,28 @@ func (p *Pipeline) writeFact(ctx context.Context, origin, project, key string, f
 				"origin", origin, "content", f.Content)
 			return
 		}
-		if !recalledHere(recalled, f, key, semantic.Collided) {
+		// The supersede is attempted whether or not this turn happened to recall
+		// the colliding record. Whether that record is in this scope is a
+		// question the store can answer and a recall window cannot: recall
+		// returns the nearest few, so a record sitting in this very scope is
+		// absent from it whenever the turn's wording did not rank it, and
+		// treating that absence as evidence of another scope drops the write
+		// and leaves the two near-duplicates the refusal was reporting. The
+		// boundary re-checks placement against the store and refuses a genuine
+		// cross-scope target, which is the check that was wanted here.
+		_, serr := p.Memory.Supersede(ctx, semantic.Collided, rec)
+		var cross *memory.ErrCrossScopeSupersede
+		switch {
+		case errors.As(serr, &cross):
 			p.Metrics.Inc("shoulder_facts_refused_cross_scope_total")
-			p.Log.Warn("fact refused by a memory this scope cannot see; the write is dropped rather than moving that memory here",
+			p.Log.Warn("fact refused by a memory outside this scope; the write is dropped rather than moving that memory here",
 				"origin", origin, "scope", f.Scope, "project", scope.Label(project),
 				"collided", semantic.Collided, "content", f.Content)
 			return
-		}
-		if _, serr := p.Memory.Supersede(ctx, semantic.Collided, rec); serr != nil {
+		case errors.Is(serr, memory.ErrDuplicateExact):
+			p.Metrics.Inc("shoulder_facts_duplicate_total")
+			return
+		case serr != nil:
 			p.Metrics.Inc("shoulder_memory_write_error_total")
 			p.Log.Warn("fact refused as a near-duplicate and superseding the collision also failed",
 				"origin", origin, "collided", semantic.Collided, "err", serr)
@@ -855,23 +886,6 @@ func (p *Pipeline) writeFact(ctx context.Context, origin, project, key string, f
 		p.Metrics.Inc("shoulder_memory_write_error_total")
 		p.Log.Warn("fact write failed", "origin", origin, "err", err)
 	}
-}
-
-// recalledHere reports whether id names a memory this session actually read for
-// the scope f is being written to.
-//
-// The id in a refusal comes from the store's own similarity search, which spans
-// everything it holds and answers to no scope. Superseding it on that word
-// alone re-tags another project's knowledge as this one's, which is the failure
-// the whole scheme exists to prevent, so an id we did not recall is treated as
-// belonging to somebody else.
-func recalledHere(recalled []facts.Recalled, f facts.Fact, key, id string) bool {
-	for _, r := range recalled {
-		if r.ID == id && r.Placed(f.Scope, key) {
-			return true
-		}
-	}
-	return false
 }
 
 // UpdateMode says what a message the user typed may write back.
