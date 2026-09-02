@@ -10,6 +10,7 @@ bin/
 *.db-shm
 .env
 .omc
+.omo
 
 # Compiled binaries. Go build drops these beside the source, and they embed the
 # absolute build path of whoever produced them.
