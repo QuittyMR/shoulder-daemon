@@ -58,7 +58,7 @@ func TestTheSessionListingPublishesIdentityAndNotContent(t *testing.T) {
 	r := NewRegistry(10)
 	r.Observe(Event{SessionID: "s1", Kind: KindTurnEnd, TS: time.Now(), CWD: "/srv/app", Harness: "claude-code"})
 	r.AddKeywords("s1", []string{"parser", "loader"})
-	r.SetKeywordRecord("s1", "/repo", "mem_1")
+	r.SetKeywordRecord("s1", "/repo", "mem_1", "parser, loader")
 
 	listed := r.Sessions()
 	if len(listed) != 1 {

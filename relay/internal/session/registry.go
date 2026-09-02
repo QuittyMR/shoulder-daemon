@@ -64,6 +64,13 @@ type State struct {
 	Keywords      []string `json:"-"`
 	KeywordRecord string   `json:"-"`
 
+	// KeywordsWritten is the note as the store last accepted it. A turn that
+	// names nothing the session has not already named leaves Keywords exactly
+	// as it was, and rewriting a record with the content it already holds is
+	// not a no-op at a backend that deduplicates: it is refused, and the
+	// refusal is indistinguishable in the log from losing the turn.
+	KeywordsWritten string `json:"-"`
+
 	// AdvisorInFlight prevents a slow advisor from being asked the same
 	// question several times while it is still thinking.
 	AdvisorInFlight bool `json:"advisor_in_flight"`
@@ -300,12 +307,12 @@ func (r *Registry) AddFact(sessionID string, f facts.Fact) {
 // returns the accumulated list along with the id of the record that currently
 // holds it, empty on the first turn. Repeats are dropped: a session that works
 // on one file for an hour would otherwise name it in every turn.
-func (r *Registry) AddKeywords(sessionID string, words []string) (recordID string, all []string) {
+func (r *Registry) AddKeywords(sessionID string, words []string) (recordID, note string, unchanged bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	st, ok := r.sessions[sessionID]
 	if !ok {
-		return "", nil
+		return "", "", false
 	}
 	seen := make(map[string]bool, len(st.Keywords)+len(words))
 	for _, w := range st.Keywords {
@@ -329,7 +336,8 @@ func (r *Registry) AddKeywords(sessionID string, words []string) (recordID strin
 		}
 		st.Keywords = st.Keywords[:kept]
 	}
-	return st.KeywordRecord, append([]string(nil), st.Keywords...)
+	note = strings.Join(st.Keywords, ", ")
+	return st.KeywordRecord, note, st.KeywordRecord != "" && note == st.KeywordsWritten
 }
 
 // SetKeywordRecord points the session at where its note now lives. Superseding
@@ -338,11 +346,12 @@ func (r *Registry) AddKeywords(sessionID string, words []string) (recordID strin
 // SetKeywordRecord records the note and the project it was filed under. The
 // project is kept because deleting the note later has to name the scope it is
 // deleting from, and by then the caller has only an eviction to go on.
-func (r *Registry) SetKeywordRecord(sessionID, project, recordID string) {
+func (r *Registry) SetKeywordRecord(sessionID, project, recordID, note string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if st, ok := r.sessions[sessionID]; ok {
 		st.KeywordRecord = recordID
+		st.KeywordsWritten = note
 		st.Project = project
 	}
 }
