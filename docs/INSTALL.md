@@ -254,7 +254,15 @@ adapter sends it as `X-Shoulder-Token`. When they differ every hook is rejected
 and the session carries on as though nothing were installed, because hooks fail
 open. `shoulderd doctor` reports that as `auth: N REJECTED`.
 
-An adapter can only pass on what its editor exported to it, so both
+The OpenCode adapter falls back to the env file for any `SHOULDER_` variable its
+process does not already have, looking at `$SHOULDER_ENV_FILE` and then at
+`~/.config/shoulder-daemon/env`. An editor started from a desktop launcher
+inherits the session environment rather than your login shell's, so the exports
+above are usually missing from it, and without the token the adapter posts
+unauthenticated against a daemon that is up and healthy.
+
+The Claude Code adapter has no such fallback: its hooks are configured with
+`${SHOULDER_TOKEN}` and the value is interpolated by the editor, so both
 `SHOULDER_ENV_FILE` and `SHOULDER_START_CMD` belong wherever your editor sets
 environment at startup. For Claude Code that is the `env` block in
 `~/.claude/settings.json`:

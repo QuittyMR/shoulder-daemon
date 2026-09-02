@@ -18,18 +18,48 @@
  * caller keeps the array it already had.
  */
 
-import { mkdirSync, rmdirSync } from "node:fs";
-import { spawn } from "node:child_process";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, rmdirSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
-const ADDR = process.env.SHOULDER_ADDR || "127.0.0.1:8787";
+/**
+ * setting reads one SHOULDER_ variable, falling back to the daemon's own env
+ * file when the process does not have it.
+ *
+ * An editor started from a desktop launcher inherits the session environment,
+ * not the login shell's, so the exports that configure this thing are usually
+ * absent from it. Without the token the adapter posts unauthenticated and the
+ * daemon rejects every hook, which looks exactly like the daemon being down
+ * while it sits there healthy - the one failure the user cannot see from
+ * either side. The file is the same one the daemon is configured from, so
+ * there is nothing extra to keep in step.
+ */
+const envFile = (() => {
+  const path =
+    process.env.SHOULDER_ENV_FILE ||
+    join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "shoulder-daemon", "env");
+  try {
+    const out = {};
+    for (const line of readFileSync(path, "utf8").split("\n")) {
+      const m = /^\s*(?:export\s+)?(SHOULDER_[A-Z0-9_]+)\s*=\s*(.*)$/.exec(line);
+      if (m) out[m[1]] = m[2].trim().replace(/^(['"])(.*)\1$/, "$2");
+    }
+    return out;
+  } catch {
+    return {};
+  }
+})();
+
+const setting = (name, fallback = "") => process.env[name] || envFile[name] || fallback;
+
+const ADDR = setting("SHOULDER_ADDR", "127.0.0.1:8787");
 const BASE = `http://${ADDR}`;
-const TOKEN = process.env.SHOULDER_TOKEN || "";
+const TOKEN = setting("SHOULDER_TOKEN");
 
 // Long enough for a loopback call to a relay that answers in microseconds,
 // short enough that a wedged daemon is not something the user can feel.
-const DEADLINE_MS = Number(process.env.SHOULDER_TIMEOUT_MS || 250);
+const DEADLINE_MS = Number(setting("SHOULDER_TIMEOUT_MS", "250"));
 
 const headers = () => {
   const h = { "Content-Type": "application/json" };
@@ -102,7 +132,7 @@ async function ensureDaemon() {
   }, 30_000).unref?.();
 
   try {
-    const cmd = process.env.SHOULDER_START_CMD;
+    const cmd = setting("SHOULDER_START_CMD");
     const child = cmd
       ? spawn(cmd, { shell: true, detached: true, stdio: "ignore" })
       : spawn("shoulderd", { detached: true, stdio: "ignore" });
@@ -118,6 +148,59 @@ async function ensureDaemon() {
   }
 }
 
+/**
+ * syncPost makes one HTTP call from a context that can no longer await, by
+ * handing the work to a short-lived child. process.execPath is no use as that
+ * child: under OpenCode it is the opencode binary, and running it re-enters the
+ * editor rather than making a request.
+ */
+function syncPost(url, hdrs, body) {
+  const argv = (bin) =>
+    bin === "curl"
+      ? [
+          "-sS", "-m", "1", "-o", "/dev/null", "-X", "POST", url,
+          ...Object.entries(hdrs).flatMap(([k, v]) => ["-H", `${k}: ${v}`]),
+          "--data-binary", body,
+        ]
+      : [
+          "-e",
+          `fetch(${JSON.stringify(url)},{method:"POST",headers:${JSON.stringify(hdrs)},` +
+            `body:${JSON.stringify(body)}}).then(()=>process.exit(0),()=>process.exit(1))`,
+        ];
+
+  // The first tool that is present is the only one tried. Falling through on a
+  // failed post would mean spending a second timeout per remaining tool on the
+  // ordinary case of the daemon having already stopped, and that time is paid
+  // watching an editor that will not close.
+  for (const bin of ["curl", "bun", "node"]) {
+    const r = spawnSync(bin, argv(bin), { timeout: 1500, stdio: "ignore" });
+    if (r.error && r.error.code === "ENOENT") continue;
+    return !r.error && r.status === 0;
+  }
+  return false;
+}
+
+/**
+ * closeOnExit tells the daemon that every session this process opened is over,
+ * at the moment the process goes away.
+ *
+ * OpenCode emits session.deleted only when a session is explicitly discarded,
+ * which `opencode run` never does and a user quitting the TUI rarely does. Left
+ * to that event alone the daemon is told a session began and never that it
+ * ended, and a daemon whose last session never ends never stops.
+ *
+ * It has to be "exit" rather than "beforeExit": OpenCode terminates by calling
+ * exit itself, which skips beforeExit entirely.
+ */
+function closeOnExit(live, cwd) {
+  process.on("exit", () => {
+    for (const id of live) {
+      syncPost(`${BASE}/v1/events`, headers(), JSON.stringify({ session_id: id, event: "session_end", cwd }));
+    }
+    live.clear();
+  });
+}
+
 export const ShoulderDaemon = async ({ directory, worktree }) => {
   const cwd = worktree || directory || process.cwd();
 
@@ -129,6 +212,8 @@ export const ShoulderDaemon = async ({ directory, worktree }) => {
   // built, so the hook on the request path never touches the network.
   const pending = new Map(); // sessionID -> advice text
   const assistant = new Map(); // sessionID -> { text, reasoning }
+  const live = new Set(); // sessions opened here and not yet reported as over
+  closeOnExit(live, cwd);
 
   const turn = (id) => {
     if (!assistant.has(id)) assistant.set(id, { text: "", reasoning: "" });
@@ -216,6 +301,7 @@ export const ShoulderDaemon = async ({ directory, worktree }) => {
         }
 
         if (event.type === "session.idle" && p.sessionID) {
+          live.add(p.sessionID);
           const t = turn(p.sessionID);
           assistant.delete(p.sessionID);
           send({
@@ -228,6 +314,12 @@ export const ShoulderDaemon = async ({ directory, worktree }) => {
           return;
         }
 
+        if (event.type === "session.created" && p.info && p.info.id) {
+          live.add(p.info.id);
+          send({ session_id: p.info.id, event: "session_start", cwd });
+          return;
+        }
+
         if (event.type === "session.compacted" && p.sessionID) {
           send({ session_id: p.sessionID, event: "compact", cwd });
           return;
@@ -236,6 +328,7 @@ export const ShoulderDaemon = async ({ directory, worktree }) => {
         if (event.type === "session.deleted" && p.info && p.info.id) {
           pending.delete(p.info.id);
           assistant.delete(p.info.id);
+          live.delete(p.info.id);
           send({ session_id: p.info.id, event: "session_end", cwd });
         }
       } catch {
