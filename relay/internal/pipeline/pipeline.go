@@ -27,6 +27,7 @@ import (
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/sanitize"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/scope"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/session"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/settings"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/textutil"
 )
 
@@ -36,9 +37,14 @@ type Pipeline struct {
 	Metrics  *metrics.Metrics
 	Registry *session.Registry
 	Outbox   *outbox.Box
-	LLM      llm.Provider
 	Memory   memory.Connector
 	Queue    chan session.Event
+
+	// Settings is the half of the configuration that may change while this is
+	// running: the model, and how picky it is told to be. It is read once per
+	// operation rather than once at assembly, which is the whole point, and a
+	// nil one is a pipeline with no model and the default pickiness.
+	Settings *settings.Live
 
 	// IdleExit is a backstop for a harness that dies without saying goodbye.
 	// Zero, the default, means the daemon waits to be told.
@@ -124,7 +130,14 @@ func (p *Pipeline) Run(ctx context.Context) {
 				// one there is nothing left to observe, so the daemon stops
 				// rather than sitting idle waiting to be noticed.
 				gone, _ := p.Registry.CloseSession(ev.SessionID)
-				p.Outbox.Forget(ev.SessionID)
+				// The outbox is deliberately left alone, for the reason
+				// httpapi gives for not clearing it either: `claude -p` fires
+				// SessionEnd at the end of every invocation, and a session
+				// resumed with --continue keeps its id. Dropping the advice
+				// here discarded it a fraction of a second before the next turn
+				// collected it, and only the race between this goroutine and
+				// the next hook decided whether anything was lost. Eviction is
+				// idle-time based and belongs to the janitor.
 				go p.forgetNotes(context.WithoutCancel(ctx), []session.Evicted{gone})
 				// The end of a session is the one moment the whole scope can be
 				// judged at once, and nothing is waiting on the answer.
@@ -246,9 +259,15 @@ func (p *Pipeline) Consult(ctx context.Context, sessionID string) {
 		return
 	}
 	window := render.Window(events, p.Cfg.WindowEvents, p.Cfg.WindowChars)
-	if p.LLM == nil {
+	// The provider and the pickiness are taken once and used for the whole
+	// pass. Both may be changed from under this by `shoulderd config set`, and
+	// a decision half made under one setting and half under another is a
+	// decision nobody chose.
+	prov := p.Settings.Provider()
+	if prov == nil {
 		return
 	}
+	pick := p.Settings.Pickiness()
 
 	project := p.sessionProject(events)
 	recalled := p.recall(ctx, render.RecallQuery(events), project, sessionScopes, RecallLimit, 0)
@@ -259,9 +278,9 @@ func (p *Pipeline) Consult(ctx context.Context, sessionID string) {
 	// The decision is a tool loop rather than one question: a turn that says
 	// only "do it" is unreadable without what came before, and the model is the
 	// one that knows whether this is such a turn.
-	counted := &countedSteps{Provider: p.LLM}
+	counted := &countedSteps{Provider: prov}
 	start := time.Now()
-	raw, err := llm.Run(cctx, counted, prompts.Decision, decisionPrompt(window, recalled),
+	raw, err := llm.Run(cctx, counted, prompts.Decision(pick), decisionPrompt(window, recalled),
 		p.decisionTools(sessionID, project), decisionSteps)
 	p.Metrics.ObserveAdvisor(time.Since(start))
 	if err != nil {
@@ -966,7 +985,8 @@ func (p *Pipeline) Message(ctx context.Context, req MessageRequest) (MessageRepl
 	default:
 		return MessageReply{}, fmt.Errorf("unknown update mode %q", req.Update)
 	}
-	if p.LLM == nil {
+	prov := p.Settings.Provider()
+	if prov == nil {
 		return MessageReply{}, errors.New("no decision model is configured")
 	}
 	p.Metrics.Inc("shoulder_cli_message_total")
@@ -993,7 +1013,7 @@ func (p *Pipeline) Message(ctx context.Context, req MessageRequest) (MessageRepl
 	b.WriteString(text)
 	b.WriteString("\n</question>")
 
-	raw, err := p.LLM.Complete(mctx, prompts.Message, b.String())
+	raw, err := prov.Complete(mctx, prompts.Message, b.String())
 	if err != nil {
 		p.Metrics.Inc("shoulder_cli_message_error_total")
 		return MessageReply{}, fmt.Errorf("message: %w", err)
@@ -1003,18 +1023,18 @@ func (p *Pipeline) Message(ctx context.Context, req MessageRequest) (MessageRepl
 	if req.Update == UpdateNever {
 		return MessageReply{Reply: reply}, nil
 	}
-	return MessageReply{Reply: reply, Facts: p.learn(ctx, req, text, reply, recalled)}, nil
+	return MessageReply{Reply: reply, Facts: p.learn(ctx, prov, req, text, reply, recalled)}, nil
 }
 
 // learn extracts what the exchange established and stores it. It goes through
 // the same reconciliation the session path uses, so a fact typed at the CLI
 // supersedes the stored version of itself instead of landing beside it.
-func (p *Pipeline) learn(ctx context.Context, req MessageRequest, question, reply string, recalled []memory.Record) []facts.Fact {
+func (p *Pipeline) learn(ctx context.Context, prov llm.Provider, req MessageRequest, question, reply string, recalled []memory.Record) []facts.Fact {
 	ectx, cancel := context.WithTimeout(ctx, p.Cfg.MessageTimeout)
 	defer cancel()
 
 	window := "<user>" + question + "</user>\n<assistant>" + reply + "</assistant>"
-	decision, err := llm.Decide(ectx, p.LLM, window, recalled)
+	decision, err := llm.Decide(ectx, prov, p.Settings.Pickiness(), window, recalled)
 	if err != nil {
 		p.Metrics.Inc("shoulder_cli_extract_error_total")
 		p.Log.Warn("fact extraction failed; the answer still stands", "err", err)
@@ -1064,7 +1084,8 @@ func (p *Pipeline) Digest(ctx context.Context, req DigestRequest) (string, error
 		p.Metrics.Inc("shoulder_cli_digest_empty_total")
 		return nothingKnown(req), nil
 	}
-	if p.LLM == nil {
+	prov := p.Settings.Provider()
+	if prov == nil {
 		return "", errors.New("no decision model is configured")
 	}
 
@@ -1083,7 +1104,7 @@ func (p *Pipeline) Digest(ctx context.Context, req DigestRequest) (string, error
 	dctx, cancel := context.WithTimeout(ctx, p.Cfg.DigestTimeout)
 	defer cancel()
 
-	raw, err := p.LLM.Complete(dctx, prompts.Digest, b.String())
+	raw, err := prov.Complete(dctx, prompts.Digest, b.String())
 	if err != nil {
 		p.Metrics.Inc("shoulder_cli_digest_error_total")
 		return "", fmt.Errorf("digest: %w", err)

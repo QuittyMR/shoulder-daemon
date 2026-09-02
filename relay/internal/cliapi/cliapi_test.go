@@ -3,7 +3,6 @@ package cliapi
 import (
 	"context"
 	"encoding/json"
-	"gitlab.com/quittymr/shoulder-daemon/relay/internal/prompts"
 	"io"
 	"log/slog"
 	"net/http"
@@ -11,6 +10,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/prompts"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/settings"
 
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/budget"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/config"
@@ -111,7 +113,7 @@ type fakeLLM struct {
 func (f *fakeLLM) Name() string { return "fake" }
 
 func (f *fakeLLM) Complete(_ context.Context, system, _ string) (string, error) {
-	if system == prompts.Decision {
+	if system == prompts.Decision(prompts.Default) {
 		return f.decision, nil
 	}
 	return f.prose, nil
@@ -122,7 +124,7 @@ func (f *fakeLLM) Complete(_ context.Context, system, _ string) (string, error) 
 // to run a tool loop would be modelling something these tests do not exercise.
 func (f *fakeLLM) Chat(_ context.Context, msgs []llm.Message, _ []llm.Tool) (llm.Message, error) {
 	for _, m := range msgs {
-		if m.Role == "system" && m.Content == prompts.Decision {
+		if m.Role == "system" && m.Content == prompts.Decision(prompts.Default) {
 			return llm.Message{Role: "assistant", Content: f.decision}, nil
 		}
 	}
@@ -137,10 +139,10 @@ func newTestServer(t *testing.T, token string, model llm.Provider) (http.Handler
 	cfg.Budget = budget.Default()
 
 	pipe := &pipeline.Pipeline{
-		Cfg:     cfg,
-		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Metrics: m,
-		LLM:     model,
+		Cfg:      cfg,
+		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Metrics:  m,
+		Settings: settings.ForProvider(model),
 		// Wrapped exactly as main.go wraps it. The scope rules live in Checked,
 		// so a test holding a bare connector would be testing a configuration
 		// that never ships.
@@ -576,5 +578,189 @@ func TestARequestWithNoModelNamesTheVariable(t *testing.T) {
 	}
 	if len(mem.asked()) != 0 {
 		t.Fatal("a request that cannot be answered still read the store")
+	}
+}
+
+// configServer is a daemon whose settings can actually be turned, rather than
+// the fixed ones newTestServer builds. The config routes are the only ones that
+// write to the settings, so they are the only ones that need this.
+func configServer(t *testing.T, token string) (http.Handler, *settings.Live, *metrics.Metrics) {
+	t.Helper()
+	// Configure only builds a struct; nothing here reaches a network. The key
+	// has to be present because a provider without one is refused at
+	// configuration time, which is the point of the refusal.
+	t.Setenv("GEMINI_API_KEY", "test-gemini")
+	t.Setenv("SHOULDER_LLM_KEY", "")
+	t.Setenv("SHOULDER_LLM_BASE_URL", "")
+	t.Setenv("SHOULDER_LLM_MODEL", "")
+	prov, err := llm.Configure("gemini", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m := metrics.New()
+	cfg := config.Load()
+	cfg.Budget = budget.Default()
+	live := settings.New(new(slog.LevelVar), prompts.Careful, "gemini", "", prov)
+	pipe := &pipeline.Pipeline{
+		Cfg:      cfg,
+		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Metrics:  m,
+		Settings: live,
+		Memory:   memory.Checked(newFakeMemory()),
+	}
+	mux := http.NewServeMux()
+	New(pipe, token).Mount(mux)
+	return mux, live, m
+}
+
+func snapshotOf(t *testing.T, rec *httptest.ResponseRecorder) settings.Snapshot {
+	t.Helper()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	return decode[settings.Snapshot](t, rec)
+}
+
+func TestConfigReportsWhatTheDaemonIsDoingNow(t *testing.T) {
+	h, _, _ := configServer(t, "")
+
+	got := snapshotOf(t, do(t, h, http.MethodGet, "/v1/cli/config", ""))
+	if got.LogLevel != "info" || got.Pickiness != "careful" || got.PickinessLevel != int(prompts.Careful) {
+		t.Fatalf("snapshot = %+v", got)
+	}
+	if got.Provider != "gemini" {
+		t.Fatalf("provider = %q", got.Provider)
+	}
+	// The model was never typed, so a preset filled it in. Answering "which
+	// model" with the blank that was asked for would hide the one in use.
+	if got.Model == "" {
+		t.Fatal("the snapshot names no model")
+	}
+}
+
+func TestAConfigChangeIsVisibleToTheNextReader(t *testing.T) {
+	h, live, m := configServer(t, "")
+
+	changed := snapshotOf(t, do(t, h, http.MethodPatch, "/v1/cli/config", `{"pickiness":"strict"}`))
+	if changed.Pickiness != "strict" || changed.PickinessLevel != int(prompts.Strict) {
+		t.Fatalf("the reply says %+v", changed)
+	}
+	// The reply is the whole state, not the one field that moved, so a caller
+	// that changed one knob sees all four without asking twice.
+	if changed.Provider != "gemini" || changed.LogLevel != "info" {
+		t.Fatalf("the reply is not the whole state: %+v", changed)
+	}
+
+	if again := snapshotOf(t, do(t, h, http.MethodGet, "/v1/cli/config", "")); again != changed {
+		t.Fatalf("the next read says %+v, the change said %+v", again, changed)
+	}
+	// And the decision path, which is what any of this was for.
+	if live.Pickiness() != prompts.Strict {
+		t.Fatalf("the next turn would still run at %v", live.Pickiness())
+	}
+	if m.Get("shoulder_cli_config_changed_total") != 1 {
+		t.Fatal("the change was not counted")
+	}
+}
+
+func TestAConfigChangeTheDaemonCannotMakeChangesNothing(t *testing.T) {
+	cases := []struct{ name, body, want string }{
+		// Each of these pairs something valid with something that is not, so a
+		// route that applied what it could would be caught leaving the daemon
+		// half-changed and reporting an error about the other half.
+		{"an unknown provider", `{"log_level":"debug","provider":"nope"}`, "nope"},
+		{"an unknown pickiness", `{"log_level":"debug","pickiness":"picky"}`, "picky"},
+		{"an unknown log level", `{"log_level":"dbeug","pickiness":"strict"}`, "dbeug"},
+		// Blanking the provider is refused rather than obeyed: a daemon with
+		// no model observes every session and answers nothing, and only a
+		// restart brings it back.
+		{"a provider blanked out", `{"provider":"","model":"gpt-5.2-mini"}`, "provider"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h, live, m := configServer(t, "")
+			before := snapshotOf(t, do(t, h, http.MethodGet, "/v1/cli/config", ""))
+
+			rec := do(t, h, http.MethodPatch, "/v1/cli/config", c.body)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status %d, want 400: %s", rec.Code, rec.Body.String())
+			}
+			if msg := errorOf(t, rec); !strings.Contains(msg, c.want) {
+				t.Fatalf("error %q does not name what was wrong (%q)", msg, c.want)
+			}
+			if after := snapshotOf(t, do(t, h, http.MethodGet, "/v1/cli/config", "")); after != before {
+				t.Fatalf("the daemon is now %+v, was %+v", after, before)
+			}
+			if live.Pickiness() != prompts.Careful {
+				t.Fatalf("the next turn would run at %v", live.Pickiness())
+			}
+			if m.Get("shoulder_cli_config_changed_total") != 0 {
+				t.Fatal("a refused change was counted as one")
+			}
+			if m.Get("shoulder_cli_bad_request_total") != 1 {
+				t.Fatal("the refusal was not counted")
+			}
+		})
+	}
+}
+
+func TestAConfigChangeThatNamesNothingIsRefused(t *testing.T) {
+	h, _, _ := configServer(t, "")
+	rec := do(t, h, http.MethodPatch, "/v1/cli/config", `{}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+	if msg := errorOf(t, rec); !strings.Contains(msg, "nothing to change") {
+		t.Fatalf("error %q", msg)
+	}
+}
+
+// The settings are the one route that can turn a daemon somebody else is
+// using, so it is guarded exactly as the rest are rather than nearly so.
+func TestConfigNeedsTheTokenLikeEveryOtherRoute(t *testing.T) {
+	h, live, m := configServer(t, "s3cret")
+
+	for _, c := range []struct{ method, body string }{
+		{http.MethodGet, ""},
+		{http.MethodPatch, `{"pickiness":"eager"}`},
+	} {
+		t.Run(c.method, func(t *testing.T) {
+			rec := do(t, h, c.method, "/v1/cli/config", c.body)
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("status %d, want 401: %s", rec.Code, rec.Body.String())
+			}
+			if msg := errorOf(t, rec); !strings.Contains(msg, "SHOULDER_TOKEN") {
+				t.Fatalf("error %q does not say how to authenticate", msg)
+			}
+		})
+	}
+	if live.Pickiness() != prompts.Careful {
+		t.Fatalf("an unauthenticated PATCH turned the daemon to %v", live.Pickiness())
+	}
+	if m.Get("shoulder_cli_unauthorised_total") != 2 {
+		t.Fatalf("rejections counted %d", m.Get("shoulder_cli_unauthorised_total"))
+	}
+
+	ok := do(t, h, http.MethodPatch, "/v1/cli/config", `{"pickiness":"eager"}`, "X-Shoulder-Token", "s3cret")
+	if ok.Code != http.StatusOK {
+		t.Fatalf("status %d with the right token: %s", ok.Code, ok.Body.String())
+	}
+}
+
+// A change is a PATCH because a request names only the knobs it wants moved.
+// A POST would read as submitting the whole set, where an omitted field asks to
+// be cleared, and there is no way to clear any of these.
+func TestConfigRefusesAPost(t *testing.T) {
+	h, live, _ := configServer(t, "")
+	rec := do(t, h, http.MethodPost, "/v1/cli/config", `{"pickiness":"eager"}`)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status %d, want 405: %s", rec.Code, rec.Body.String())
+	}
+	if msg := errorOf(t, rec); !strings.Contains(msg, "PATCH") {
+		t.Fatalf("error %q does not say which method to use", msg)
+	}
+	if live.Pickiness() != prompts.Careful {
+		t.Fatalf("a POST turned the daemon to %v", live.Pickiness())
 	}
 }

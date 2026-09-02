@@ -5,6 +5,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/prompts"
 )
 
 // TestLiveDecisionAcrossProviders checks the thing that actually breaks with
@@ -27,7 +29,7 @@ func TestLiveDecisionAcrossProviders(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 			defer cancel()
 
-			d, err := Decide(ctx, p, liveContradictionWindow, liveContradictionRecall)
+			d, err := Decide(ctx, p, prompts.Default, liveContradictionWindow, liveContradictionRecall)
 			if err != nil {
 				t.Fatalf("decide: %v", err)
 			}
@@ -55,7 +57,7 @@ func TestLiveSilenceIsReachable(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 			defer cancel()
 
-			d, err := Decide(ctx, p, "<user>what is 2+2</user>\n<assistant>4</assistant>", nil)
+			d, err := Decide(ctx, p, prompts.Default, "<user>what is 2+2</user>\n<assistant>4</assistant>", nil)
 			if err != nil {
 				t.Fatalf("decide: %v", err)
 			}

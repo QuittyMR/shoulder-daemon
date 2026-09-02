@@ -104,6 +104,18 @@ when exactly one provider is named. In a chain each provider takes its key from
 its own preset variable, because an override would otherwise be sent to a
 provider it does not belong to.
 
+### Changing it while the daemon runs
+
+`shoulderd config set --provider=NAME` swaps the provider without a restart, effective on the next
+decision pass; add `--model=ID` in the same call to also pin a model, otherwise the provider's own
+default applies - model ids don't carry between providers, so naming one alone can't keep the old
+model. The provider's key must already be in the daemon's environment; `config set` cannot supply
+one. Like the overrides above, `--model` on its own is refused when the provider in use is a
+comma-separated chain, since the chain's providers don't share model ids either. `shoulderd config
+show` (or a bare `shoulderd config`) reports the provider and model actually in use, and none of it is
+persisted: a restart returns to whatever `SHOULDER_LLM` and its overrides say. `docs/INSTALL.md`
+covers the other two settings this same command reaches - the log level and the pickiness.
+
 ## The request
 
 ```

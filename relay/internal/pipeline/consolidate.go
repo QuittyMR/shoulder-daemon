@@ -52,7 +52,8 @@ type consolidation struct {
 // week has since decayed into a note about history. Both are only visible from
 // above the whole scope.
 func (p *Pipeline) Consolidate(ctx context.Context, sc scope.Scope, project string) (dropped, merged int, err error) {
-	if p.Memory == nil || p.LLM == nil {
+	prov := p.Settings.Provider()
+	if p.Memory == nil || prov == nil {
 		return 0, 0, nil
 	}
 	if !sc.Valid() {
@@ -83,7 +84,7 @@ func (p *Pipeline) Consolidate(ctx context.Context, sc scope.Scope, project stri
 
 	dctx, dcancel := context.WithTimeout(ctx, p.Cfg.DigestTimeout)
 	defer dcancel()
-	raw, err := p.LLM.Complete(dctx, prompts.Consolidate, b.String())
+	raw, err := prov.Complete(dctx, prompts.Consolidate, b.String())
 	if err != nil {
 		p.Metrics.Inc("shoulder_consolidate_error_total")
 		return 0, 0, err

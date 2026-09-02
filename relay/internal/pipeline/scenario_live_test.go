@@ -16,6 +16,7 @@ import (
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/outbox"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/scope"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/session"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/settings"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/textutil"
 )
 
@@ -110,7 +111,7 @@ func TestLiveBranchScenario(t *testing.T) {
 	p := &Pipeline{
 		Cfg: cfg, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Metrics: srv.Metrics, Registry: reg, Outbox: box,
-		LLM: provider, Memory: mem, Queue: q,
+		Settings: settings.ForProvider(provider), Memory: mem, Queue: q,
 	}
 
 	sid := "scenario"

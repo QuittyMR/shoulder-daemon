@@ -22,6 +22,17 @@ func (c *Chain) Name() string {
 	return strings.Join(names, "→")
 }
 
+// ModelID names every model in the chain, in the order they are tried. There is
+// no single answer, and reporting only the first would name the model that is
+// not being used precisely when the leader is down.
+func (c *Chain) ModelID() string {
+	ids := make([]string, 0, len(c.Providers))
+	for _, p := range c.Providers {
+		ids = append(ids, ModelOf(p))
+	}
+	return strings.Join(ids, "\u2192")
+}
+
 func (c *Chain) Complete(ctx context.Context, system, user string) (string, error) {
 	var errs []error
 	for i, p := range c.Providers {

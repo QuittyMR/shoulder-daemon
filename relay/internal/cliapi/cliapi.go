@@ -27,6 +27,7 @@ import (
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/memory"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/pipeline"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/scope"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/settings"
 )
 
 // maxBodyBytes bounds a request body. These carry one typed sentence, not a
@@ -55,6 +56,7 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/cli/facts", s.handleFacts)
 	mux.HandleFunc("/v1/cli/digest", s.handleDigest)
 	mux.HandleFunc("/v1/cli/consolidate", s.handleConsolidate)
+	mux.HandleFunc("/v1/cli/config", s.handleConfig)
 }
 
 // The request and reply types below are the wire contract. They are exported
@@ -287,7 +289,7 @@ func (s *Server) handleDigest(w http.ResponseWriter, r *http.Request) {
 // person who typed the command is not looking at, so the hint travels with the
 // refusal instead.
 func (s *Server) requireModel(w http.ResponseWriter) bool {
-	if s.Pipe.LLM != nil {
+	if s.Pipe.Settings.Provider() != nil {
 		return true
 	}
 	// The variable has to be set where the daemon reads it, which is not the
@@ -295,7 +297,7 @@ func (s *Server) requireModel(w http.ResponseWriter) bool {
 	// running a containerised daemon round the loop of setting it correctly, in
 	// the wrong process, and getting the same refusal back.
 	s.fail(w, http.StatusServiceUnavailable, fmt.Errorf(
-		"the daemon has no decision model configured; set SHOULDER_LLM in the daemon's own environment (not this shell) to one of %s",
+		"the daemon has no decision model configured; give it one now with `shoulderd config set --provider=NAME`, or set SHOULDER_LLM in the daemon's own environment (not this shell) so it survives a restart. Either takes one of %s",
 		strings.Join(llm.Presets(), ", ")))
 	return false
 }
@@ -469,4 +471,46 @@ func (s *Server) handleConsolidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, ConsolidateResponse{Dropped: dropped, Merged: merged})
+}
+
+// ConfigResponse is what the daemon is doing now. It is the same shape whether
+// the request read the settings or changed them, so a caller that changed one
+// knob sees the state of all four without asking twice.
+type ConfigResponse struct {
+	settings.Snapshot
+}
+
+// handleConfig reads the live settings with GET and turns them with PATCH.
+// PATCH rather than POST because a request names only the knobs it wants moved:
+// there is no way to submit the whole set, and one that omitted a field would
+// otherwise be asking to clear it.
+func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
+	if !s.authorised(w, r) {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, ConfigResponse{s.Pipe.Settings.Snapshot()})
+	case http.MethodPatch:
+		var req settings.Change
+		if !s.decode(w, r, &req) {
+			return
+		}
+		now, err := s.Pipe.Settings.Apply(req)
+		if err != nil {
+			// Every refusal from here is the caller naming something that does
+			// not exist — a level, a level of pickiness, a provider, or a model
+			// its provider has no key for. The daemon is unchanged, and the
+			// sentence already says which one.
+			s.fail(w, http.StatusBadRequest, err)
+			return
+		}
+		s.Pipe.Metrics.Inc("shoulder_cli_config_changed_total")
+		s.Pipe.Log.Info("settings changed at the terminal",
+			"log_level", now.LogLevel, "pickiness", now.Pickiness,
+			"provider", now.Provider, "model", now.Model)
+		writeJSON(w, http.StatusOK, ConfigResponse{now})
+	default:
+		s.fail(w, http.StatusMethodNotAllowed, errors.New("use GET to read the settings, PATCH to change them"))
+	}
 }

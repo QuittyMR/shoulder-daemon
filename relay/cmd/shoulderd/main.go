@@ -27,6 +27,7 @@ import (
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/outbox"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/pipeline"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/session"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/settings"
 )
 
 func main() {
@@ -42,7 +43,12 @@ func main() {
 
 func serve() error {
 	cfg := config.Load()
-	log := newLogger(cfg.LogPath, cfg.LogLevel)
+	// The level is a variable the handler reads per record rather than a value
+	// baked into it, which is what lets `shoulderd config set --log-level=debug`
+	// take effect on the next line written instead of the next process.
+	level := new(slog.LevelVar)
+	level.Set(cfg.LogLevel)
+	log := newLogger(cfg.LogPath, level)
 
 	if cfg.Token == "" {
 		log.Warn("SHOULDER_TOKEN is unset; any local process can post events and read advice for a live session")
@@ -82,10 +88,12 @@ func serve() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	live := settings.New(level, cfg.Pickiness, llm.EnvSpec(), os.Getenv("SHOULDER_LLM_MODEL"), provider)
+
 	pipe := &pipeline.Pipeline{
 		Cfg: cfg, Log: log, Metrics: srv.Metrics, Registry: reg,
 		IdleExit: cfg.IdleExit, OnIdle: stop,
-		Outbox: box, LLM: provider, Memory: mem, Queue: queue,
+		Outbox: box, Settings: live, Memory: mem, Queue: queue,
 	}
 	go pipe.Run(ctx)
 
@@ -109,7 +117,7 @@ func serve() error {
 
 	log.Info("shoulderd listening",
 		"addr", cfg.Addr, "llm", providerName(provider), "memory", mem.Name(),
-		"dry_run", cfg.Budget.DryRun, "auth", cfg.Token != "")
+		"pickiness", cfg.Pickiness, "dry_run", cfg.Budget.DryRun, "auth", cfg.Token != "")
 
 	if err := hs.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
@@ -121,7 +129,7 @@ func serve() error {
 // It never writes to stdout: on the command-hook fallback path stdout belongs
 // to the harness, and polluting it is how the reference project corrupted its
 // own hook output.
-func newLogger(path string, level slog.Level) *slog.Logger {
+func newLogger(path string, level slog.Leveler) *slog.Logger {
 	opts := &slog.HandlerOptions{Level: level}
 	if path != "" {
 		if f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {

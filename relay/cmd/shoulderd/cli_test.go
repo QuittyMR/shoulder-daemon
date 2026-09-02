@@ -11,6 +11,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/llm"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/prompts"
 )
 
 // request is what the daemon last received, copied out under the lock: the
@@ -569,5 +572,210 @@ func TestFactListWithNoFlagSaysWhichHalfItRead(t *testing.T) {
 	scoped := newDaemon(t, `{"facts":[]}`)
 	if _, _, errs := run(t, "fact", "list", "--addr", scoped.URL, "--global"); strings.Contains(errs, "this project only") {
 		t.Fatalf("a list that was told which half still explained itself: %q", errs)
+	}
+}
+
+// configReply is what the daemon answers both config routes with: the whole
+// state, whether it was read or just changed.
+const configReply = `{"log_level":"info","pickiness":"strict","pickiness_level":4,"provider":"gemini","model":"gemini-flash-lite-latest"}`
+
+func TestConfigShowReadsAndPrints(t *testing.T) {
+	d := newDaemon(t, configReply)
+
+	code, stdout, stderr := run(t, "config", "--addr", d.URL)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	got := d.req()
+	// Bare `config` reads. A change is the thing you should have to name.
+	if got.method != http.MethodGet || got.path != "/v1/cli/config" {
+		t.Fatalf("%s %s", got.method, got.path)
+	}
+	for _, want := range []string{"info", "strict (4)", "gemini", "gemini-flash-lite-latest"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout does not report %q:\n%s", want, stdout)
+		}
+	}
+	if stderr != "" {
+		t.Fatalf("an answered question wrote to stderr: %q", stderr)
+	}
+}
+
+func TestConfigShowJSONIsTheWireShape(t *testing.T) {
+	d := newDaemon(t, configReply)
+	code, stdout, stderr := run(t, "config", "show", "--addr", d.URL, "--json")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("--json printed %q, which is not JSON: %v", stdout, err)
+	}
+	// The names are the ones a script greps for; renaming one silently is the
+	// failure this guards.
+	for _, want := range []string{"log_level", "pickiness", "pickiness_level", "provider", "model"} {
+		if _, ok := got[want]; !ok {
+			t.Fatalf("--json output has no %q: %s", want, stdout)
+		}
+	}
+}
+
+// Only the flags actually typed are sent. The flag package cannot tell a string
+// flag that was left alone from one deliberately set to empty, so what was set
+// is read back from the FlagSet; a flag that leaked in unset would ask the
+// daemon to parse "" and be refused.
+func TestConfigSetSendsOnlyWhatWasTyped(t *testing.T) {
+	d := newDaemon(t, configReply)
+
+	code, stdout, stderr := run(t, "config", "set", "--addr", d.URL, "--pickiness", "strict")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	got := d.req()
+	if got.method != http.MethodPatch || got.path != "/v1/cli/config" {
+		t.Fatalf("%s %s", got.method, got.path)
+	}
+	if len(got.body) != 1 || got.body["pickiness"] != "strict" {
+		t.Fatalf("a change of one setting sent %v", got.body)
+	}
+	// --addr is a flag of this command, not a setting of the daemon.
+	if _, ok := got.body["log_level"]; ok {
+		t.Fatalf("the untouched log level was sent anyway: %v", got.body)
+	}
+	// The reply is printed, so `config set` answers the question `config show`
+	// would have and nobody has to run both.
+	if !strings.Contains(stdout, "strict (4)") {
+		t.Fatalf("stdout = %q", stdout)
+	}
+}
+
+func TestConfigSetSendsEveryFlagItWasGiven(t *testing.T) {
+	d := newDaemon(t, configReply)
+	code, _, stderr := run(t, "config", "set", "--addr", d.URL,
+		"--log-level", "debug", "--pickiness", "0", "--provider", "openai", "--model", "gpt-5.2-mini")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	want := map[string]string{
+		"log_level": "debug", "pickiness": "0", "provider": "openai", "model": "gpt-5.2-mini",
+	}
+	got := d.req().body
+	if len(got) != len(want) {
+		t.Fatalf("sent %v", got)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Fatalf("%s = %v, want %q", k, got[k], v)
+		}
+	}
+}
+
+// Passing nothing to change is an error rather than a no-op, so a mistyped flag
+// name cannot look like it worked. --addr is not a setting and must not save it.
+func TestConfigSetWithNothingToChangeIsAUsageError(t *testing.T) {
+	d := newDaemon(t, configReply)
+	code, stdout, stderr := run(t, "config", "set", "--addr", d.URL)
+	if code != 2 {
+		t.Fatalf("exit %d, want 2: %s", code, stderr)
+	}
+	if d.req().calls != 0 {
+		t.Fatal("a change of nothing still reached the daemon")
+	}
+	if stdout != "" {
+		t.Fatalf("a rejection wrote to stdout: %q", stdout)
+	}
+	for _, want := range []string{"--log-level", "--pickiness", "--provider", "--model"} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("stderr %q does not offer %q", stderr, want)
+		}
+	}
+}
+
+// Every setting is a flag, so a bare word is either a typo or somebody
+// expecting `config set pickiness strict` to work. Guessing which flag they
+// meant is how a daemon ends up set to something nobody typed.
+func TestConfigTakesNoPositionalArguments(t *testing.T) {
+	cases := [][]string{
+		{"config", "show", "junk"},
+		{"config", "set", "strict"},
+		// An unknown verb is not a verb: it falls through to show, where it is
+		// one argument too many. Either way nothing is sent.
+		{"config", "reset"},
+	}
+	for _, args := range cases {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			d := newDaemon(t, configReply)
+			full := append([]string{args[0], args[1]}, "--addr", d.URL)
+			full = append(full, args[2:]...)
+			code, _, stderr := run(t, full...)
+			if code != 2 {
+				t.Fatalf("exit %d, want 2: %s", code, stderr)
+			}
+			if d.req().calls != 0 {
+				t.Fatal("a command that does not parse still reached the daemon")
+			}
+			if !strings.Contains(stderr, "takes no arguments") {
+				t.Fatalf("stderr = %q", stderr)
+			}
+		})
+	}
+}
+
+func TestConfigHelpIsAnAnsweredQuestion(t *testing.T) {
+	for _, arg := range []string{"help", "--help", "-h"} {
+		t.Run(arg, func(t *testing.T) {
+			code, stdout, stderr := run(t, "config", arg)
+			if code != 0 {
+				t.Fatalf("exit %d, want 0: %s", code, stderr)
+			}
+			if stderr != "" {
+				t.Fatalf("help went to stderr: %q", stderr)
+			}
+			// Both halves, because `config help` is the only place that says
+			// reading and changing are the same command.
+			for _, want := range []string{"config [show]", "config set", "--pickiness", "--provider", "eager", "strict"} {
+				if !strings.Contains(stdout, want) {
+					t.Fatalf("config help does not mention %q:\n%s", want, stdout)
+				}
+			}
+		})
+	}
+}
+
+// The providers offered by --help come from the presets rather than a
+// hand-copied list, so the list cannot go stale the first time one is added.
+func TestConfigSetHelpNamesEveryProvider(t *testing.T) {
+	code, stdout, stderr := run(t, "config", "set", "--help")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0: %s", code, stderr)
+	}
+	for _, want := range llm.Presets() {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("config set --help does not offer %q:\n%s", want, stdout)
+		}
+	}
+	for _, want := range prompts.PickinessNames() {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("config set --help does not offer %q:\n%s", want, stdout)
+		}
+	}
+}
+
+// A value the daemon refuses is a command line that was wrong, and the exit
+// code has to say so: 2 rather than 1, so a script can tell "you typed a level
+// that does not exist" from "the daemon fell over".
+func TestAConfigValueTheDaemonRefusesIsAUsageError(t *testing.T) {
+	d := newDaemon(t, `{"error":"bad setting: unknown log level \"dbeug\": use debug, info, warn or error"}`)
+	d.status = http.StatusBadRequest
+
+	code, stdout, stderr := run(t, "config", "set", "--addr", d.URL, "--log-level", "dbeug")
+	if code != 2 {
+		t.Fatalf("exit %d, want 2: %s", code, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("a refusal printed a settings report: %q", stdout)
+	}
+	if !strings.Contains(stderr, "dbeug") {
+		t.Fatalf("the daemon's own reason was lost: %q", stderr)
 	}
 }

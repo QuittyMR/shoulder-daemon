@@ -10,8 +10,8 @@ answering) and doing two things on the host: setting a token, and - only if you 
 one settings key. Nothing here needs Node, Python, Go, or any other runtime; the one script wants
 `bash` and `curl`.
 
-Sections 1 to 4 cover the adapter. Sections 5 and 6 cover the relay it talks to and the command
-line you use to talk to it yourself.
+Sections 1 to 4 cover the adapter. Sections 5 to 7 cover the relay it talks to, the command
+line you use to talk to it yourself, and the settings that command can change on a running daemon.
 
 ## 1. Set `SHOULDER_TOKEN` before starting Claude Code
 
@@ -140,6 +140,14 @@ falls back to `info` rather than refusing to start, because a typo in a log sett
 to have no daemon. At `debug` every hook arrival is logged; at `info` you still get every fact
 stored, every fact superseded, and every piece of advice queued and injected, with its text.
 
+`SHOULDER_PICKINESS` sets how reluctant the decision model is to store a new fact: `eager`, `open`,
+`balanced`, `careful`, `strict`, or the numbers `0` to `4` behind them, low to high, and it defaults
+to `balanced` (2). Higher stores less and takes only a rule the user stated outright; lower stores
+more, including a rule only implied, and leans on the existing consolidation pass to clean up after
+itself. Like `LOG_LEVEL`, an unrecognised value falls back to the default rather than refusing to
+start. It's read at boot but not fixed there - section 7 covers changing it, and the other three live
+settings, on a daemon that's already running.
+
 It stops when the last session ends: the harness sends `SessionEnd`, and if no
 other session is open the daemon shuts down. The adapters start it again the
 next time an editor launches. `SHOULDER_IDLE_EXIT_MINUTES` is a backstop for a
@@ -216,6 +224,33 @@ when that is not a checkout.
 Every subcommand is a thin HTTP client against the running relay. It reads the address from
 `SHOULDER_ADDR` (override with `--addr`) and the token from `SHOULDER_TOKEN`. If nothing is
 listening you get one line saying so and a non-zero exit - the CLI does not start a daemon for you.
+
+## 7. Change settings on a running daemon
+
+Four of the settings above don't need a restart: the log level, the pickiness, and the provider and
+model that answer. `shoulderd config` reads them; `shoulderd config set` turns them.
+
+```bash
+shoulderd config                                  # log level, pickiness, provider, model in use
+shoulderd config set --pickiness=strict
+shoulderd config set --provider=gemini --model=gemini-2.5-flash-lite
+```
+
+`config set` changes only the flags it is given, takes effect on the next turn, and does not
+interrupt anything already in flight. It is all-or-nothing: a request naming a value that doesn't
+exist - an unknown level, an unknown pickiness, a provider with no key in the daemon's environment, a
+model its provider doesn't have - is refused with the reason, and every setting is left exactly as it
+was. Naming `--provider` resets the model to that provider's own default, because model ids don't
+carry between providers, and `--model` is refused for a comma-separated failover chain, since the
+providers in one don't share model ids either - the same restriction `SHOULDER_LLM_MODEL` has in
+`docs/ADVISOR.md`. The provider's API key must already be in the daemon's environment; `config set`
+can't supply one.
+
+None of it is written down. A restart returns to whatever the environment says, so the env file stays
+the single description of how the daemon is meant to run.
+
+Both commands are a thin client over `GET /v1/cli/config` and `PATCH /v1/cli/config`, which honour
+`SHOULDER_TOKEN` like every other CLI route.
 
 ## Where configuration lives
 

@@ -43,6 +43,23 @@ type Provider interface {
 	Chat(ctx context.Context, msgs []Message, tools []Tool) (Message, error)
 }
 
+// Named is a provider that can say which model it sends to. It is separate from
+// Provider because nothing on the decision path needs it: it exists so
+// `shoulderd config` can report what is actually in use rather than what was
+// asked for, which are different the moment a preset default fills in a blank.
+type Named interface {
+	ModelID() string
+}
+
+// ModelOf reports the model a provider sends to, and "" for one that does not
+// say and for no provider at all.
+func ModelOf(p Provider) string {
+	if n, ok := p.(Named); ok {
+		return n.ModelID()
+	}
+	return ""
+}
+
 // Binding is a tool plus the code that answers it.
 type Binding struct {
 	Tool    Tool

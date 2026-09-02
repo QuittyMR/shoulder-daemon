@@ -28,7 +28,11 @@ type Decision struct {
 
 // Decide runs one decision pass. A model that returns unparseable output is
 // treated as silence, never as an error worth disturbing the session over.
-func Decide(ctx context.Context, p Provider, turnWindow string, recalled []memory.Record) (Decision, error) {
+//
+// pick is passed rather than read from anywhere because it may have been
+// changed since the daemon started, and the caller is the one holding the
+// current value.
+func Decide(ctx context.Context, p Provider, pick prompts.Pickiness, turnWindow string, recalled []memory.Record) (Decision, error) {
 	var b strings.Builder
 	b.WriteString("<recent-turn>\n")
 	b.WriteString(turnWindow)
@@ -44,7 +48,7 @@ func Decide(ctx context.Context, p Provider, turnWindow string, recalled []memor
 	}
 	b.WriteString("\n</stored-facts>")
 
-	raw, err := p.Complete(ctx, prompts.Decision, b.String())
+	raw, err := p.Complete(ctx, prompts.Decision(pick), b.String())
 	if err != nil {
 		return Decision{}, err
 	}

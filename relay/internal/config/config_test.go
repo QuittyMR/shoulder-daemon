@@ -3,6 +3,8 @@ package config
 import (
 	"testing"
 	"time"
+
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/prompts"
 )
 
 // The decision pass is a tool loop, not one question: the pipeline lets the
@@ -28,5 +30,32 @@ func TestAdvisorTimeoutStaysOverridable(t *testing.T) {
 	t.Setenv("ADVISOR_TIMEOUT_SECONDS", "5")
 	if got := Load().AdvisorTimeout; got != 5*time.Second {
 		t.Fatalf("AdvisorTimeout is %s, want 5s", got)
+	}
+}
+
+// The starting pickiness is read by name or by number, and a value that is
+// neither is forgiven rather than fatal: the daemon is still useful at the
+// default, and a typo in a tuning knob is not worth a machine that comes up
+// with no memory at all.
+func TestPickinessIsReadFromTheEnvironmentAndForgivesATypo(t *testing.T) {
+	cases := []struct {
+		set  string
+		want prompts.Pickiness
+	}{
+		{"strict", prompts.Strict},
+		{"STRICT", prompts.Strict},
+		{"0", prompts.Eager},
+		{"", prompts.Default},
+		{"   ", prompts.Default},
+		{"picky", prompts.Default},
+		{"9", prompts.Default},
+	}
+	for _, c := range cases {
+		t.Run(c.set, func(t *testing.T) {
+			t.Setenv("SHOULDER_PICKINESS", c.set)
+			if got := Load().Pickiness; got != c.want {
+				t.Fatalf("SHOULDER_PICKINESS=%q started the daemon at %v, want %v", c.set, got, c.want)
+			}
+		})
 	}
 }

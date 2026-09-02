@@ -103,10 +103,14 @@ func TestParseDecisionReadsTheScope(t *testing.T) {
 
 // The prompt has to ask for what the parser reads, or a small model never sends
 // it and every fact is dropped downstream.
+// Every pickiness renders a different prompt, so the check is over all of them:
+// a level that dropped the scope would fail silently on that level alone.
 func TestDecisionPromptDemandsAScope(t *testing.T) {
-	for _, want := range []string{`"scope"`, "local", "global"} {
-		if !strings.Contains(prompts.Decision, want) {
-			t.Errorf("the decision prompt never mentions %s", want)
+	for p := prompts.Eager; p <= prompts.Strict; p++ {
+		for _, want := range []string{`"scope"`, "local", "global"} {
+			if !strings.Contains(prompts.Decision(p), want) {
+				t.Errorf("the %s decision prompt never mentions %s", p, want)
+			}
 		}
 	}
 }

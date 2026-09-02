@@ -99,6 +99,8 @@ adapter, see [docs/INSTALL.md](docs/INSTALL.md) for where to put them.
 
 Use `shoulderd doctor` to verify the validity of your installation and setup.
 
+`shoulderd config` reads or changes the log level, pickiness, provider and model on a running daemon, no restart required.
+
 Running from a checkout, a container or a service manager is covered in
 [docs/INSTALL.md](docs/INSTALL.md), along with every setting.
 

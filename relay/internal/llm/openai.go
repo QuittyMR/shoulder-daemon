@@ -38,6 +38,8 @@ func (c *OpenAICompatible) Name() string {
 	return "openai-compatible"
 }
 
+func (c *OpenAICompatible) ModelID() string { return c.Model }
+
 // wireMessage is the chat completions shape of a Message in both directions.
 type wireMessage struct {
 	Role       string          `json:"role"`

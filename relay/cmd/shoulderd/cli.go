@@ -15,7 +15,10 @@ import (
 
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/cliapi"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/config"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/llm"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/prompts"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/scope"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/settings"
 )
 
 // clientTimeout outlives the daemon's own digest timeout. Whichever side gives
@@ -48,6 +51,8 @@ func (c *cli) dispatch(name string, args []string) int {
 		return c.digest(args)
 	case "consolidate":
 		return c.consolidate(args)
+	case "config":
+		return c.config(args)
 	case "help", "-h", "-help", "--help":
 		// Asking what the commands are is a question, and an answered question
 		// leaves by stdout with nothing to report to the shell.
@@ -73,6 +78,8 @@ const usage = `usage:
   shoulderd fact list   [--local|--global] [--limit=N]
   shoulderd digest      [--local|--global]
   shoulderd consolidate --local|--global
+  shoulderd config [show]                                      what the daemon is doing now
+  shoulderd config set [--log-level=L] [--pickiness=P] [--provider=N] [--model=M]
 
 --local is this project alone; --global follows you into every other one.
 ` + projectIs + `
@@ -183,6 +190,141 @@ collapse several wordings of one rule into a single record.
 The daemon does this by itself when a session ends and every few turns. Running
 it by hand is for watching what it removes.
 ` + projectIs
+
+const configShowUsage = `usage: shoulderd config [show] [--addr=URL] [--json]
+
+Report what the running daemon is set to: its log level, how picky it is about
+storing new facts, and which provider and model answer for it.
+
+  --json       machine-readable output
+  --addr URL   relay base URL (default http://127.0.0.1:8787)
+`
+
+// configSetUsage is a var rather than a const because it names the providers,
+// and that list lives with the presets. A hand-copied list here is one that
+// goes stale the first time a provider is added.
+var configSetUsage = `usage: shoulderd config set [--log-level=L] [--pickiness=P] [--provider=N] [--model=M] [--addr=URL] [--json]
+
+Change a running daemon without restarting it. Every flag takes effect on the
+next turn; nothing in flight is interrupted, and nothing is written down, so a
+restart returns to what the environment says.
+
+  --log-level L   debug, info, warn or error
+  --pickiness P   how reluctant the memory is to store a new fact:
+                  eager, open, balanced, careful, strict, or 0-4.
+                  Lower stores more and needs the tidying pass more often;
+                  higher keeps the store clean and misses rules you only implied.
+  --provider N    one of: ` + strings.Join(llm.Presets(), ", ") + `.
+                  Its key must already be in the daemon's environment, and it
+                  resets the model to that provider's own default.
+  --model M       a model id for the current provider. Not for a failover
+                  chain: its providers do not share model ids.
+  --json          machine-readable output
+  --addr URL      relay base URL (default http://127.0.0.1:8787)
+
+Passing nothing to change is an error rather than a no-op, so a mistyped flag
+name cannot look like it worked.
+`
+
+var configUsage = configShowUsage + "\n" + configSetUsage
+
+func (c *cli) config(args []string) int {
+	if len(args) > 0 {
+		switch args[0] {
+		case "set":
+			return c.configSet(args[1:])
+		case "show":
+			return c.configShow(args[1:])
+		case "help", "-h", "-help", "--help":
+			fmt.Fprint(c.out, configUsage)
+			return 0
+		}
+	}
+	// Bare `shoulderd config` reads: the flags below all belong to show, and a
+	// change is the thing you should have to name.
+	return c.configShow(args)
+}
+
+func (c *cli) configShow(args []string) int {
+	fs := c.flags("config show", configShowUsage)
+	addr := bindAddr(fs)
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	if code := c.parse(fs, args); code >= 0 {
+		return code
+	}
+	if fs.NArg() > 0 {
+		return c.reject(fmt.Errorf("config show takes no arguments, got %q; to change a setting use `config set`", fs.Arg(0)))
+	}
+	var reply cliapi.ConfigResponse
+	if code := c.call(*addr, http.MethodGet, "/v1/cli/config", nil, &reply); code != 0 {
+		return code
+	}
+	return c.printConfig(reply.Snapshot, *asJSON)
+}
+
+func (c *cli) configSet(args []string) int {
+	fs := c.flags("config set", configSetUsage)
+	addr := bindAddr(fs)
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	level := fs.String("log-level", "", "debug, info, warn or error")
+	pick := fs.String("pickiness", "", strings.Join(prompts.PickinessNames(), ", ")+", or 0-4")
+	provider := fs.String("provider", "", "one of: "+strings.Join(llm.Presets(), ", "))
+	model := fs.String("model", "", "model id for the current provider")
+	if code := c.parse(fs, args); code >= 0 {
+		return code
+	}
+	if fs.NArg() > 0 {
+		return c.reject(fmt.Errorf("config set takes no arguments, got %q; every setting is a flag", fs.Arg(0)))
+	}
+
+	// Only the flags actually typed are sent. The zero value of a string flag
+	// and an empty one deliberately asked for are the same thing to the flag
+	// package, so what was set is read back from the FlagSet rather than from
+	// the values.
+	var change settings.Change
+	fs.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "log-level":
+			change.LogLevel = level
+		case "pickiness":
+			change.Pickiness = pick
+		case "provider":
+			change.Provider = provider
+		case "model":
+			change.Model = model
+		}
+	})
+	if change.Empty() {
+		return c.reject(errors.New("nothing to change: pass --log-level, --pickiness, --provider or --model"))
+	}
+
+	var reply cliapi.ConfigResponse
+	if code := c.call(*addr, http.MethodPatch, "/v1/cli/config", change, &reply); code != 0 {
+		return code
+	}
+	return c.printConfig(reply.Snapshot, *asJSON)
+}
+
+// printConfig renders the same four values whether they were just read or just
+// changed, so `config set` answers the question `config show` would have.
+func (c *cli) printConfig(s settings.Snapshot, asJSON bool) int {
+	if asJSON {
+		enc := json.NewEncoder(c.out)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(s); err != nil {
+			fmt.Fprintln(c.err, "shoulderd:", err)
+			return 1
+		}
+		return 0
+	}
+	fmt.Fprintf(c.out, "log level:  %s\n", s.LogLevel)
+	fmt.Fprintf(c.out, "pickiness:  %s (%d)\n", s.Pickiness, s.PickinessLevel)
+	fmt.Fprintf(c.out, "provider:   %s\n", s.Provider)
+	if s.Model != "" {
+		fmt.Fprintf(c.out, "model:      %s\n", s.Model)
+	}
+	return 0
+}
 
 func (c *cli) message(args []string) int {
 	fs := c.flags("message", messageUsage)

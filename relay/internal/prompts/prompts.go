@@ -3,7 +3,9 @@
 // They are here rather than beside the code that sends them because they are
 // the part most often rewritten, usually by someone tuning behaviour rather
 // than changing logic, and hunting them across four packages made that job
-// worse than it needed to be. Nothing in here imports anything.
+// worse than it needed to be. Nothing in here reaches outside the standard
+// library, and nothing in here decides anything: the only choice made in this
+// package is which wording a configured pickiness asks for.
 package prompts
 
 const Advisor = `You are a background observer of a software engineering session. You see the
@@ -55,7 +57,9 @@ When you are given both project knowledge and global knowledge, be explicit abou
 which is which: what holds only inside this project, and what follows the person into
 every other one.`
 
-const Decision = `You are the memory of a coding session. You read each turn and almost always
+// decisionTemplate is the prompt for one turn, with the one paragraph that
+// pickiness rewrites left as a hole. Build it with Decision.
+const decisionTemplate = `You are the memory of a coding session. You read each turn and almost always
 decide there is nothing to do.
 
 <input>The recent turn, and the stored facts a search already matched.</input>
@@ -72,11 +76,7 @@ it in "facts" and say nothing.
 push, a delete, a deploy - so it lands at that operation. Leave it out otherwise; context
 belongs at the prompt, before anything has been chosen.</inject>
 
-<facts>Store a rule the user states that governs later work: a decision, constraint,
-preference, correction, or a piece of project structure. Work getting done is not a rule -
-what changed this turn is history the git log already holds. Keep only the part that outlives
-the work in front of you; drop any clause that the next commit makes false. When in doubt,
-store nothing.
+<facts>%s
 "supersedes": id of the fact this replaces, same scope only.
 "category": decision | constraint | preference | correction | structure | reference
 "scope": local for this codebase, global for the person. Required, no default.</facts>

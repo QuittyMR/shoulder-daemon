@@ -3,6 +3,7 @@ package llm
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -78,40 +79,76 @@ var presets = map[string]Preset{
 	},
 }
 
+// Presets names every provider this daemon knows, sorted. The order is fixed
+// because this list is read by people: it appears in the refusal a mistyped
+// provider gets, and a set that reshuffles between two identical errors makes
+// them look like different errors.
 func Presets() []string {
 	out := make([]string, 0, len(presets))
 	for k := range presets {
 		out = append(out, k)
 	}
+	sort.Strings(out)
 	return out
 }
+
+// EnvSpec is what SHOULDER_LLM asks for, unresolved. The daemon keeps it
+// because a model swapped at runtime has to be applied to the same chain of
+// providers that was configured at boot, and a built Provider no longer says
+// which presets it came from.
+func EnvSpec() string { return strings.TrimSpace(os.Getenv("SHOULDER_LLM")) }
 
 // FromEnv builds the configured provider. SHOULDER_LLM names one preset,
 // or several separated by commas, in which case they are tried in order. Base
 // URL, model and key overrides apply to a single-provider configuration only —
 // with a chain, each provider takes its key from its own preset variable.
-func FromEnv() (Provider, error) {
-	spec := strings.TrimSpace(os.Getenv("SHOULDER_LLM"))
+func FromEnv() (Provider, error) { return Configure(EnvSpec(), "") }
+
+// Configure builds the provider a spec names, where spec has the shape
+// SHOULDER_LLM takes: one preset, or several comma-separated and tried in
+// order. An empty spec is no provider and no error, which is the daemon
+// observing in silence rather than a misconfiguration.
+//
+// model overrides the preset default and beats SHOULDER_LLM_MODEL, because it
+// comes from somebody typing at a terminal now rather than from the environment
+// the daemon happened to start in. It is refused for a chain: the providers in
+// one do not share a model namespace, so a single id would be right for at most
+// one of them and would silently 404 on the rest.
+func Configure(spec, model string) (Provider, error) {
+	spec = strings.TrimSpace(spec)
 	if spec == "" {
+		if model != "" {
+			return nil, fmt.Errorf("a model was named but no provider is configured; name one of %s too", strings.Join(Presets(), ", "))
+		}
 		return nil, nil
 	}
-	names := strings.Split(spec, ",")
+	// The empty entries are dropped before anything is counted, so a spec of
+	// "gemini," is the one provider it names rather than a chain that happens
+	// to be refused a model.
+	names := make([]string, 0, strings.Count(spec, ",")+1)
+	for _, n := range strings.Split(spec, ",") {
+		if n = strings.ToLower(strings.TrimSpace(n)); n != "" {
+			names = append(names, n)
+		}
+	}
+	if len(names) == 0 {
+		if model != "" {
+			return nil, fmt.Errorf("a model was named but the provider %q names nothing; use one of %s", spec, strings.Join(Presets(), ", "))
+		}
+		return nil, nil
+	}
 	single := len(names) == 1
+	if !single && model != "" {
+		return nil, fmt.Errorf("a model cannot be set for the chain %q: its providers do not share model ids; name one provider instead", spec)
+	}
 
 	ps := make([]Provider, 0, len(names))
 	for _, n := range names {
-		n = strings.ToLower(strings.TrimSpace(n))
-		if n == "" {
-			continue
-		}
-		p, err := build(n, single)
+		p, err := build(n, single, model)
 		if err != nil {
 			return nil, err
 		}
 		ps = append(ps, p)
-	}
-	if len(ps) == 0 {
-		return nil, nil
 	}
 	if single {
 		return ps[0], nil
@@ -119,7 +156,7 @@ func FromEnv() (Provider, error) {
 	return &Chain{Providers: ps}, nil
 }
 
-func build(name string, allowOverrides bool) (Provider, error) {
+func build(name string, allowOverrides bool, model string) (Provider, error) {
 	p, ok := presets[name]
 	if !ok {
 		return nil, fmt.Errorf("unknown provider %q; known: %s", name, strings.Join(Presets(), ", "))
@@ -136,14 +173,17 @@ func build(name string, allowOverrides bool) (Provider, error) {
 		return nil, fmt.Errorf("provider %q needs %s or SHOULDER_LLM_KEY", name, p.KeyEnv)
 	}
 
-	base, model := p.BaseURL, p.DefaultModel
+	base := p.BaseURL
 	if allowOverrides {
 		if v := os.Getenv("SHOULDER_LLM_BASE_URL"); v != "" {
 			base = v
 		}
-		if v := os.Getenv("SHOULDER_LLM_MODEL"); v != "" {
-			model = v
+		if model == "" {
+			model = os.Getenv("SHOULDER_LLM_MODEL")
 		}
+	}
+	if model == "" {
+		model = p.DefaultModel
 	}
 
 	return &OpenAICompatible{

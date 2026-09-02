@@ -51,6 +51,11 @@ type Config struct {
 	QueueSize int
 	LogPath   string
 	LogLevel  slog.Level
+
+	// Pickiness is how reluctant the decision model is to write a new fact.
+	// Only the starting value lives here: it can be turned while the daemon
+	// runs, and from that point on the live value is the one that counts.
+	Pickiness prompts.Pickiness
 }
 
 func Load() Config {
@@ -72,6 +77,7 @@ func Load() Config {
 		IdleExit:       time.Duration(envInt("SHOULDER_IDLE_EXIT_MINUTES", 0)) * time.Minute,
 		LogPath:        os.Getenv("SHOULDER_LOG"),
 		LogLevel:       logLevel(Env("LOG_LEVEL", "info")),
+		Pickiness:      pickiness(os.Getenv("SHOULDER_PICKINESS")),
 	}
 	g := budget.Default()
 	g.MinTurnGap = envInt("BUDGET_MIN_TURN_GAP", g.MinTurnGap)
@@ -105,6 +111,21 @@ func logLevel(s string) slog.Level {
 		return slog.LevelError
 	}
 	return slog.LevelInfo
+}
+
+// pickiness reads the starting level by name or number. Like logLevel it
+// forgives a bad value rather than refusing to start: the daemon is still
+// useful at the default, and a typo in a tuning knob is not worth a machine
+// that comes up with no memory at all.
+func pickiness(s string) prompts.Pickiness {
+	if strings.TrimSpace(s) == "" {
+		return prompts.Default
+	}
+	p, err := prompts.ParsePickiness(s)
+	if err != nil {
+		return prompts.Default
+	}
+	return p
 }
 
 func envInt(k string, d int) int {

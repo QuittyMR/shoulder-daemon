@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"gitlab.com/quittymr/shoulder-daemon/relay/internal/prompts"
 	"io"
 	"log/slog"
 	"net/http"
@@ -15,6 +14,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/prompts"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/settings"
 
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/budget"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/config"
@@ -50,7 +52,7 @@ func newStack(t *testing.T, advisorURL string, timeout time.Duration) *stack {
 	p := &Pipeline{
 		Cfg: cfg, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Metrics: srv.Metrics, Registry: reg, Outbox: box,
-		LLM:         &llm.OpenAICompatible{Label: "test", BaseURL: advisorURL, Model: "m", HTTP: &http.Client{Timeout: timeout}},
+		Settings:    settings.ForProvider(&llm.OpenAICompatible{Label: "test", BaseURL: advisorURL, Model: "m", HTTP: &http.Client{Timeout: timeout}}),
 		Queue:       q,
 		OnConsulted: func(id string) { consults <- id },
 	}
@@ -977,7 +979,7 @@ func (r refusingProvider) Chat(context.Context, []llm.Message, []llm.Tool) (llm.
 
 func TestDigestWithNoRecordsReturnsProseWithoutTheModel(t *testing.T) {
 	s := newStack(t, "http://127.0.0.1:1", time.Second)
-	s.pipe.LLM = refusingProvider{t}
+	s.pipe.Settings = settings.ForProvider(refusingProvider{t})
 	s.pipe.Memory = &fakeMemory{}
 
 	got, err := s.pipe.Digest(context.Background(), DigestRequest{Scope: scope.Global})
@@ -1052,7 +1054,7 @@ func TestDigestPresentsBothScopesSeparately(t *testing.T) {
 
 func TestDigestRefusesALocalRequestWithNoProject(t *testing.T) {
 	s := newStack(t, "http://127.0.0.1:1", time.Second)
-	s.pipe.LLM = refusingProvider{t}
+	s.pipe.Settings = settings.ForProvider(refusingProvider{t})
 	s.pipe.Memory = &fakeMemory{}
 
 	if _, err := s.pipe.Digest(context.Background(), DigestRequest{Scope: scope.Local}); err == nil {
