@@ -426,9 +426,16 @@ func discardCounter(k Kind) string {
 func (m *MCPMemory) List(ctx context.Context, q Query) ([]Record, error) {
 	want := queryTags(q)
 
+	// Two shapes, because the server has answered this endpoint with both: a
+	// flat "memories" array, and the ranked "results" envelope the search
+	// endpoint uses, where each entry wraps the record under "memory". A
+	// decoder that knows only the flat shape does not fail on the other - it
+	// fills every element with an empty record, so the whole listing silently
+	// becomes records with no id and no tags, which is indistinguishable from
+	// the scope holding nothing.
 	var out struct {
 		Memories []restMemory `json:"memories"`
-		Results  []restMemory `json:"results"`
+		Results  []searchHit  `json:"results"`
 	}
 	if err := m.do(ctx, http.MethodPost, "/api/search/by-tag",
 		map[string]any{"tags": want, "match_all": true}, &out); err != nil {
@@ -436,7 +443,9 @@ func (m *MCPMemory) List(ctx context.Context, q Query) ([]Record, error) {
 	}
 	found := out.Memories
 	if len(found) == 0 {
-		found = out.Results
+		for _, r := range out.Results {
+			found = append(found, r.Memory)
+		}
 	}
 
 	recs := make([]Record, 0, len(found))

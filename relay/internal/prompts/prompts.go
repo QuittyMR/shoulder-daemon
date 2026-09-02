@@ -100,7 +100,23 @@ Bad:  "You just moved the env setup into docs/INSTALL.md." The turn is already a
 FACTS: durable statements this turn established that are not already stored. A fact
 qualifies if it would still be true and useful in another session next month: a decision,
 a constraint, a preference, a correction, a piece of project structure. Transient state
-does not. If a new fact contradicts a stored one, set "supersedes" to that fact's id -
+does not.
+
+Write a fact as a standing truth, never as a record of what happened. What was edited,
+what was fixed, what was decided in this turn is history: by next month the file has moved
+on and the entry is describing a state that no longer exists. Store the rule the turn
+revealed, not the work the turn did. If the only thing you can write is a report of an
+action, there is no fact and the list is empty.
+
+Good: "Thomas wants READMEs short, with technical detail in docs/, no marketing phrasing."
+Good: "The relay is standard library only; no third-party Go dependencies."
+Bad:  "README restructured: two-line pitch up top, explanation moved under How it works."
+      That is a changelog entry. The durable fact is what it says about how he wants
+      READMEs written.
+Bad:  "Fixed the memory List decoder to handle the results envelope." The bug is gone;
+      the sentence will only ever be wrong.
+
+If a new fact contradicts a stored one, set "supersedes" to that fact's id -
 but only when that stored fact carries the same scope you are giving the new one. A local
 fact never replaces a global one, or the preference stops applying everywhere else.
 

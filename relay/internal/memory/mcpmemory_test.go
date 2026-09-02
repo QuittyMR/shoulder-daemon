@@ -406,16 +406,22 @@ func TestListReturnsNewestFirstAndHonoursTheLimit(t *testing.T) {
 	}
 }
 
-// The by-tag endpoint's envelope differs between builds of the server.
-func TestListAcceptsEitherResponseEnvelope(t *testing.T) {
+// The by-tag endpoint answers with the ranked envelope the search endpoint
+// uses, wrapping each record under "memory", as well as with a flat "memories"
+// array. Decoding the ranked one as if it were flat does not fail: it yields an
+// element per record with every field empty, so a scope that holds records
+// reads as a scope that holds none, and nothing this listing feeds - the
+// digest, the scope check behind every supersede, the lookup for a session's
+// working note - can tell that from an empty store.
+func TestListAcceptsTheRankedResponseEnvelope(t *testing.T) {
 	c, _ := serve(t, func(string, map[string]any) (int, string) {
-		return 200, `{"results":[` + listed("h1", "x", "2026-08-30T10:00:00Z", "shoulder-scope:global") + `]}`
+		return 200, `{"results":[{"memory":` + listed("h1", "x", "2026-08-30T10:00:00Z", "shoulder-scope:global") + `}]}`
 	})
 	got, err := c.List(context.Background(), Query{Scope: scope.Global})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].ID != "h1" {
+	if len(got) != 1 || got[0].ID != "h1" || got[0].Content != "x" {
 		t.Fatalf("got %+v", got)
 	}
 }
