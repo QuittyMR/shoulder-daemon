@@ -565,6 +565,12 @@ func (m *MCPMemory) Supersede(ctx context.Context, oldID string, r Record) (stri
 	if match := newHashRe.FindStringSubmatch(text); len(match) == 2 {
 		return match[1], nil
 	}
+	// The replacement being what the record already says is an outcome, not a
+	// fault: the caller asked for the store to hold this content and it does.
+	// Reported as a failure it reads as the write having been lost.
+	if strings.Contains(strings.ToLower(text), "duplicate content detected") {
+		return "", ErrDuplicateExact
+	}
 	return "", fmt.Errorf("%s supersede: no new hash in reply: %s", m.Name(), textutil.Clip(text, 200))
 }
 
