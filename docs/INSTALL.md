@@ -254,6 +254,13 @@ adapter sends it as `X-Shoulder-Token`. When they differ every hook is rejected
 and the session carries on as though nothing were installed, because hooks fail
 open. `shoulderd doctor` reports that as `auth: N REJECTED`.
 
+`make install-plugins`, which `make update` runs, writes the path-dependent
+settings itself: `SHOULDER_START_CMD` for the checkout it is run from, a
+generated `SHOULDER_TOKEN` if the file has none, and the same three values into
+the `env` block of `~/.claude/settings.json`. Moving or renaming the checkout is
+therefore repaired by running it again, rather than by hunting a stale absolute
+path through two config files.
+
 The OpenCode adapter falls back to the env file for any `SHOULDER_` variable its
 process does not already have, looking at `$SHOULDER_ENV_FILE` and then at
 `~/.config/shoulder-daemon/env`. An editor started from a desktop launcher
