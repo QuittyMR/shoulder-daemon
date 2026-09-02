@@ -5,33 +5,39 @@
 
 # shoulder-daemon
 
-Persistent memory and context injection for coding agents. A local Go
-daemon watches your session, keeps a bucket of facts and injects one short
-note into the agent's context when something it holds is worth saying.
-The agent has no memory tool to forget to call. Storage and reasoning are both
-swappable, and neither has to leave your machine.
+Context advisor for coding agents.
+Injects relevant information when needed. Records facts and keeps them up to date as they change.
 
-- **The agent never manages memory.** It doesn't need to know your categories, doesn't
-  check whether a fact is already stored, and can't skip the docs or slurp all
-  of them at session start. Only relevant context is injected.
-- **Facts don't pile up.** When facts change, they supersede each-other.
-  A correction replaces what it corrects, so the agent can trust what it is
-  given without checking whether it is current.
-- **A small model does the work.** It reads each finished turn, decides whether
-  anything is worth saying, writes what is worth keeping, and stays quiet
-  otherwise. It can run locally.
+## How it works
+
+A local Go daemon watches your session, maintains a bucket of facts and injects information
+into the agent's session when that context is relevant.
+Your agent doesn't need to do anything - so it can't forget to store a fact or consult a knowledgebase.
+Storage and reasoning are both modular, and local-only is supported.
+
+- **The working agent never manages memory.** It doesn't need to know how the memory is structured,
+  doesn't check whether a fact is already stored, and can't skip the docs or ingest all
+  of them at session start. Only relevant context is injected and only when needed.
+- **Facts remain up-to-date.** When facts change, they supersede each-other.
+  The agent doesn't need to manage this - it just receives up to date information.
+- **Retrieval and updates are smart.** A small, low-latency model determines when facts need to be updated,
+  injected into the session or created from scratch. Local inference is fully supported.
 
 ## Install
 
 Install the daemon, then the adapter for whichever editor you use. The adapters
-start the daemon when the editor launches, and it stops itself after fifteen
-minutes with no session. Opening several editors starts one daemon.
+start the daemon when the editor launches, and it stops when the last session
+ends. Sessions will happily share a single daemon.
 
 ```bash
 go install gitlab.com/quittymr/shoulder-daemon/relay/cmd/shoulderd@latest
 ```
 
-**OpenCode** - copy one file into `~/.config/opencode/plugins/`, or into
+`go install` puts the binary in `$(go env GOPATH)/bin`. The adapters look for
+`shoulderd` on your `PATH`, so add that directory to it if it is not there
+already.
+
+**OpenCode** - copy into `~/.config/opencode/plugins/`, or into
 `.opencode/plugins/` for a single project. OpenCode loads both.
 
 ```bash
@@ -46,9 +52,7 @@ curl -o ~/.config/opencode/plugins/shoulder-daemon.js https://gitlab.com/quittym
 /plugin install shoulder-daemon
 ```
 
-OpenCode's `ReasoningPart` carries reasoning text and the adapter forwards it as
-part of the turn. Claude Code does not expose thinking tokens, so that field is
-always empty there.
+OpenCode is clearly the better informed harness here, as Claude Code removed thinking tokens. We deal with the pork we receive.
 
 Select a model:
 
@@ -57,10 +61,23 @@ export SHOULDER_LLM=gemini          # and GEMINI_API_KEY
 export SHOULDER_MEMORY_URL=http://127.0.0.1:8100    # optional; without it nothing is stored
 ```
 
-Check it with `shoulderd doctor`.
+Those variables have to reach the daemon, which is not always the shell you
+typed them in. If you run it as a container, a service, or from an editor
+adapter, see [docs/INSTALL.md](docs/INSTALL.md) for where to put them.
+
+Use `shoulderd doctor` to verify the validity of your installation and setup.
 
 Running from a checkout, a container or a service manager is covered in
 [docs/INSTALL.md](docs/INSTALL.md), along with every setting.
+
+### Updating
+
+```bash
+git pull
+make update
+```
+
+Then restart your editor and run `shoulderd doctor`.
 
 ## Use it
 

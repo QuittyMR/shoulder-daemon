@@ -140,9 +140,14 @@ falls back to `info` rather than refusing to start, because a typo in a log sett
 to have no daemon. At `debug` every hook arrival is logged; at `info` you still get every fact
 stored, every fact superseded, and every piece of advice queued and injected, with its text.
 
-It shuts itself down after `SHOULDER_IDLE_EXIT_MINUTES` (default 15) with no open session and no
-traffic, and the editor plugins start it again on their next launch. Set it to `0` to keep the
-daemon up for good, which is what you want under systemd or in a container with a restart policy.
+It stops when the last session ends: the harness sends `SessionEnd`, and if no
+other session is open the daemon shuts down. The adapters start it again the
+next time an editor launches. `SHOULDER_IDLE_EXIT_MINUTES` is a backstop for a
+harness that dies without saying goodbye, off by default.
+
+Under a service manager, set the restart policy so a deliberate exit is not
+undone. `deploy/docker-compose.yml` uses `restart: on-failure` for that reason;
+`unless-stopped` would bring the daemon back seconds after every shutdown.
 
 Started with nothing else configured, the relay observes and stays silent. Two variables turn it
 into something that thinks:
@@ -212,6 +217,58 @@ Every subcommand is a thin HTTP client against the running relay. It reads the a
 `SHOULDER_ADDR` (override with `--addr`) and the token from `SHOULDER_TOKEN`. If nothing is
 listening you get one line saying so and a non-zero exit - the CLI does not start a daemon for you.
 
+## Where configuration lives
+
+Everything is environment driven, which raises the only awkward question here:
+whose environment. A daemon you start by hand inherits the shell you typed in.
+A daemon started by an editor adapter, a container or a service manager does
+not, and the failure is quiet - it comes up, reports itself healthy, observes
+every turn and has no model to ask, so it stays silent and looks like it is
+simply never finding anything to say.
+
+Keep the settings in a file and point at it:
+
+```bash
+mkdir -p ~/.config/shoulder-daemon
+cat > ~/.config/shoulder-daemon/env <<'EOF'
+SHOULDER_LLM=glm-coding,gemini
+GLM_API_KEY=...
+GEMINI_API_KEY=...
+SHOULDER_TOKEN=a-shared-secret
+SHOULDER_MEMORY_URL=http://127.0.0.1:8100
+SHOULDER_MEMORY_KEY=...
+EOF
+chmod 600 ~/.config/shoulder-daemon/env
+export SHOULDER_ENV_FILE=~/.config/shoulder-daemon/env
+```
+
+`deploy/docker-compose.yml` reads `${SHOULDER_ENV_FILE:-.env}`, so with that
+variable set `make up` uses your file, and without it falls back to `deploy/.env`
+next to the compose file. Both are gitignored. If you have an old `deploy/.env`
+lying around from an earlier experiment, the fallback will find it and use it in
+preference to nothing, which is how a daemon ends up running on settings you
+forgot you wrote.
+
+`SHOULDER_TOKEN` has to match on both sides: the daemon checks it, and the
+adapter sends it as `X-Shoulder-Token`. When they differ every hook is rejected
+and the session carries on as though nothing were installed, because hooks fail
+open. `shoulderd doctor` reports that as `auth: N REJECTED`.
+
+An adapter can only pass on what its editor exported to it, so both
+`SHOULDER_ENV_FILE` and `SHOULDER_START_CMD` belong wherever your editor sets
+environment at startup. For Claude Code that is the `env` block in
+`~/.claude/settings.json`:
+
+```json
+{
+  "env": {
+    "SHOULDER_TOKEN": "a-shared-secret",
+    "SHOULDER_ENV_FILE": "/home/you/.config/shoulder-daemon/env",
+    "SHOULDER_START_CMD": "make -C /home/you/src/shoulder-daemon up"
+  }
+}
+```
+
 ## Running from a checkout
 
 ```bash
@@ -245,3 +302,21 @@ separate `SHOULDER_LLM` for a failover chain. More coming.
 today. Backends sit behind a five-method `Connector` interface that names nothing
 specific to any product; `memory.TestConnector` is an exported conformance suite
 a new one can run against itself. More coming.
+
+## After an update
+
+```bash
+git pull
+make update
+```
+
+`make update` rebuilds the binary and the container image, replaces each
+harness's installed copy of the adapter, and restarts the daemon. Then restart
+your editor so it reloads the plugin, and run `shoulderd doctor`.
+
+The step that is easy to miss is the adapter. A harness runs the copy it took
+when the plugin was installed, not your checkout, so editing the adapter here
+changes nothing it loads. The failure is silent: the old copy keeps posting to
+whatever address and header it was built against, so hooks either never arrive
+or are rejected while the source on disk looks correct. `shoulderd doctor`
+reports that as `plugin: STALE`.

@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -152,6 +154,19 @@ func (c *cli) doctor(args []string) int {
 	_ = resp.Body.Close()
 	out["relay"] = "ok"
 
+	// What a harness actually runs is the copy of the plugin taken at install
+	// time, not the checkout somebody is editing. A stale copy posts to the
+	// address and with the header it was built against, so the symptom is
+	// silence or rejection while the source on disk looks correct.
+	if stale, err := stalePlugins(*base); err != nil {
+		out["plugin"] = "unreadable: " + err.Error()
+	} else if len(stale) > 0 {
+		out["plugin_stale"] = stale
+		code = 1
+	} else {
+		out["plugin"] = "ok"
+	}
+
 	// Liveness is a strictly weaker question than readiness: "is the process
 	// serving?", not "has the harness ever called it?". Container healthchecks
 	// must ask the weaker one, or a correctly-running relay reports unhealthy
@@ -203,6 +218,11 @@ func (c *cli) doctor(args []string) int {
 
 	fmt.Printf("relay:   %v\n", out["relay"])
 	fmt.Printf("metrics: %v\n", out["metrics"])
+	if stale, ok := out["plugin_stale"].([]string); ok {
+		fmt.Printf("plugin:  STALE: %v\n", stale)
+		fmt.Println("         The harness runs the copy made when the plugin was installed, not")
+		fmt.Println("         your checkout. Reinstall it so the copy matches.")
+	}
 	if n, ok := out["unauthorised"].(int); ok {
 		fmt.Printf("auth:    %d REJECTED: the token the harness sends does not match this daemon's\n", n)
 		fmt.Println("         SHOULDER_TOKEN must hold the same value here and wherever the harness")
@@ -236,6 +256,52 @@ func counterValue(scrape, name string) int {
 		return n
 	}
 	return 0
+}
+
+// stalePlugins returns the installed Claude Code plugins whose hook URLs do not
+// point at this relay. It reads the harness's own installed-plugin registry
+// rather than any checkout, because that registry is what the harness loads.
+func stalePlugins(base string) ([]string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	raw, err := os.ReadFile(filepath.Join(home, ".claude", "plugins", "installed_plugins.json"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var reg struct {
+		Plugins map[string][]struct {
+			InstallPath string `json:"installPath"`
+		} `json:"plugins"`
+	}
+	if err := json.Unmarshal(raw, &reg); err != nil {
+		return nil, err
+	}
+
+	want := strings.TrimPrefix(strings.TrimPrefix(base, "http://"), "https://")
+	var stale []string
+	for name, installs := range reg.Plugins {
+		for _, in := range installs {
+			hooks, err := os.ReadFile(filepath.Join(in.InstallPath, "hooks", "hooks.json"))
+			if err != nil {
+				continue
+			}
+			body := string(hooks)
+			// Only plugins that speak this protocol are ours to judge.
+			if !strings.Contains(body, "/v1/hooks/claude-code/") {
+				continue
+			}
+			if !strings.Contains(body, want) || !strings.Contains(body, "X-Shoulder-Token") {
+				stale = append(stale, name+" at "+in.InstallPath)
+			}
+		}
+	}
+	sort.Strings(stale)
+	return stale, nil
 }
 
 func report(asJSON bool, v map[string]any, text string) {

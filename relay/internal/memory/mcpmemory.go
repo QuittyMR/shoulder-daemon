@@ -331,7 +331,10 @@ const (
 	// the whole index would cost more than the answer is worth, and reaching
 	// this is itself the signal that the store needs tidying rather than
 	// re-reading.
-	searchFetchCeiling = 500
+	// 100 is what this server accepts: above it every search is a 422 rather
+	// than a smaller answer, so a ceiling past the cap does not widen the
+	// search, it breaks it.
+	searchFetchCeiling = 100
 
 	// searchFetchGrowth widens fast because the cost of another round trip is
 	// paid whether it helps or not, and because the population being skipped

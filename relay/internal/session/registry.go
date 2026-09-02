@@ -202,6 +202,21 @@ type Evicted struct {
 	KeywordRecord string
 }
 
+// CloseSession drops one session and reports how many are left. It is what a
+// harness saying goodbye means: this editor is finished, and if it was the last
+// one there is nothing for the daemon to stay up for.
+func (r *Registry) CloseSession(sessionID string) (Evicted, int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	st, ok := r.sessions[sessionID]
+	if !ok {
+		return Evicted{}, len(r.sessions)
+	}
+	gone := Evicted{ID: sessionID, Project: st.Project, KeywordRecord: st.KeywordRecord}
+	delete(r.sessions, sessionID)
+	return gone, len(r.sessions)
+}
+
 // Drain empties the registry and returns what every session was holding, for a
 // daemon on its way out. The notes it hands back are the only record of
 // themselves that survives this process.

@@ -15,7 +15,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -60,9 +59,11 @@ func Project(dir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if _, err := os.Stat(abs); err != nil {
-		return "", err
-	}
+	// Not checked for existence. The directory belongs to whichever machine the
+	// session runs on, and the daemon is routinely somewhere else - a container,
+	// another user, another host - where that path is real but unreachable.
+	// Requiring it to resolve locally means every fact from a containerised
+	// daemon is dropped for having no project to file it under.
 	cmd := exec.Command("git", "-C", abs, "rev-parse", "--show-toplevel")
 	if out, err := cmd.Output(); err == nil {
 		if root := strings.TrimSpace(string(out)); root != "" {

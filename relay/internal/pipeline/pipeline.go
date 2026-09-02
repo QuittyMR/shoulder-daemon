@@ -40,7 +40,8 @@ type Pipeline struct {
 	Memory   memory.Connector
 	Queue    chan session.Event
 
-	// IdleExit overrides the default; zero means never exit.
+	// IdleExit is a backstop for a harness that dies without saying goodbye.
+	// Zero, the default, means the daemon waits to be told.
 	IdleExit time.Duration
 
 	// OnIdle is called once when the daemon has decided to stop.
@@ -110,9 +111,42 @@ func (p *Pipeline) Run(ctx context.Context) {
 			}
 			// Off the loop: this is one network write per dead session, and
 			// what is queued behind this tick is a turn waiting to be advised.
-			go p.forgetNotes(ctx, evicted)
+			go p.forgetNotes(context.WithoutCancel(ctx), evicted)
+			// An editor that is killed, crashes, or loses the machine under it
+			// never sends its goodbye, so the daemon would otherwise sit here
+			// holding a session nobody is in. Eviction is that session dying of
+			// old age; if it was the last one there is nothing left to observe.
+			if len(evicted) > 0 && p.Registry.Len() == 0 {
+				p.Log.Info("last session evicted; shutting down", "evicted", len(evicted))
+				if p.OnIdle != nil {
+					p.OnIdle()
+				}
+				return
+			}
 		case ev := <-p.Queue:
-			if ev.Kind != session.KindTurnEnd {
+			if ev.Kind == session.KindSessionEnd {
+				// The harness has said this editor is done. If it was the last
+				// one there is nothing left to observe, so the daemon stops
+				// rather than sitting idle waiting to be noticed.
+				gone, left := p.Registry.CloseSession(ev.SessionID)
+				p.Outbox.Forget(ev.SessionID)
+				go p.forgetNotes(context.WithoutCancel(ctx), []session.Evicted{gone})
+				if left == 0 {
+					p.Log.Info("last session ended; shutting down", "session", ev.SessionID)
+					if p.OnIdle != nil {
+						p.OnIdle()
+					}
+					return
+				}
+				continue
+			}
+			// Both ends of a turn, for different reasons. A prompt is where
+			// advice can still change what happens: the assistant is thinking,
+			// and the next PreToolUse of this same turn carries whatever the
+			// advisor says. A turn end is where the turn can finally be read
+			// whole, which is what facts are extracted from. Advising only at
+			// the end means every note lands after the thing it was about.
+			if ev.Kind != session.KindTurnEnd && ev.Kind != session.KindUserPrompt {
 				continue
 			}
 			if !p.Registry.ClaimAdvisor(ev.SessionID) {

@@ -110,9 +110,21 @@ func TestProjectFallsBackToTheAbsolutePathOutsideARepository(t *testing.T) {
 	}
 }
 
-func TestProjectRejectsADirectoryThatIsNotThere(t *testing.T) {
-	if got, err := Project(filepath.Join(t.TempDir(), "absent")); err == nil {
-		t.Fatalf("Project of a missing directory returned %q; want an error", got)
+func TestProjectAcceptsADirectoryThisMachineCannotSee(t *testing.T) {
+	// The daemon is routinely not on the machine the session is: a container
+	// sees none of the host's paths. Refusing a directory it cannot stat drops
+	// every fact that session produces, so an unreachable path is still a
+	// project, identified by what it is called.
+	const remote = "/home/someone/work/their-repo"
+	got, err := Project(remote)
+	if err != nil {
+		t.Fatalf("a path this machine cannot see must still resolve: %v", err)
+	}
+	if got != remote {
+		t.Fatalf("got %q, want %q", got, remote)
+	}
+	if Key(got) == "" {
+		t.Fatal("an unreachable project must still have a stable key")
 	}
 }
 

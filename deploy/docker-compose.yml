@@ -6,7 +6,10 @@ services:
       context: ../relay
       dockerfile: Dockerfile
     image: shoulder-daemon/shoulderd:local
-    restart: unless-stopped
+    # Not unless-stopped: the daemon stops itself once no session has used it
+    # for a while, and a restart policy that fights that would bring it back
+    # within seconds, forever. Only a crash is worth restarting for.
+    restart: on-failure
     # Host networking, deliberately. The relay must be reachable at
     # 127.0.0.1:8787 (Claude Code hooks post there) and must itself reach the
     # memory service on 127.0.0.1:8100. Host networking keeps both on loopback

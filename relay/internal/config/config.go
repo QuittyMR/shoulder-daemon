@@ -43,8 +43,9 @@ type Config struct {
 	MemoryURL string
 	MemoryKey string
 
-	// IdleExit is how long to run with no session before stopping. Zero keeps
-	// the daemon up for good.
+	// IdleExit stops the daemon after this long with no session. It is off by
+	// default: what ends the daemon is the last session ending, not a timer.
+	// Set it when a harness may die without sending SessionEnd.
 	IdleExit time.Duration
 
 	QueueSize int
@@ -68,7 +69,7 @@ func Load() Config {
 		MemoryURL:      os.Getenv("SHOULDER_MEMORY_URL"),
 		MemoryKey:      os.Getenv("SHOULDER_MEMORY_KEY"),
 		QueueSize:      envInt("QUEUE_SIZE", 1024),
-		IdleExit:       time.Duration(envInt("SHOULDER_IDLE_EXIT_MINUTES", 15)) * time.Minute,
+		IdleExit:       time.Duration(envInt("SHOULDER_IDLE_EXIT_MINUTES", 0)) * time.Minute,
 		LogPath:        os.Getenv("SHOULDER_LOG"),
 		LogLevel:       logLevel(Env("LOG_LEVEL", "info")),
 	}
