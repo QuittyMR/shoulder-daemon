@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # Make sure the relay is answering, exactly once, however many editors launch.
 #
-# This is the only hook here that runs a command rather than posting HTTP,
-# because Claude Code refuses HTTP hooks for SessionStart. It starts one thing:
-# the daemon this plugin exists to talk to. It never stops it - the daemon
-# exits on its own once no session has used it for a while, which is the only
-# way to get that right with several editors open.
+# It runs at session start and again before every prompt. The second is the
+# whole recovery story: the daemon stops when the last session it knows about
+# ends, and a daemon that restarted a moment ago knows about one editor however
+# many are open, so it can and does exit under a session that is still working.
+# Probing a port costs a millisecond and puts the daemon back rather than
+# leaving the rest of the session unobserved. It is a command hook because
+# Claude Code refuses HTTP hooks for SessionStart, and because an HTTP hook
+# cannot start anything.
 #
 # Always exits 0 and never blocks. A session that cannot reach the relay simply
 # has no advisory context, and that is not a reason to hold up somebody's work.

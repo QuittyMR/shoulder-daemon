@@ -69,19 +69,46 @@ const headers = () => {
 
 /** post sends one neutral event. Resolves to the advice, or null for anything at all. */
 async function post(event) {
-  try {
+  const body = JSON.stringify({ protocol: 1, harness: "opencode", ...event });
+  const once = async () => {
     const res = await fetch(`${BASE}/v1/events`, {
       method: "POST",
       headers: headers(),
-      body: JSON.stringify({ protocol: 1, harness: "opencode", ...event }),
+      body,
       signal: AbortSignal.timeout(DEADLINE_MS),
     });
     if (!res.ok) return null;
-    const body = await res.json();
-    return body && body.advice ? body.advice : null;
+    const out = await res.json();
+    return out && out.advice ? out.advice : null;
+  };
+  try {
+    return await once();
   } catch {
-    return null;
+    // Nothing answered. The daemon stops when the last session it knows about
+    // ends, and a daemon that restarted a moment ago knows about one editor
+    // however many are open - so it can and does stop under a session that is
+    // still working. Starting one and trying again is what keeps this editor
+    // observed for the rest of its life; it is only reached when a post has
+    // already failed, so a daemon that is up never pays for it.
+    try {
+      await reviveDaemon();
+      return await once();
+    } catch {
+      return null;
+    }
   }
+}
+
+// reviveDaemon runs at most one start attempt at a time, however many hooks
+// discover the daemon missing at once.
+let reviving = null;
+function reviveDaemon() {
+  if (!reviving) {
+    reviving = ensureDaemon().finally(() => {
+      reviving = null;
+    });
+  }
+  return reviving;
 }
 
 /** send fires an event we do not need an answer to, without making the turn wait. */

@@ -467,3 +467,27 @@ func TestOpenCodeReceivesAdvice(t *testing.T) {
 		t.Fatalf("the daemon produced advice but never handed it to the adapter:\n%s", d.log.String())
 	}
 }
+
+// The daemon stops when the last session it knows about ends, which it can do
+// under an editor that is still open. Claude Code recovers by running the boot
+// script before every prompt; OpenCode has no such hook, so the adapter starts
+// one itself the first time a post finds nothing listening.
+func TestOpenCodeRevivesADeadDaemon(t *testing.T) {
+	opencodeOrSkip(t)
+	d := startDaemon(t)
+	dir := project(t)
+
+	// Nothing is listening on the address the adapter is about to use.
+	_ = d.cmd.Process.Kill()
+	<-d.stopped
+
+	started := filepath.Join(t.TempDir(), "started")
+	run(t, dir, "reply with exactly: ok",
+		"SHOULDER_ADDR="+d.addr,
+		"SHOULDER_TOKEN="+d.token,
+		"SHOULDER_START_CMD=touch "+started)
+
+	if _, err := os.Stat(started); err != nil {
+		t.Fatalf("the adapter left the session unobserved rather than starting a daemon: %v", err)
+	}
+}

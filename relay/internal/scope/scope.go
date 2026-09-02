@@ -51,9 +51,19 @@ func (s Scope) Valid() bool { return s == Local || s == Global }
 
 // Project identifies the project a local record belongs to.
 //
-// It is the root of the git worktree containing dir, so that every directory
-// inside one checkout shares a single memory, and the absolute path of dir
-// itself when dir is not in a repository.
+// It is the repository's root commit, with the checkout's directory name in
+// front of it for anyone reading a log. The commit is what the identity is
+// actually made of: a path changes when the directory is renamed or the
+// repository is cloned somewhere else, and a path-derived identity silently
+// orphans every fact filed under the old one - the store still holds them and
+// no read can see them. The root commit is the same in every clone and survives
+// both.
+//
+// Two repositories collide only if they share a root commit, which means one
+// was cloned or forked from the other - in which case they are arguably the
+// same history anyway. A directory that is not a repository, or a repository
+// with no commits yet, falls back to its absolute path. There is nothing more stable to use, and one
+// project keyed by path is better than one project with no key at all.
 func Project(dir string) (string, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
@@ -64,13 +74,33 @@ func Project(dir string) (string, error) {
 	// another user, another host - where that path is real but unreachable.
 	// Requiring it to resolve locally means every fact from a containerised
 	// daemon is dropped for having no project to file it under.
-	cmd := exec.Command("git", "-C", abs, "rev-parse", "--show-toplevel")
-	if out, err := cmd.Output(); err == nil {
-		if root := strings.TrimSpace(string(out)); root != "" {
-			return root, nil
-		}
+	root := gitOutput(abs, "rev-parse", "--show-toplevel")
+	if root == "" {
+		return abs, nil
 	}
-	return abs, nil
+	born := gitOutput(abs, "rev-list", "--max-parents=0", "HEAD")
+	if born == "" {
+		return abs, nil
+	}
+	// Several root commits means a repository with grafted or merged histories.
+	// The first is stable for a given repository, which is all that is asked.
+	if i := strings.IndexAny(born, " \n"); i >= 0 {
+		born = born[:i]
+	}
+	return filepath.Base(root) + identitySep + born, nil
+}
+
+// identitySep divides the human-readable half of a project identity from the
+// half that identifies it. Only the second half is hashed into a key, so
+// renaming a checkout changes what a log calls it and nothing else.
+const identitySep = "@"
+
+func gitOutput(dir string, args ...string) string {
+	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // Key is the stable identifier a backend stores for a project. It is a hash
@@ -81,7 +111,15 @@ func Key(project string) string {
 	if project == "" {
 		return ""
 	}
-	sum := sha256.Sum256([]byte(filepath.Clean(project)))
+	// Only the identifying half is hashed. The name in front of it is for
+	// people, and hashing it would put a renamed checkout in a different
+	// project from the one it was a moment ago.
+	if i := strings.LastIndex(project, identitySep); i >= 0 {
+		project = project[i+1:]
+	} else {
+		project = filepath.Clean(project)
+	}
+	sum := sha256.Sum256([]byte(project))
 	return hex.EncodeToString(sum[:])[:12]
 }
 
@@ -90,6 +128,9 @@ func Key(project string) string {
 func Label(project string) string {
 	if project == "" {
 		return ""
+	}
+	if i := strings.LastIndex(project, identitySep); i >= 0 {
+		return project[:i]
 	}
 	return filepath.Base(filepath.Clean(project))
 }

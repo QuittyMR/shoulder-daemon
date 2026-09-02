@@ -71,28 +71,98 @@ func resolve(t *testing.T, path string) string {
 	return real
 }
 
-func TestProjectReturnsTheWorktreeRootFromAnySubdirectory(t *testing.T) {
+// repo makes a checkout with one commit, which is what gives it an identity.
+// The commit has content, because two empty commits made in the same second by
+// the same author carry the same hash.
+func repo(t *testing.T, dir string) {
+	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
-	root := t.TempDir()
-	if out, err := exec.Command("git", "-C", root, "init").CombinedOutput(); err != nil {
-		t.Fatalf("git init: %v: %s", err, out)
+	if err := os.WriteFile(filepath.Join(dir, "seed"), []byte(dir), 0o644); err != nil {
+		t.Fatal(err)
 	}
+	for _, args := range [][]string{
+		{"init"}, {"config", "user.email", "t@example.com"}, {"config", "user.name", "t"},
+		{"add", "seed"}, {"commit", "-m", "root"},
+	} {
+		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+}
+
+func TestEveryDirectoryInOneCheckoutSharesAProject(t *testing.T) {
+	root := t.TempDir()
+	repo(t, root)
 	deep := filepath.Join(root, "internal", "memory")
 	if err := os.MkdirAll(deep, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	want := resolve(t, root)
-	for _, dir := range []string{root, deep} {
-		got, err := Project(dir)
-		if err != nil {
-			t.Fatalf("Project(%q): %v", dir, err)
-		}
-		if resolve(t, got) != want {
-			t.Errorf("Project(%q) = %q; every directory in one checkout must share %q", dir, got, want)
-		}
+	top, err := Project(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Project(deep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != top {
+		t.Errorf("Project(%q) = %q, want %q", deep, got, top)
+	}
+	if Label(top) != filepath.Base(resolve(t, root)) {
+		t.Errorf("Label(%q) = %q, want the checkout's name", top, Label(top))
+	}
+}
+
+// A path-derived key orphans every fact the moment a checkout is renamed or
+// cloned elsewhere: the store still holds them and no read can see them.
+func TestRenamingACheckoutKeepsItsKey(t *testing.T) {
+	parent := t.TempDir()
+	before := filepath.Join(parent, "before")
+	if err := os.Mkdir(before, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	repo(t, before)
+	was, err := Project(before)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	after := filepath.Join(parent, "after")
+	if err := os.Rename(before, after); err != nil {
+		t.Fatal(err)
+	}
+	now, err := Project(after)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if Key(now) != Key(was) {
+		t.Fatalf("Key changed on rename: %q -> %q", Key(was), Key(now))
+	}
+	if Label(now) != "after" {
+		t.Errorf("Label(%q) = %q; the name should follow the directory", now, Label(now))
+	}
+}
+
+// Two checkouts of different repositories must never share a key, however
+// similarly they are named.
+func TestTwoRepositoriesAreDifferentProjects(t *testing.T) {
+	a, b := t.TempDir(), t.TempDir()
+	repo(t, a)
+	repo(t, b)
+	pa, err := Project(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pb, err := Project(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if Key(pa) == Key(pb) {
+		t.Fatalf("two repositories share the key %q", Key(pa))
 	}
 }
 

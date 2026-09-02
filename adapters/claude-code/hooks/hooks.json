@@ -16,6 +16,15 @@
       {
         "hooks": [
           {
+            "type": "command",
+            "command": "\"$CLAUDE_PLUGIN_ROOT\"/scripts/ensure-daemon.sh",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
             "type": "http",
             "url": "http://127.0.0.1:8787/v1/hooks/claude-code/UserPromptSubmit",
             "timeout": 2,

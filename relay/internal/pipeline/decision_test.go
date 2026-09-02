@@ -532,40 +532,11 @@ func TestDryRunSaysTheNoteWasNotWritten(t *testing.T) {
 	}
 }
 
-// The registry holds the sessions this process has heard from, not the sessions
-// that are open. A daemon restarted a moment ago knows about one editor however
-// many are running, so exiting on the first goodbye takes observation away from
-// every other live one - which restarts it, which exits again on the next.
-func TestAGoodbyeDoesNotStopADaemonAnotherSessionIsStillUsing(t *testing.T) {
-	restore := lastSessionGrace
-	lastSessionGrace = 300 * time.Millisecond
-	t.Cleanup(func() { lastSessionGrace = restore })
-
-	ts := advisorServer(t, 0, decisionBody(t, ""))
-	s := newStack(t, ts.URL, 2*time.Second)
-	idle := make(chan struct{}, 1)
-	s.pipe.OnIdle = func() { idle <- struct{}{} }
-
-	s.post(t, "UserPromptSubmit", prompt("s1", "working"))
-	s.post(t, "SessionEnd", `{"session_id":"s1","hook_event_name":"SessionEnd"}`)
-	// A second editor speaks up inside the grace period.
-	time.Sleep(20 * time.Millisecond)
-	s.post(t, "UserPromptSubmit", prompt("s2", "also working"))
-
-	select {
-	case <-idle:
-		t.Fatal("the daemon stopped while another session was still working")
-	case <-time.After(lastSessionGrace + 300*time.Millisecond):
-	}
-}
-
-// The grace period must not become a daemon that never stops: with nothing else
-// open, the goodbye still ends it.
-func TestTheLastGoodbyeStillStopsTheDaemon(t *testing.T) {
-	restore := lastSessionGrace
-	lastSessionGrace = 300 * time.Millisecond
-	t.Cleanup(func() { lastSessionGrace = restore })
-
+// A daemon that has been told its last known session is over stops. The
+// adapters probe the port before every prompt, so an editor that is still open
+// gets one back at its next turn; a daemon that lingered on a guess would
+// instead sit there after everything had closed.
+func TestTheLastGoodbyeStopsTheDaemon(t *testing.T) {
 	ts := advisorServer(t, 0, decisionBody(t, ""))
 	s := newStack(t, ts.URL, 2*time.Second)
 	idle := make(chan struct{}, 1)
