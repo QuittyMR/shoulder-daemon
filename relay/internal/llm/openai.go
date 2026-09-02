@@ -40,10 +40,11 @@ func (c *OpenAICompatible) Name() string {
 
 // wireMessage is the chat completions shape of a Message in both directions.
 type wireMessage struct {
-	Role       string         `json:"role"`
-	Content    string         `json:"content"`
-	ToolCalls  []wireToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string         `json:"tool_call_id,omitempty"`
+	Role       string          `json:"role"`
+	Content    string          `json:"content"`
+	ToolCalls  []wireToolCall  `json:"tool_calls,omitempty"`
+	ToolCallID string          `json:"tool_call_id,omitempty"`
+	Extra      json.RawMessage `json:"extra_content,omitempty"`
 }
 
 type wireToolCall struct {
@@ -54,6 +55,12 @@ type wireToolCall struct {
 		// The arguments are a JSON document carried as a string, not an object.
 		Arguments string `json:"arguments"`
 	} `json:"function"`
+	// Extra is whatever the provider hangs off a tool call that is not part of
+	// the OpenAI shape, kept opaque and echoed back untouched. Gemini puts a
+	// thought signature here and rejects the next request with 400 if it does
+	// not come back, so dropping it makes every tool-using turn fail on the
+	// second step and only there.
+	Extra json.RawMessage `json:"extra_content,omitempty"`
 }
 
 type chatResponse struct {
@@ -138,12 +145,13 @@ func (c *OpenAICompatible) Complete(ctx context.Context, system, user string) (s
 func (c *OpenAICompatible) Chat(ctx context.Context, msgs []Message, tools []Tool) (Message, error) {
 	wire := make([]wireMessage, 0, len(msgs))
 	for _, m := range msgs {
-		w := wireMessage{Role: m.Role, Content: m.Content, ToolCallID: m.ToolCallID}
+		w := wireMessage{Role: m.Role, Content: m.Content, ToolCallID: m.ToolCallID, Extra: m.Extra}
 		for _, tc := range m.ToolCalls {
 			var t wireToolCall
 			t.ID, t.Type = tc.ID, "function"
 			t.Function.Name = tc.Name
 			t.Function.Arguments = string(tc.Args)
+			t.Extra = tc.Extra
 			w.ToolCalls = append(w.ToolCalls, t)
 		}
 		wire = append(wire, w)
@@ -174,7 +182,7 @@ func (c *OpenAICompatible) Chat(ctx context.Context, msgs []Message, tools []Too
 	}
 
 	got := out.Choices[0].Message
-	m := Message{Role: "assistant", Content: got.Content}
+	m := Message{Role: "assistant", Content: got.Content, Extra: got.Extra}
 	for _, tc := range got.ToolCalls {
 		args := json.RawMessage(tc.Function.Arguments)
 		if len(args) == 0 {
@@ -182,7 +190,7 @@ func (c *OpenAICompatible) Chat(ctx context.Context, msgs []Message, tools []Too
 			// empty rather than as an empty object on several providers.
 			args = json.RawMessage("{}")
 		}
-		m.ToolCalls = append(m.ToolCalls, ToolCall{ID: tc.ID, Name: tc.Function.Name, Args: args})
+		m.ToolCalls = append(m.ToolCalls, ToolCall{ID: tc.ID, Name: tc.Function.Name, Args: args, Extra: tc.Extra})
 	}
 	return m, nil
 }

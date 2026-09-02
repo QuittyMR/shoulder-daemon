@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -202,5 +203,47 @@ func TestCompleteReportsAnErrorStatus(t *testing.T) {
 	}
 	if _, err := c.Chat(context.Background(), nil, nil); err == nil {
 		t.Fatal("expected an error")
+	}
+}
+
+// Gemini attaches a thought signature to every tool call it makes and answers
+// 400 if the next request does not carry it back, so a turn that calls a tool
+// fails on its second step and nowhere else.
+func TestProviderStateOnAToolCallIsReplayedVerbatim(t *testing.T) {
+	const sig = `{"google":{"thought_signature":"abc123"}}`
+
+	var second []byte
+	calls := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 2 {
+			second, _ = io.ReadAll(r.Body)
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"done"}}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","tool_calls":[
+			{"id":"c1","type":"function","function":{"name":"search_memory","arguments":"{}"},
+			 "extra_content":` + sig + `}]}}]}`))
+	}))
+	defer ts.Close()
+
+	c := &OpenAICompatible{Label: "test", BaseURL: ts.URL, Model: "m", HTTP: ts.Client()}
+	got, err := c.Chat(context.Background(), []Message{{Role: "user", Content: "go"}}, []Tool{{Name: "search_memory"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.ToolCalls) != 1 || string(got.ToolCalls[0].Extra) != sig {
+		t.Fatalf("the provider's state was dropped on the way in: %+v", got.ToolCalls)
+	}
+
+	if _, err := c.Chat(context.Background(), []Message{
+		{Role: "user", Content: "go"},
+		got,
+		{Role: "tool", ToolCallID: "c1", Content: "nothing"},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(second), `"thought_signature":"abc123"`) {
+		t.Fatalf("the provider's state was not sent back:\n%s", second)
 	}
 }

@@ -18,9 +18,11 @@ type Tool struct {
 // ToolCall is the model asking for one of them. ID ties the answer back to the
 // request, because a single step may ask for several at once.
 type ToolCall struct {
-	ID   string
-	Name string
-	Args json.RawMessage
+	// Extra is provider state attached to this call, replayed verbatim.
+	Extra json.RawMessage
+	ID    string
+	Name  string
+	Args  json.RawMessage
 }
 
 type Message struct {
@@ -28,6 +30,8 @@ type Message struct {
 	Content    string
 	ToolCalls  []ToolCall // assistant only
 	ToolCallID string     // tool only
+	// Extra is provider state attached to this message, replayed verbatim.
+	Extra json.RawMessage
 }
 
 // Provider keeps Complete because the digest and the CLI message path ask one
