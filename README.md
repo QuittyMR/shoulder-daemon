@@ -132,14 +132,14 @@ each one.
 
 ## Alternatives
 
-| | What triggers it | Where it stores | How it differs |
+| | What triggers it | Where it stores | Why we built this instead |
 |---|---|---|---|
-| **shoulder-daemon** | a small model reads each turn | any backend behind a five-method interface | keeps the store tidy as well as writing to it, and routes each note to the hook where it can still change something |
-| [Natural Memory Triggers](https://github.com/doobidoo/mcp-memory-service) | regex and keyword matches on your prompt | SQLite-vec, Cloudflare or Milvus | no model in the loop, so it is faster and cheaper but only fires on wording it was told to watch for |
-| [PowerContext](https://github.com/oceanbase/powercontext) | every prompt | SQLite, or OceanBase for teams | built for teams sharing one store, with a database to match |
-| [claude-code-semantic-memory](https://github.com/razor-ai/claude-code-semantic-memory) | embedding similarity on your prompt | SQLite with local Ollama embeddings | retrieval only, entirely local, and nothing leaves the machine |
-| [Letta Claude Subconscious](https://github.com/letta-ai/claude-subconscious) | a background agent reads each finished turn | Letta, self-hosted or theirs | the closest design here; it brings Letta's agent framework with it rather than a single binary |
-| [ContextStream](https://github.com/contextstream/mcp-server) | tools the agent chooses to call, plus hooks | their hosted service | the agent decides when to remember, which is a tool it can also decide to skip |
+| **shoulder-daemon** | a small model reads each turn | any backend behind a five-method interface | - |
+| [Natural Memory Triggers](https://github.com/doobidoo/mcp-memory-service) | regex and keyword matches on your prompt | SQLite-vec, Cloudflare or Milvus | Triggers on preset keywords only |
+| [PowerContext](https://github.com/oceanbase/powercontext) | every prompt | SQLite / OceanBase | team-focused, no consolidation or supersesion and more invasive, but possibly the best alternative here |
+| [claude-code-semantic-memory](https://github.com/razor-ai/claude-code-semantic-memory) | embedding similarity on your prompt | SQLite/Ollama | Read-only - no learning, supersesion etc. |
+| [Letta Claude Subconscious](https://github.com/letta-ai/claude-subconscious) | a background agent reads each finished turn | Letta cloud | paid option is the clear focus (currently broken for ClaudeCode/SQLite) and very heavy |
+| [ContextStream](https://github.com/contextstream/mcp-server) | tools the agent chooses to call, plus hooks | hosted | no injection, no self-hosting |
 
 ## Docs
 
