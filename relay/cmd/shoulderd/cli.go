@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -412,7 +411,7 @@ func (c *cli) call(base, method, path string, body, out any) int {
 		return c.reject(fmt.Errorf("bad --addr %q: %w", base, err))
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if token := os.Getenv("SHOULDER_TOKEN"); token != "" {
+	if token := setting("SHOULDER_TOKEN"); token != "" {
 		req.Header.Set("X-Shoulder-Token", token)
 	}
 
@@ -515,7 +514,11 @@ func (c *cli) reject(err error) int {
 }
 
 func bindAddr(fs *flagSet) *string {
-	return fs.String("addr", "http://"+config.Load().Addr, "relay base URL")
+	addr := setting("SHOULDER_ADDR")
+	if addr == "" {
+		addr = config.Load().Addr
+	}
+	return fs.String("addr", "http://"+addr, "relay base URL")
 }
 
 // scopeFlags is --local/--global, the choice the whole daemon is built around.
