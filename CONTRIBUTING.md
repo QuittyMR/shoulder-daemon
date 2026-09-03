@@ -63,7 +63,7 @@ commit` rather than `change project ID hashing`. Keep the diff to one coherent c
 make lint && make test && make bench
 ```
 
-CI runs the same three on both platforms, plus `govulncheck`, coverage, and on GitLab SAST
+CI runs the same three on both platforms, plus `govulncheck`, and on GitLab coverage, SAST
 and secret detection. The live provider suite runs on a weekly schedule from `main` only.
 
 ## Cutting a release

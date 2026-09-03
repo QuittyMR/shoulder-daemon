@@ -61,13 +61,6 @@ test:
     - (cd advisor-echo && go test -race -count=1 -covermode=atomic -coverprofile=coverage.out ./... && go tool cover -func=coverage.out | tail -1)
     - go run github.com/boumenot/gocover-cobertura@latest < relay/coverage.out > relay/coverage.xml
     - go run github.com/boumenot/gocover-cobertura@latest < advisor-echo/coverage.out > advisor-echo/coverage.xml
-    # Only with a token; without one the badge reads "unknown" and nothing fails.
-    - |
-      if [ -n "${CODECOV_TOKEN:-}" ]; then
-        curl -fsSLo codecov https://cli.codecov.io/latest/linux/codecov && chmod +x codecov
-        ./codecov upload-process -t "$CODECOV_TOKEN" -f relay/coverage.out -F relay
-        ./codecov upload-process -t "$CODECOV_TOKEN" -f advisor-echo/coverage.out -F advisor-echo
-      fi
   artifacts:
     reports:
       coverage_report:

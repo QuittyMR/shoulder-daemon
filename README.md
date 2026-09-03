@@ -8,7 +8,6 @@
 [![CI](https://github.com/QuittyMR/shoulder-daemon/actions/workflows/ci.yml/badge.svg)](https://github.com/QuittyMR/shoulder-daemon/actions/workflows/ci.yml)
 [![pipeline](https://gitlab.com/quittymr/shoulder-daemon/badges/main/pipeline.svg)](https://gitlab.com/quittymr/shoulder-daemon/-/pipelines)
 [![coverage](https://gitlab.com/quittymr/shoulder-daemon/badges/main/coverage.svg?job=test)](https://gitlab.com/quittymr/shoulder-daemon/-/pipelines)
-[![codecov](https://codecov.io/gh/QuittyMR/shoulder-daemon/graph/badge.svg)](https://codecov.io/gh/QuittyMR/shoulder-daemon)
 [![release](https://img.shields.io/github/v/release/QuittyMR/shoulder-daemon?sort=semver)](https://github.com/QuittyMR/shoulder-daemon/releases/latest)
 [![Go](https://img.shields.io/github/go-mod/go-version/QuittyMR/shoulder-daemon?filename=relay%2Fgo.mod&logo=go&logoColor=white)](relay/go.mod)
 [![golangci-lint](https://img.shields.io/badge/linted%20with-golangci--lint-00ADD8?logo=go&logoColor=white)](.golangci.yml)

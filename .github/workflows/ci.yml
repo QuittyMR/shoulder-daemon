@@ -52,15 +52,6 @@ jobs:
       - name: coverage summary
         run: go tool cover -func=coverage.out | tail -1
 
-      # Without CODECOV_TOKEN the upload is skipped by the action, not failed;
-      # the badge reads "unknown" until the secret exists, and CI stays green.
-      - uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: ${{ matrix.module }}/coverage.out
-          flags: ${{ matrix.module }}
-          fail_ci_if_error: false
-
   vulncheck:
     name: govulncheck ${{ matrix.module }}
     runs-on: ubuntu-latest
