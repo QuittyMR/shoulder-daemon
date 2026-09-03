@@ -1,8 +1,9 @@
 package sanitize
 
-import "strings"
-
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestAdviceNeutralisesAdversarialOutput(t *testing.T) {
 	cases := []struct {

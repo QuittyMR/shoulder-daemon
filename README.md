@@ -11,7 +11,7 @@
 [![codecov](https://codecov.io/gh/QuittyMR/shoulder-daemon/graph/badge.svg)](https://codecov.io/gh/QuittyMR/shoulder-daemon)
 [![release](https://img.shields.io/github/v/release/QuittyMR/shoulder-daemon?sort=semver)](https://github.com/QuittyMR/shoulder-daemon/releases/latest)
 [![Go](https://img.shields.io/github/go-mod/go-version/QuittyMR/shoulder-daemon?filename=relay%2Fgo.mod&logo=go&logoColor=white)](relay/go.mod)
-[![Go Report Card](https://goreportcard.com/badge/gitlab.com/quittymr/shoulder-daemon/relay)](https://goreportcard.com/report/gitlab.com/quittymr/shoulder-daemon/relay)
+[![golangci-lint](https://img.shields.io/badge/linted%20with-golangci--lint-00ADD8?logo=go&logoColor=white)](.golangci.yml)
 [![Go Reference](https://pkg.go.dev/badge/gitlab.com/quittymr/shoulder-daemon/relay.svg)](https://pkg.go.dev/gitlab.com/quittymr/shoulder-daemon/relay)
 [![licence: MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
 

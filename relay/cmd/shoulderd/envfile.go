@@ -47,7 +47,7 @@ func envFile() map[string]string {
 			}
 			path = filepath.Join(dir, "shoulder-daemon", "env")
 		}
-		f, err := os.Open(path)
+		f, err := os.Open(path) //nolint:gosec // G304: SHOULDER_ENV_FILE is the operator's own setting
 		if err != nil {
 			return
 		}

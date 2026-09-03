@@ -96,7 +96,7 @@ func Project(dir string) (string, error) {
 const identitySep = "@"
 
 func gitOutput(dir string, args ...string) string {
-	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).Output()
+	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).Output() //nolint:gosec // G204: git with literal arguments in the session's own directory
 	if err != nil {
 		return ""
 	}

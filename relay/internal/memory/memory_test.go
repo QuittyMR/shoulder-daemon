@@ -366,8 +366,8 @@ func TestARefusedSupersedeSaysWhetherTheTargetWasSeenElsewhere(t *testing.T) {
 	local := Record{Content: "prefers terse answers", Scope: scope.Local, Project: "/srv/app"}
 
 	var cross *ErrCrossScopeSupersede
-	if _, err := c.Supersede(ctx, globalID, local); !errors.As(err, &cross) {
-		t.Fatalf("a local record must not be able to swallow a global one, got %v", err)
+	if _, serr := c.Supersede(ctx, globalID, local); !errors.As(serr, &cross) {
+		t.Fatalf("a local record must not be able to swallow a global one, got %v", serr)
 	}
 	if cross.OldID != globalID {
 		t.Errorf("the refusal must name the record it is about, got %q", cross.OldID)

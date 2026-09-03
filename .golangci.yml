@@ -1,26 +1,40 @@
 version: "2"
 
-# Both modules have no dependency outside the standard library, so most of what
-# a linter exists to catch never comes up. What is enabled beyond the defaults is
-# the set that finds real defects in stdlib-only code: unwrapped errors, leaked
-# response bodies, dead parameters, and spelling in strings a user will read.
+# The linter set is the house one from the golang-lint skill; what follows it
+# is this repository's own exclusions, each with its reason. The one omission
+# is the complexity trio - cyclop at 20, revive's cognitive-complexity at 20
+# and cyclomatic at 15 - which sixteen functions exceed today. They come back
+# once those are refactored.
+run:
+  timeout: 15m
+
 linters:
-  default: standard
+  default: none
   enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
     - bodyclose
-    - copyloopvar
-    - errorlint
+    - ineffassign
+    - revive
     - gocritic
-    - misspell
-    - nilerr
-    - unconvert
-    - unparam
-    - usestdlibvars
-    - wastedassign
+    - gosec
+    - rowserrcheck
+    - sqlclosecheck
   settings:
+    govet:
+      enable-all: true
+      disable:
+        # Struct layout is chosen for reading, not for cache lines, and its
+        # autofix reorders fields under positional literals.
+        - fieldalignment
+    revive:
+      rules:
+        - name: var-naming
     errcheck:
-      # Closing a response body or a file on the way out has nothing to report
-      # to; the deferred form is the idiom this code already uses.
+      # Closing a body or a file on the way out has nothing to report to, and a
+      # command's output stream is not something a CLI can do anything about.
       exclude-functions:
         - (io.Closer).Close
         - (*os.File).Close
@@ -34,24 +48,26 @@ linters:
         - singleCaseSwitch
   exclusions:
     rules:
-      # A test may ignore an error it has just proven cannot happen, and a test
-      # helper is allowed to take a parameter every call passes the same value.
+      # A test may ignore an error it has just proven cannot happen, a helper
+      # may return a body the caller closes, and a temp file is not a secret.
       - path: _test\.go
         linters:
           - bodyclose
           - errcheck
-          - unparam
+      - path: _test\.go
+        text: (G30[1-6]|G104)
       # The sanitiser's fixtures are the format characters it strips; escaping
       # them would hide what the test is about.
       - path: internal/sanitize/sanitize_test\.go
-        text: ST1018
+        text: (ST1018|G116)
       # ParseDir's replacement lives in x/tools, which is a dependency.
       - path: internal/httpapi/server_test\.go
         text: SA1019
 
 formatters:
   enable:
-    - gofmt
+    - gofumpt
+    - goimports
 
 issues:
   max-issues-per-linter: 0

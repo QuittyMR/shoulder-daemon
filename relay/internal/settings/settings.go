@@ -95,8 +95,10 @@ type Snapshot struct {
 
 func (l *Live) Snapshot() Snapshot {
 	if l == nil {
-		return Snapshot{LogLevel: "info", Pickiness: prompts.Default.String(),
-			PickinessLevel: int(prompts.Default), Provider: "none"}
+		return Snapshot{
+			LogLevel: "info", Pickiness: prompts.Default.String(),
+			PickinessLevel: int(prompts.Default), Provider: "none",
+		}
 	}
 	l.mu.RLock()
 	defer l.mu.RUnlock()

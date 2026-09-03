@@ -132,7 +132,7 @@ func serve() error {
 func newLogger(path string, level slog.Leveler) *slog.Logger {
 	opts := &slog.HandlerOptions{Level: level}
 	if path != "" {
-		if f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+		if f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil { //nolint:gosec // G304: SHOULDER_LOG is the operator's own setting
 			return slog.New(slog.NewJSONHandler(f, opts))
 		}
 	}
@@ -170,8 +170,8 @@ func (c *cli) doctor(args []string) int {
 	// time, not the checkout somebody is editing. A stale copy posts to the
 	// address and with the header it was built against, so the symptom is
 	// silence or rejection while the source on disk looks correct.
-	if stale, err := stalePlugins(*base); err != nil {
-		out["plugin"] = "unreadable: " + err.Error()
+	if stale, serr := stalePlugins(*base); serr != nil {
+		out["plugin"] = "unreadable: " + serr.Error()
 	} else if len(stale) > 0 {
 		out["plugin_stale"] = stale
 		code = 1
@@ -195,7 +195,7 @@ func (c *cli) doctor(args []string) int {
 	// A newer release is worth one line, not an exit code: a daemon behind by a
 	// version is still a working daemon. The proxy being unreachable says
 	// nothing about this machine, so that is not reported at all.
-	if latest, err := latestRelease(context.Background()); err == nil {
+	if latest, lerr := latestRelease(context.Background()); lerr == nil {
 		out["latest"] = latest
 		if newer(latest, b.Version) {
 			out["update_available"] = latest
@@ -292,7 +292,7 @@ func stalePlugins(base string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	raw, err := os.ReadFile(filepath.Join(home, ".claude", "plugins", "installed_plugins.json"))
+	raw, err := os.ReadFile(filepath.Join(home, ".claude", "plugins", "installed_plugins.json")) //nolint:gosec // G304: built from the home directory, not from input
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil

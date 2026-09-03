@@ -420,7 +420,8 @@ func (s *Server) refusedRest(w http.ResponseWriter, err error) {
 	case errors.Is(err, memory.ErrNoBackend):
 		s.Pipe.Metrics.Inc("shoulder_cli_fact_nowhere_total")
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-			"error": "nothing was written: no memory backend is configured, so set SHOULDER_MEMORY_URL to an mcp-memory-service base URL and restart the daemon"})
+			"error": "nothing was written: no memory backend is configured, so set SHOULDER_MEMORY_URL to an mcp-memory-service base URL and restart the daemon",
+		})
 	case errors.Is(err, memory.ErrDuplicateExact):
 		s.Pipe.Metrics.Inc("shoulder_cli_fact_duplicate_total")
 		writeJSON(w, http.StatusOK, FactResponse{AlreadyKnown: true})
@@ -428,7 +429,8 @@ func (s *Server) refusedRest(w http.ResponseWriter, err error) {
 		s.Pipe.Metrics.Inc("shoulder_cli_fact_duplicate_total")
 		writeJSON(w, http.StatusConflict, map[string]string{
 			"error": fmt.Sprintf("too similar to fact %s: correct it with `fact update --id=%s`",
-				semantic.Collided, semantic.Collided)})
+				semantic.Collided, semantic.Collided),
+		})
 	default:
 		s.failed(w, err)
 	}

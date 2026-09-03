@@ -87,8 +87,10 @@ func TestNormaliseCategory(t *testing.T) {
 }
 
 func TestAgainstRecalledSupersedesARestatement(t *testing.T) {
-	recalled := []Recalled{{ID: "mem_1", Scope: scope.Global,
-		Content: "the output style is set to Terse in the settings file"}}
+	recalled := []Recalled{{
+		ID: "mem_1", Scope: scope.Global,
+		Content: "the output style is set to Terse in the settings file",
+	}}
 	got := AgainstRecalled([]Fact{
 		{Content: "the settings file sets output style Terse", Scope: scope.Global},
 		{Content: "the relay listens on port 8787", Scope: scope.Global},
@@ -163,8 +165,10 @@ func TestAgainstRecalledNeverSupersedesAnotherProject(t *testing.T) {
 	got := AgainstRecalled(
 		[]Fact{{Content: "the main branch is master", Scope: scope.Local}},
 		"proj-a",
-		[]Recalled{{ID: "mem_b", Content: "the main branch is master",
-			Scope: scope.Local, Project: "proj-b"}},
+		[]Recalled{{
+			ID: "mem_b", Content: "the main branch is master",
+			Scope: scope.Local, Project: "proj-b",
+		}},
 	)
 	if got[0].Supersedes != "" {
 		t.Fatalf("a fact must not supersede another project's record, got %q", got[0].Supersedes)

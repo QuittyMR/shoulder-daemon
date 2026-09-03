@@ -161,8 +161,10 @@ func TestAdviceIsDeliveredWhereItCanStillChangeSomething(t *testing.T) {
 				t.Fatal(err)
 			}
 			sid, _ := probe["session_id"].(string)
-			box.Push(session.Advice{ID: "adv_1", SessionID: sid, Kind: session.AdviceNote,
-				Level: tc.level, Text: "the marker"})
+			box.Push(session.Advice{
+				ID: "adv_1", SessionID: sid, Kind: session.AdviceNote,
+				Level: tc.level, Text: "the marker",
+			})
 
 			rec := post(h, tc.event, string(fx[tc.event]))
 

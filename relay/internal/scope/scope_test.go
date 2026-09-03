@@ -79,14 +79,17 @@ func repo(t *testing.T, dir string) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
-	if err := os.WriteFile(filepath.Join(dir, "seed"), []byte(dir), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "seed"), []byte(dir), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	for _, args := range [][]string{
-		{"init"}, {"config", "user.email", "t@example.com"}, {"config", "user.name", "t"},
-		{"add", "seed"}, {"commit", "-m", "root"},
+		{"init"},
+		{"config", "user.email", "t@example.com"},
+		{"config", "user.name", "t"},
+		{"add", "seed"},
+		{"commit", "-m", "root"},
 	} {
-		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil { //nolint:gosec // G204: the arguments are this test's own literals
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}
 	}
@@ -96,7 +99,7 @@ func TestEveryDirectoryInOneCheckoutSharesAProject(t *testing.T) {
 	root := t.TempDir()
 	repo(t, root)
 	deep := filepath.Join(root, "internal", "memory")
-	if err := os.MkdirAll(deep, 0o755); err != nil {
+	if err := os.MkdirAll(deep, 0o750); err != nil {
 		t.Fatal(err)
 	}
 
@@ -121,7 +124,7 @@ func TestEveryDirectoryInOneCheckoutSharesAProject(t *testing.T) {
 func TestRenamingACheckoutKeepsItsKey(t *testing.T) {
 	parent := t.TempDir()
 	before := filepath.Join(parent, "before")
-	if err := os.Mkdir(before, 0o755); err != nil {
+	if err := os.Mkdir(before, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	repo(t, before)
@@ -131,8 +134,8 @@ func TestRenamingACheckoutKeepsItsKey(t *testing.T) {
 	}
 
 	after := filepath.Join(parent, "after")
-	if err := os.Rename(before, after); err != nil {
-		t.Fatal(err)
+	if rerr := os.Rename(before, after); rerr != nil {
+		t.Fatal(rerr)
 	}
 	now, err := Project(after)
 	if err != nil {

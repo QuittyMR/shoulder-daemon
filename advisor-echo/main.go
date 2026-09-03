@@ -196,7 +196,7 @@ func handleChatCompletions(cfg config) http.HandlerFunc {
 			time.Sleep(cfg.delay)
 		}
 
-		if cfg.failRate > 0 && rand.Float64() < cfg.failRate {
+		if cfg.failRate > 0 && rand.Float64() < cfg.failRate { //nolint:gosec // G404: fault injection, not a secret
 			writeJSON(w, http.StatusInternalServerError, map[string]any{
 				"error": map[string]string{"message": "advisor-echo: injected failure (ECHO_FAIL_RATE)"},
 			})
@@ -284,7 +284,8 @@ func main() {
 
 	log.Printf("advisor-echo listening on %s (mode=%s delay=%s fail_rate=%.2f)",
 		cfg.addr, cfg.mode, cfg.delay, cfg.failRate)
-	if err := http.ListenAndServe(cfg.addr, mux); err != nil {
+	srv := &http.Server{Addr: cfg.addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	if err := srv.ListenAndServe(); err != nil {
 		log.Fatalf("advisor-echo: %v", err)
 	}
 }

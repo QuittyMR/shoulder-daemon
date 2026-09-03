@@ -750,7 +750,8 @@ func TestSearchWidensUntilFactsSurfaceAndCountsWhatItDiscarded(t *testing.T) {
 	c.Metrics = counts
 
 	got, err := c.Search(context.Background(), Query{
-		Text: "release rota", Limit: 8, Scope: scope.Local, Project: projectA})
+		Text: "release rota", Limit: 8, Scope: scope.Local, Project: projectA,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -781,7 +782,8 @@ func TestSearchStopsAtTheCeilingAndSaysSo(t *testing.T) {
 	c.Metrics = counts
 
 	got, err := c.Search(context.Background(), Query{
-		Text: "release rota", Limit: 8, Scope: scope.Local, Project: projectA})
+		Text: "release rota", Limit: 8, Scope: scope.Local, Project: projectA,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -852,7 +854,8 @@ func TestWritesCarryTheSessionMarkAndReadsStripItBackOff(t *testing.T) {
 			append(localTags(projectA), "shoulder-kind:session", "shoulder-session:s1", "mine")...))
 	})
 	got, err := read.Search(context.Background(), Query{
-		Text: "parser", Limit: 5, Scope: scope.Local, Project: projectA, Kind: KindSession})
+		Text: "parser", Limit: 5, Scope: scope.Local, Project: projectA, Kind: KindSession,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

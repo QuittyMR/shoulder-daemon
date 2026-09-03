@@ -1,9 +1,10 @@
 package llm
 
 import (
-	"gitlab.com/quittymr/shoulder-daemon/relay/internal/prompts"
 	"strings"
 	"testing"
+
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/prompts"
 
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/scope"
 )

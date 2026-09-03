@@ -144,7 +144,7 @@ func (p *Pipeline) Consolidate(ctx context.Context, sc scope.Scope, project stri
 		}
 	}
 
-	p.Metrics.IncBy("shoulder_facts_consolidated_total", uint64(dropped))
+	p.Metrics.IncBy("shoulder_facts_consolidated_total", uint64(dropped)) //nolint:gosec // G115: a count of records, never negative
 	return dropped, merged, nil
 }
 

@@ -126,14 +126,18 @@ func TestLiveRefusedCorrectionRecovers(t *testing.T) {
 	subject := fmt.Sprintf("The deploy target for service %d", n)
 	query := fmt.Sprintf("deploy target for service %d", n)
 
-	first, err := c.Store(ctx, Record{Content: subject + " is staging.", Category: "decision", Tags: []string{"gc-live"},
-		Scope: scope.Local, Project: probeProject})
+	first, err := c.Store(ctx, Record{
+		Content: subject + " is staging.", Category: "decision", Tags: []string{"gc-live"},
+		Scope: scope.Local, Project: probeProject,
+	})
 	if err != nil {
 		t.Fatalf("store original: %v", err)
 	}
 
-	correction := Record{Content: subject + " is production, not staging.", Category: "decision", Tags: []string{"gc-live"},
-		Scope: scope.Local, Project: probeProject}
+	correction := Record{
+		Content: subject + " is production, not staging.", Category: "decision", Tags: []string{"gc-live"},
+		Scope: scope.Local, Project: probeProject,
+	}
 	_, err = c.Store(ctx, correction)
 
 	var sem *ErrDuplicateSemantic

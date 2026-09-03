@@ -21,6 +21,7 @@ func (s stub) Complete(context.Context, string, string) (string, error) {
 	}
 	return s.out, s.err
 }
+
 func (s stub) Chat(context.Context, []Message, []Tool) (Message, error) {
 	if s.calls != nil {
 		*s.calls++

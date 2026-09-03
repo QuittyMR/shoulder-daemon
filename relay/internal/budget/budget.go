@@ -62,7 +62,7 @@ func (g Gate) Allow(st State, turn uint64, c Candidate) Decision {
 	if st.CharsUsed+c.Len > g.SessionMaxChars {
 		return Decision{false, fmt.Sprintf("session_cap:%d", g.SessionMaxChars)}
 	}
-	if c.Kind != KindWarning && st.LastInjectTurn > 0 && turn < st.LastInjectTurn+uint64(g.MinTurnGap) {
+	if c.Kind != KindWarning && st.LastInjectTurn > 0 && turn < st.LastInjectTurn+uint64(g.MinTurnGap) { //nolint:gosec // G115: a small positive setting, never near the bound
 		return Decision{false, fmt.Sprintf("turn_gap:%d", g.MinTurnGap)}
 	}
 	if g.DryRun {

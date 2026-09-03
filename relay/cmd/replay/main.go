@@ -115,8 +115,10 @@ func main() {
 				if b.IsError {
 					kind = session.KindToolFailure
 				}
-				c.send(session.Event{TS: ts, Kind: kind, ToolUseID: b.ToolUseID,
-					ToolName: toolNames[b.ToolUseID], ToolResult: flatten(b.Content)})
+				c.send(session.Event{
+					TS: ts, Kind: kind, ToolUseID: b.ToolUseID,
+					ToolName: toolNames[b.ToolUseID], ToolResult: flatten(b.Content),
+				})
 			}
 
 		case "assistant":

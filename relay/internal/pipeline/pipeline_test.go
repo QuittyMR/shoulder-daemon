@@ -128,7 +128,8 @@ func prompt(sid, text string) string {
 // session a project and therefore a local scope to read and write.
 func promptIn(sid, text, dir string) string {
 	b, _ := json.Marshal(map[string]string{
-		"session_id": sid, "hook_event_name": "UserPromptSubmit", "prompt": text, "cwd": dir})
+		"session_id": sid, "hook_event_name": "UserPromptSubmit", "prompt": text, "cwd": dir,
+	})
 	return string(b)
 }
 
@@ -379,7 +380,7 @@ type fakeMemory struct {
 	superseded []string
 	queries    []memory.Query
 	searched   []memory.Query
-	listed_    []memory.Query
+	listCalls  []memory.Query
 	forgotten  []string
 	searchErr  error
 	forgetErr  error
@@ -407,7 +408,7 @@ func (f *fakeMemory) List(_ context.Context, q memory.Query) ([]memory.Record, e
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.queries = append(f.queries, q)
-	f.listed_ = append(f.listed_, q)
+	f.listCalls = append(f.listCalls, q)
 	if q.Kind != memory.KindFact {
 		return f.notes, nil
 	}
@@ -420,7 +421,7 @@ func (f *fakeMemory) List(_ context.Context, q memory.Query) ([]memory.Record, e
 func (f *fakeMemory) reads() (searched, listed []memory.Query) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]memory.Query(nil), f.searched...), append([]memory.Query(nil), f.listed_...)
+	return append([]memory.Query(nil), f.searched...), append([]memory.Query(nil), f.listCalls...)
 }
 
 func (f *fakeMemory) Store(_ context.Context, r memory.Record) (string, error) {
@@ -479,7 +480,8 @@ func TestExplicitFactCollapsesWithTheProseRestatement(t *testing.T) {
 	s.post(t, "UserPromptSubmit", prompt("s1", "the best number is 1"))
 	s.pipe.Registry.AddFact("s1", facts.Fact{
 		Content: "the best number is 1", Category: "preference",
-		Tags: []string{"numbers"}, Scope: scope.Global})
+		Tags: []string{"numbers"}, Scope: scope.Global,
+	})
 	s.post(t, "Stop", stop("s1", "Noted."))
 	<-s.consults
 
@@ -619,8 +621,10 @@ func TestRefusedCorrectionBecomesASupersede(t *testing.T) {
 	// The blocking record is in the scope being written. Its wording is
 	// unrelated: the store judges similarity its own way, which is the only
 	// reason this path exists.
-	blocking := memory.Record{ID: "abc123def4567890", Scope: scope.Global,
-		Content: "the integration tests need a live Postgres"}
+	blocking := memory.Record{
+		ID: "abc123def4567890", Scope: scope.Global,
+		Content: "the integration tests need a live Postgres",
+	}
 	mem.recalled = map[scope.Scope][]memory.Record{scope.Global: {blocking}}
 	mem.listed = map[scope.Scope][]memory.Record{scope.Global: {blocking}}
 	// Through the boundary, as in production: it is what confirms the record
@@ -803,10 +807,14 @@ func TestRecallReadsLocalAndGlobalTogether(t *testing.T) {
 		map[string]any{"content": "the user prefers terse answers", "category": "preference", "scope": "global"}))
 	s := newStack(t, ts.URL, 2*time.Second)
 	mem := &fakeMemory{recalled: map[scope.Scope][]memory.Record{
-		scope.Local: {{ID: "mem_local", Content: "the main branch is master",
-			Scope: scope.Local, Project: projectOf(t, dir)}},
-		scope.Global: {{ID: "mem_global", Content: "the user prefers terse answers in every project",
-			Scope: scope.Global}},
+		scope.Local: {{
+			ID: "mem_local", Content: "the main branch is master",
+			Scope: scope.Local, Project: projectOf(t, dir),
+		}},
+		scope.Global: {{
+			ID: "mem_global", Content: "the user prefers terse answers in every project",
+			Scope: scope.Global,
+		}},
 	}}
 	s.pipe.Memory = mem
 
@@ -857,7 +865,8 @@ func TestMessageAnswersFromWhatIsStored(t *testing.T) {
 	}}
 
 	reply, err := s.pipe.Message(context.Background(), MessageRequest{
-		Text: "this is my git repository", Scope: scope.Global})
+		Text: "this is my git repository", Scope: scope.Global,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -878,7 +887,8 @@ func TestMessageUpdateNeverWritesNothing(t *testing.T) {
 	s.pipe.Memory = mem
 
 	reply, err := s.pipe.Message(context.Background(), MessageRequest{
-		Text: "the main branch is master", Scope: scope.Global, Update: UpdateNever})
+		Text: "the main branch is master", Scope: scope.Global, Update: UpdateNever,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -898,7 +908,8 @@ func TestMessageUpdateAutoDefersToTheModel(t *testing.T) {
 	s.pipe.Memory = mem
 
 	if _, err := s.pipe.Message(context.Background(), MessageRequest{
-		Text: "how is it going", Scope: scope.Global}); err != nil {
+		Text: "how is it going", Scope: scope.Global,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	stored, _, _ := mem.snapshot()
@@ -918,7 +929,8 @@ func TestMessageUpdateForceWritesEvenWhenTheModelFoundNothing(t *testing.T) {
 
 	reply, err := s.pipe.Message(context.Background(), MessageRequest{
 		Text: "the integration tests need a live Postgres", Scope: scope.Local,
-		Project: projectOf(t, dir), Update: UpdateForce})
+		Project: projectOf(t, dir), Update: UpdateForce,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -953,7 +965,8 @@ func TestMessageFactSupersedesTheStoredVersionOfItself(t *testing.T) {
 	s.pipe.Memory = mem
 
 	if _, err := s.pipe.Message(context.Background(), MessageRequest{
-		Text: "the main branch is master", Scope: scope.Global}); err != nil {
+		Text: "the main branch is master", Scope: scope.Global,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	_, superseded, _ := mem.snapshot()
@@ -1025,10 +1038,14 @@ func TestDigestPresentsBothScopesSeparately(t *testing.T) {
 
 	s := newStack(t, ts.URL, 2*time.Second)
 	s.pipe.Memory = &fakeMemory{listed: map[scope.Scope][]memory.Record{
-		scope.Local: {{ID: "l1", Content: "the release branch is release/stable",
-			Category: "structure", Scope: scope.Local, Project: projectOf(t, dir)}},
-		scope.Global: {{ID: "g1", Content: "prefers terse answers",
-			Category: "preference", Scope: scope.Global}},
+		scope.Local: {{
+			ID: "l1", Content: "the release branch is release/stable",
+			Category: "structure", Scope: scope.Local, Project: projectOf(t, dir),
+		}},
+		scope.Global: {{
+			ID: "g1", Content: "prefers terse answers",
+			Category: "preference", Scope: scope.Global,
+		}},
 	}}
 
 	got, err := s.pipe.Digest(context.Background(), DigestRequest{Project: projectOf(t, dir)})
@@ -1100,8 +1117,10 @@ func TestALocalFactNeverSupersedesAnotherProjectsRecall(t *testing.T) {
 		map[string]any{"content": "the main branch is master", "category": "structure", "scope": "local"}))
 	s := newStack(t, ts.URL, 2*time.Second)
 	mem := &fakeMemory{recalled: map[scope.Scope][]memory.Record{
-		scope.Local: {{ID: "mem_other_project", Content: "the main branch is master",
-			Scope: scope.Local, Project: "/somewhere/else"}},
+		scope.Local: {{
+			ID: "mem_other_project", Content: "the main branch is master",
+			Scope: scope.Local, Project: "/somewhere/else",
+		}},
 	}}
 	s.pipe.Memory = mem
 
@@ -1158,8 +1177,10 @@ func TestRecallKeepsBothScopesWhenNothingIsRanked(t *testing.T) {
 
 	local := make([]memory.Record, RecallLimit+2)
 	for i := range local {
-		local[i] = memory.Record{ID: fmt.Sprintf("l%d", i), Content: "a project detail",
-			Scope: scope.Local, Project: projectOf(t, dir)}
+		local[i] = memory.Record{
+			ID: fmt.Sprintf("l%d", i), Content: "a project detail",
+			Scope: scope.Local, Project: projectOf(t, dir),
+		}
 	}
 	s.pipe.Memory = &fakeMemory{recalled: map[scope.Scope][]memory.Record{
 		scope.Local:  local,
@@ -1186,15 +1207,18 @@ func TestRecallKeepsBothScopesWhenNothingIsRanked(t *testing.T) {
 func TestMessageKeepsAGlobalFactGlobalWhenAskedInsideAProject(t *testing.T) {
 	dir := t.TempDir()
 	ts := sequencedAdvisor(t, proseBody(t, "Noted."),
-		decisionBody(t, "", map[string]any{"content": "the user always wants terse answers, in every project",
-			"category": "preference", "scope": "global"}))
+		decisionBody(t, "", map[string]any{
+			"content":  "the user always wants terse answers, in every project",
+			"category": "preference", "scope": "global",
+		}))
 	s := newStack(t, ts.URL, 2*time.Second)
 	mem := &fakeMemory{}
 	s.pipe.Memory = mem
 
 	if _, err := s.pipe.Message(context.Background(), MessageRequest{
 		Text: "I always want terse answers, everywhere", Scope: scope.Local,
-		Project: projectOf(t, dir)}); err != nil {
+		Project: projectOf(t, dir),
+	}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1217,7 +1241,8 @@ func TestMessageDropsAFactTheModelLeftUnscoped(t *testing.T) {
 	s.pipe.Memory = mem
 
 	reply, err := s.pipe.Message(context.Background(), MessageRequest{
-		Text: "we deploy on Fridays now", Scope: scope.Global})
+		Text: "we deploy on Fridays now", Scope: scope.Global,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

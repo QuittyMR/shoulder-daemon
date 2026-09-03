@@ -141,7 +141,7 @@ func (m *MCPMemory) do(ctx context.Context, method, path string, in, out any) er
 		}
 		body = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, m.BaseURL+path, body)
+	req, err := http.NewRequestWithContext(ctx, method, m.BaseURL+path, body) //nolint:gosec // G704: the backend is the operator's configured SHOULDER_MEMORY_URL
 	if err != nil {
 		return err
 	}
@@ -152,7 +152,7 @@ func (m *MCPMemory) do(ctx context.Context, method, path string, in, out any) er
 		req.Header.Set("X-API-Key", m.APIKey)
 	}
 
-	resp, err := m.HTTP.Do(req)
+	resp, err := m.HTTP.Do(req) //nolint:gosec // G704: same URL as above
 	if err != nil {
 		return err
 	}
