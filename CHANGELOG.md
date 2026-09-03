@@ -6,6 +6,20 @@ Notable changes to shoulder-daemon. The format follows
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-03
+
+### Added
+
+- `make release TAG=vX.Y.Z` creates the three tags a release needs - the release tag and one
+  per Go module - and pushes them to every remote. Without the module tags `go install` never
+  resolves `@latest` to a release.
+
+### Fixed
+
+- A pipeline test that gave a consult two seconds before calling it stalled, which GitLab's
+  shared runners exceeded under the race detector. The v0.1.0 tag pipeline failed on it, so
+  that version has a GitHub release only; this one has both.
+
 ## [0.1.0] - 2026-09-03
 
 The first tagged release.
@@ -59,5 +73,6 @@ The first tagged release.
   results are unwrapped properly.
 - Session notes are remembered as the store accepted them, not as they were offered.
 
-[Unreleased]: https://github.com/QuittyMR/shoulder-daemon/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/QuittyMR/shoulder-daemon/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/QuittyMR/shoulder-daemon/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/QuittyMR/shoulder-daemon/releases/tag/v0.1.0
