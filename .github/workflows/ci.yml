@@ -47,7 +47,7 @@ jobs:
       # credentials, and the integration suite is behind the `integration` build
       # tag, so this is the offline subset.
       - name: go test
-        run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
+        run: go test -race -count=1 -covermode=atomic -coverprofile=coverage.out ./...
 
       - name: coverage summary
         run: go tool cover -func=coverage.out | tail -1

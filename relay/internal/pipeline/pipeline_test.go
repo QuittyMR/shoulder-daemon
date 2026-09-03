@@ -292,7 +292,7 @@ func TestBudgetLimitsInjectionRate(t *testing.T) {
 		select {
 		case <-s.consults:
 		case <-time.After(10 * time.Second):
-			t.Fatal("consult stalled")
+			t.Fatalf("consult stalled on turn %d with %d injected\n%s", turn, injected, s.srv.Metrics.Render())
 		}
 	}
 	if injected > 5 {

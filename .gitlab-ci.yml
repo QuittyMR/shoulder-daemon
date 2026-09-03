@@ -33,6 +33,7 @@ default:
     - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
     - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/
+    - if: $CI_PIPELINE_SOURCE == 'web'
 
 lint:
   extends: .go
@@ -56,8 +57,8 @@ test:
   extends: .go
   coverage: '/^total:\s+\(statements\)\s+(\d+\.\d+)%/'
   script:
-    - (cd relay && go test -race -covermode=atomic -coverprofile=coverage.out ./... && go tool cover -func=coverage.out | tail -1)
-    - (cd advisor-echo && go test -race -covermode=atomic -coverprofile=coverage.out ./... && go tool cover -func=coverage.out | tail -1)
+    - (cd relay && go test -race -count=1 -covermode=atomic -coverprofile=coverage.out ./... && go tool cover -func=coverage.out | tail -1)
+    - (cd advisor-echo && go test -race -count=1 -covermode=atomic -coverprofile=coverage.out ./... && go tool cover -func=coverage.out | tail -1)
     - go run github.com/boumenot/gocover-cobertura@latest < relay/coverage.out > relay/coverage.xml
     - go run github.com/boumenot/gocover-cobertura@latest < advisor-echo/coverage.out > advisor-echo/coverage.xml
     # Only with a token; without one the badge reads "unknown" and nothing fails.
