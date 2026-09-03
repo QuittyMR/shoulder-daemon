@@ -191,6 +191,23 @@ container-image:
         --tag "$IMAGE:latest" \
         --push
 
+# When the GitHub release built and pushed an image but this pipeline's image
+# job did not, the GitLab registry can take GitHub's bits as they are rather
+# than a rebuild: start a pipeline on main with MIRROR_TAG set to the version.
+mirror-image:
+  stage: build
+  rules:
+    - if: $MIRROR_TAG
+  image:
+    name: quay.io/skopeo/stable:latest
+    entrypoint: ['']
+  script:
+    - |
+      for t in "$MIRROR_TAG" "${MIRROR_TAG%.*}" latest; do
+        skopeo copy --all --dest-creds "$CI_REGISTRY_USER:$CI_REGISTRY_PASSWORD" \
+          "docker://ghcr.io/quittymr/shoulder-daemon:$t" "docker://$IMAGE:$t"
+      done
+
 release:
   extends: .tagged
   stage: release
