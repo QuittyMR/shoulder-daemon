@@ -1,7 +1,7 @@
 # shoulderd, the shoulder-daemon relay. Cross-compiled on the build host rather
 # than emulated: a stdlib-only Go binary needs nothing from the target
 # platform, and QEMU makes the compile ten times slower for no gain.
-FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.26-alpine AS build
+FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.27-alpine AS build
 ARG TARGETOS
 ARG TARGETARCH
 # The tag, passed in by the release pipeline. A COPY has no VCS or module
