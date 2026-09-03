@@ -262,8 +262,9 @@ func runHealthcheck(addr string) {
 	if err != nil {
 		os.Exit(1)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	healthy := resp.StatusCode == http.StatusOK
+	_ = resp.Body.Close()
+	if !healthy {
 		os.Exit(1)
 	}
 	os.Exit(0)

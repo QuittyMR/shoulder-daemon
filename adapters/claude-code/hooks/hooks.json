@@ -6,8 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PLUGIN_ROOT\"/scripts/ensure-daemon.sh",
-            "timeout": 5
+            "command": "\"$CLAUDE_PLUGIN_ROOT\"/scripts/ensure-daemon.sh --fetch",
+            "timeout": 60
           }
         ]
       }

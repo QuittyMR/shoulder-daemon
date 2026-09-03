@@ -109,17 +109,22 @@ never appears as an `HTTP hook POST` line at all; what proves it worked is that 
 The plugin directory is a manifest (`.claude-plugin/plugin.json`,
 `.claude-plugin/marketplace.json`), a hooks file (`hooks/hooks.json`) whose per-event entries are
 all `type: "http"`, and one script, `scripts/ensure-daemon.sh`. That script is the only thing under
-`CLAUDE_PLUGIN_ROOT` Claude Code ever executes, it runs on `SessionStart` alone, and all it does is
-start the relay when nothing is answering on `SHOULDER_ADDR`:
+`CLAUDE_PLUGIN_ROOT` Claude Code ever executes, it runs on `SessionStart` and again before each
+prompt, and all it does is start the relay when nothing is answering on `SHOULDER_ADDR`:
 
 - It needs `bash` and `curl` and nothing else. **No Node, Python, or Go on the host.**
-- It runs `shoulderd` off `PATH`. Set `SHOULDER_START_CMD` when your relay runs under a container or
-  a service manager - `export SHOULDER_START_CMD="cd /path/to/shoulder-daemon && make up"` is the
-  usual shape. With neither of those it prints a `go install` line to stderr and gives up.
+- It runs `shoulderd` off `PATH`, or the copy it fetched itself. On a machine with neither, the
+  `SessionStart` run downloads the latest release binary for the platform into
+  `${XDG_DATA_HOME:-~/.local/share}/shoulder-daemon/bin`, verifies it against the published
+  `SHA256SUMS`, and starts it; a failed or tampered download leaves nothing behind. Set
+  `SHOULDER_START_CMD` when your relay runs under a container or a service manager -
+  `export SHOULDER_START_CMD="cd /path/to/shoulder-daemon && make up"` is the usual shape - and
+  nothing is fetched. `SHOULDER_RELEASE_BASE` points the fetch at a mirror.
 - Several editors launching together start exactly one daemon. It takes an atomic `mkdir` lock under
   `$XDG_RUNTIME_DIR` (or `/tmp`), and whoever loses waits for the winner rather than racing to bind.
-- It always exits 0 and never blocks, and `hooks.json` allows it 5 seconds. A session that can't
-  reach the relay simply has no advisory context.
+- It always exits 0 and never blocks. `hooks.json` allows the `SessionStart` run 60 seconds, which
+  is only ever spent on the one first download; the per-prompt run gets 5 and never downloads. A
+  session that can't reach the relay simply has no advisory context.
 
 Nothing in the plugin ever stops the relay. Section 5 covers how it stops itself.
 

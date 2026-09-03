@@ -12,7 +12,8 @@ git clone https://gitlab.com/quittymr/shoulder-daemon.git
 cd shoulder-daemon
 make build          # bin/shoulderd and bin/advisor-echo
 make test
-make lint           # go vet on both modules, plus gofmt -l
+make lint           # golangci-lint, the same version and config CI runs
+make cover          # coverage per module
 ```
 
 `make doctor` builds and then runs `shoulderd doctor`, which reports whether the daemon,
@@ -62,7 +63,24 @@ commit` rather than `change project ID hashing`. Keep the diff to one coherent c
 make lint && make test && make bench
 ```
 
-CI runs the same three on both platforms, plus SAST and secret detection on GitLab.
+CI runs the same three on both platforms, plus `govulncheck`, coverage, and on GitLab SAST
+and secret detection. The live provider suite runs on a weekly schedule from `main` only.
+
+## Cutting a release
+
+One number has to agree in three places: the tag, `adapters/claude-code/.claude-plugin/plugin.json`,
+and a `## [X.Y.Z]` section in `CHANGELOG.md`. `make release-check TAG=vX.Y.Z` proves it and
+prints the notes that will go on the release.
+
+```bash
+make release-check TAG=v0.2.0
+git tag -a v0.2.0 -m "v0.2.0"
+git push origin v0.2.0 && git push origingh v0.2.0
+```
+
+Both pipelines then build the binaries, push the images, and create the release with the
+changelog section as its notes. The plugin picks the new binary up on the next editor start
+once the old daemon has exited.
 
 New harness support means a new directory under `adapters/`, a matching entry in
 `scripts/install-plugins.sh`, and captured hook payload fixtures under

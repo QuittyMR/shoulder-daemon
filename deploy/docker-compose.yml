@@ -2,10 +2,14 @@ name: shoulder-daemon
 
 services:
   shoulderd:
+    # The published image by default; `make docker-build` builds the same tag
+    # from this checkout and `up` then uses it. Point SHOULDER_IMAGE at a
+    # pinned version (ghcr.io/quittymr/shoulder-daemon:0.1.0) or at the GitLab
+    # registry (registry.gitlab.com/quittymr/shoulder-daemon) to prefer either.
+    image: ${SHOULDER_IMAGE:-ghcr.io/quittymr/shoulder-daemon:latest}
     build:
       context: ../relay
       dockerfile: Dockerfile
-    image: shoulder-daemon/shoulderd:local
     # Not unless-stopped: the daemon stops itself once no session has used it
     # for a while, and a restart policy that fights that would bring it back
     # within seconds, forever. Only a crash is worth restarting for.

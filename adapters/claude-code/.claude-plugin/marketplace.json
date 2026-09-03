@@ -1,13 +1,15 @@
 {
   "name": "shoulder-daemon",
-  "description": "Context advisor with horns",
+  "description": "Context advisor for coding agents - injects relevant facts into your session and keeps them up to date",
   "owner": {
-    "name": "Quitty"
+    "name": "Thomas Raz",
+    "url": "https://gitlab.com/quittymr"
   },
   "plugins": [
     {
       "name": "shoulder-daemon",
-      "source": "./"
+      "source": "./",
+      "description": "Context advisor for coding agents. Watches the session over HTTP hooks, keeps a store of facts, and injects the relevant ones back in when they matter."
     }
   ]
 }

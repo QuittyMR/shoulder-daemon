@@ -2,7 +2,9 @@ SHELL := /bin/bash
 BIN := bin
 COMPOSE := docker compose -f deploy/docker-compose.yml
 
-.PHONY: build test bench lint docker-build up down logs doctor e2e clean install-plugins update
+GOLANGCI := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
+
+.PHONY: build test cover bench lint vulncheck release-check docker-build up down logs doctor e2e clean install-plugins update
 
 build:
 	@mkdir -p $(BIN)
@@ -18,10 +20,25 @@ test:
 bench:
 	cd relay && go test ./internal/pipeline/ -run '^$$' -bench BenchmarkHookRoundTrip -benchtime 20000x
 
+# Same linter, same version, same config as CI; a clean run here is a clean
+# run there.
 lint:
-	cd relay && go vet ./...
-	cd advisor-echo && go vet ./...
-	gofmt -l relay advisor-echo
+	cd relay && $(GOLANGCI) run ./...
+	cd advisor-echo && $(GOLANGCI) run ./...
+
+cover:
+	cd relay && go test -race -covermode=atomic -coverprofile=coverage.out ./... && go tool cover -func=coverage.out | tail -1
+	cd advisor-echo && go test -race -covermode=atomic -coverprofile=coverage.out ./... && go tool cover -func=coverage.out | tail -1
+
+vulncheck:
+	cd relay && go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+	cd advisor-echo && go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+# Before tagging: the tag, the plugin manifest and the changelog have to agree.
+release-check:
+	@test -n "$(TAG)" || { echo "usage: make release-check TAG=vX.Y.Z"; exit 2; }
+	scripts/check-version.sh $(TAG)
+	scripts/changelog-section.sh $(TAG)
 
 # What a harness runs is the copy of the adapter it took when the plugin was
 # installed, not this checkout. Editing the adapter here changes nothing the

@@ -1,0 +1,20 @@
+version: 2
+updates:
+  # The workflows pin every action to a commit; this is what moves the pins.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
+
+  # The only base images are the Go toolchain and distroless.
+  - package-ecosystem: docker
+    directory: /relay
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /advisor-echo
+    schedule:
+      interval: weekly

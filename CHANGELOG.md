@@ -4,10 +4,11 @@ Notable changes to shoulder-daemon. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-No version has been tagged yet. Everything below is what `main` has accumulated since the
-project started, and it is what a first `v0.1.0` would contain.
-
 ## [Unreleased]
+
+## [0.1.0] - 2026-09-03
+
+The first tagged release.
 
 ### Added
 
@@ -38,6 +39,13 @@ project started, and it is what a first `v0.1.0` would contain.
   order that works.
 - Documentation: [architecture](docs/ARCHITECTURE.md), [install](docs/INSTALL.md), and the
   [advisor protocol](docs/ADVISOR.md) for bringing your own decision model.
+- `shoulderd version`, and `doctor` reporting the build, where it came from, and whether a
+  newer release exists.
+- The Claude Code plugin fetches the release binary for its platform on first start,
+  checksum-verified, so the plugin is the whole install.
+- Release binaries for Linux, macOS and Windows on amd64 and arm64, with `SHA256SUMS`, on
+  every tag; multi-arch images at `ghcr.io/quittymr/shoulder-daemon` and
+  `registry.gitlab.com/quittymr/shoulder-daemon`.
 
 ### Fixed
 
@@ -50,3 +58,6 @@ project started, and it is what a first `v0.1.0` would contain.
 - The ranked envelope from the by-tag endpoint is decoded correctly, and `searchByTag`
   results are unwrapped properly.
 - Session notes are remembered as the store accepted them, not as they were offered.
+
+[Unreleased]: https://github.com/QuittyMR/shoulder-daemon/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/QuittyMR/shoulder-daemon/releases/tag/v0.1.0

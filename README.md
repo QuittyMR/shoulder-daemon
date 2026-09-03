@@ -7,7 +7,12 @@
 
 [![CI](https://github.com/QuittyMR/shoulder-daemon/actions/workflows/ci.yml/badge.svg)](https://github.com/QuittyMR/shoulder-daemon/actions/workflows/ci.yml)
 [![pipeline](https://gitlab.com/quittymr/shoulder-daemon/badges/main/pipeline.svg)](https://gitlab.com/quittymr/shoulder-daemon/-/pipelines)
-[![Go](https://img.shields.io/badge/go-1.26-00ADD8?logo=go&logoColor=white)](relay/go.mod)
+[![coverage](https://gitlab.com/quittymr/shoulder-daemon/badges/main/coverage.svg?job=test)](https://gitlab.com/quittymr/shoulder-daemon/-/pipelines)
+[![codecov](https://codecov.io/gh/QuittyMR/shoulder-daemon/graph/badge.svg)](https://codecov.io/gh/QuittyMR/shoulder-daemon)
+[![release](https://img.shields.io/github/v/release/QuittyMR/shoulder-daemon?sort=semver)](https://github.com/QuittyMR/shoulder-daemon/releases/latest)
+[![Go](https://img.shields.io/github/go-mod/go-version/QuittyMR/shoulder-daemon?filename=relay%2Fgo.mod&logo=go&logoColor=white)](relay/go.mod)
+[![Go Report Card](https://goreportcard.com/badge/gitlab.com/quittymr/shoulder-daemon/relay)](https://goreportcard.com/report/gitlab.com/quittymr/shoulder-daemon/relay)
+[![Go Reference](https://pkg.go.dev/badge/gitlab.com/quittymr/shoulder-daemon/relay.svg)](https://pkg.go.dev/gitlab.com/quittymr/shoulder-daemon/relay)
 [![licence: MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
 
 Context advisor for coding agents.
@@ -38,32 +43,48 @@ having to ask for it.
 
 ## Install
 
-Install the daemon, then the adapter for whichever editor you use. The adapters
-start the daemon when the editor launches, and it stops when the last session
-ends. Sessions will happily share a single daemon.
+**Claude Code** - the plugin is the whole install. On first start it fetches the
+daemon for your platform from the latest release, verifies the checksum, and
+starts it; after that it starts the daemon whenever a session needs one and
+sessions share it.
 
-```bash
-go install gitlab.com/quittymr/shoulder-daemon/relay/cmd/shoulderd@latest
+```
+/plugin marketplace add QuittyMR/shoulder-daemon
+/plugin install shoulder-daemon
 ```
 
-`go install` puts the binary in `$(go env GOPATH)/bin`. The adapters look for
-`shoulderd` on your `PATH`, so add that directory to it if it is not there
-already.
+`/plugin marketplace add https://gitlab.com/quittymr/shoulder-daemon` does the
+same from GitLab. A `shoulderd` already on your `PATH` is used in preference to
+the fetched one, so `go install` or a package manager is never second-guessed.
 
-**OpenCode** - copy into `~/.config/opencode/plugins/`, or into
-`.opencode/plugins/` for a single project. OpenCode loads both.
+**OpenCode** - the plugin is one file, and the daemon has to be on your `PATH`
+from any of the sources below. Copy into `~/.config/opencode/plugins/`, or into
+`.opencode/plugins/` for a single project; OpenCode loads both.
 
 ```bash
 mkdir -p ~/.config/opencode/plugins
 curl -o ~/.config/opencode/plugins/shoulder-daemon.js https://gitlab.com/quittymr/shoulder-daemon/-/raw/main/adapters/opencode/shoulder-daemon.js
 ```
 
-**Claude Code** - add the marketplace and install the plugin.
+### Getting the daemon yourself
 
-```
-/plugin marketplace add https://gitlab.com/quittymr/shoulder-daemon
-/plugin install shoulder-daemon
-```
+- **Release binary** - every [release](https://github.com/QuittyMR/shoulder-daemon/releases/latest)
+  carries Linux, macOS and Windows builds for amd64 and arm64 beside a
+  `SHA256SUMS`; the [GitLab release](https://gitlab.com/quittymr/shoulder-daemon/-/releases)
+  carries the same files.
+- **`go install`** - into `$(go env GOPATH)/bin`, which needs to be on your `PATH`:
+
+  ```bash
+  go install gitlab.com/quittymr/shoulder-daemon/relay/cmd/shoulderd@latest
+  ```
+
+- **Container** - `ghcr.io/quittymr/shoulder-daemon` and
+  `registry.gitlab.com/quittymr/shoulder-daemon`, both multi-arch.
+  [`deploy/docker-compose.yml`](deploy/docker-compose.yml) runs it on host
+  networking so hooks still reach `127.0.0.1:8787`.
+
+`shoulderd version` says which one you have and where it came from, and
+`shoulderd doctor` tells you when a newer release exists.
 
 OpenCode is the better informed of the two: Claude Code no longer exposes thinking tokens, so the
 decision pass sees less of what the agent is actually doing.

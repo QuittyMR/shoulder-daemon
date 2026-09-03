@@ -1,0 +1,36 @@
+name: Live providers
+
+# The offline suite proves the pipeline; this proves the connectors still talk
+# to the endpoints they were written against. It runs on a schedule from the
+# default branch only, never on a pull request, so the provider key is never
+# reachable from a fork.
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    if: github.repository == 'QuittyMR/shoulder-daemon'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: relay/go.mod
+          cache: false
+      - name: live tests
+        working-directory: relay
+        env:
+          SHOULDER_LIVE: '1'
+          SHOULDER_LLM: ${{ vars.SHOULDER_LIVE_LLM || 'gemini' }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          if [ -z "$GEMINI_API_KEY$OPENROUTER_API_KEY" ]; then
+            echo "::warning::no provider key configured; the live suite skipped itself"
+          fi
+          go test -run 'Live' -count=1 ./internal/llm/ ./internal/pipeline/

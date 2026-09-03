@@ -53,6 +53,8 @@ func (c *cli) dispatch(name string, args []string) int {
 		return c.consolidate(args)
 	case "config":
 		return c.config(args)
+	case "version", "-v", "-version", "--version":
+		return c.version(args)
 	case "help", "-h", "-help", "--help":
 		// Asking what the commands are is a question, and an answered question
 		// leaves by stdout with nothing to report to the shell.
@@ -80,6 +82,7 @@ const usage = `usage:
   shoulderd consolidate --local|--global
   shoulderd config [show]                                      what the daemon is doing now
   shoulderd config set [--log-level=L] [--pickiness=P] [--provider=N] [--model=M]
+  shoulderd version [--json]                                   which build this is
 
 --local is this project alone; --global follows you into every other one.
 ` + projectIs + `

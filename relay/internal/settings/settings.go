@@ -167,7 +167,7 @@ func (l *Live) Apply(c Change) (Snapshot, error) {
 	if c.Pickiness != nil {
 		v, err := prompts.ParsePickiness(*c.Pickiness)
 		if err != nil {
-			return l.snapshot(), fmt.Errorf("%w: %s", ErrBadChange, err)
+			return l.snapshot(), fmt.Errorf("%w: %w", ErrBadChange, err)
 		}
 		pick = v
 	}
@@ -192,7 +192,7 @@ func (l *Live) Apply(c Change) (Snapshot, error) {
 			// containerised daemon, not this machine's environment either. Said
 			// plainly here because the alternative is exporting the key,
 			// retrying, and getting the identical refusal back.
-			return l.snapshot(), fmt.Errorf("%w: %s. Any variable named there belongs to the daemon's own environment, not this shell; a containerised daemon reads it from the env file it was started with", ErrBadChange, err)
+			return l.snapshot(), fmt.Errorf("%w: %w. Any variable named there belongs to the daemon's own environment, not this shell; a containerised daemon reads it from the env file it was started with", ErrBadChange, err)
 		}
 		// A spec that names nothing — "", "  ", "," — builds cleanly and
 		// returns no provider, which at startup is a daemon deliberately

@@ -8,13 +8,17 @@ include:
 stages:
   - test
   - secret-detection
+  - build
+  - release
 
 variables:
   SECRET_DETECTION_ENABLED: 'true'
+  GOLANGCI_LINT_VERSION: v2.13.2
   # Neither module depends on anything outside the standard library, so the
   # only cache worth keeping is the compiled one.
   GOCACHE: $CI_PROJECT_DIR/.gocache
   GOFLAGS: -buildvcs=false
+  IMAGE: $CI_REGISTRY_IMAGE
 
 default:
   image: golang:1.26
@@ -28,31 +32,59 @@ default:
   rules:
     - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG
 
-# gofmt exits 0 whether or not it found anything, so the file list is the only
-# signal.
 lint:
   extends: .go
+  image: golangci/golangci-lint:$GOLANGCI_LINT_VERSION
   script:
-    - (cd relay && go vet ./...)
-    - (cd advisor-echo && go vet ./...)
-    - unformatted=$(gofmt -l relay advisor-echo)
-    - test -z "$unformatted" || { echo "gofmt needs to run on:"; echo "$unformatted"; exit 1; }
+    - (cd relay && golangci-lint run ./...)
+    - (cd advisor-echo && golangci-lint run ./...)
 
 build:
   extends: .go
   script:
-    - cd relay && go build ./...
-    - cd ../advisor-echo && go build ./...
+    - (cd relay && go build ./...)
+    - (cd advisor-echo && go build ./...)
 
 # The live provider and live memory tests skip themselves without their
 # credentials, and the integration suite is behind the `integration` build tag,
-# so this is the offline subset.
+# so this is the offline subset. The last line of `go tool cover -func` is what
+# the coverage regex reads; the Cobertura file is what shows per-line coverage
+# in a merge request diff.
 test:
   extends: .go
+  coverage: '/^total:\s+\(statements\)\s+(\d+\.\d+)%/'
   script:
-    - cd relay && go test -race ./...
-    - cd ../advisor-echo && go test -race ./...
+    - (cd relay && go test -race -covermode=atomic -coverprofile=coverage.out ./... && go tool cover -func=coverage.out | tail -1)
+    - (cd advisor-echo && go test -race -covermode=atomic -coverprofile=coverage.out ./... && go tool cover -func=coverage.out | tail -1)
+    - go run github.com/boumenot/gocover-cobertura@latest < relay/coverage.out > relay/coverage.xml
+    - go run github.com/boumenot/gocover-cobertura@latest < advisor-echo/coverage.out > advisor-echo/coverage.xml
+    # Only with a token; without one the badge reads "unknown" and nothing fails.
+    - |
+      if [ -n "${CODECOV_TOKEN:-}" ]; then
+        curl -fsSLo codecov https://cli.codecov.io/latest/linux/codecov && chmod +x codecov
+        ./codecov upload-process -t "$CODECOV_TOKEN" -f relay/coverage.out -F relay
+        ./codecov upload-process -t "$CODECOV_TOKEN" -f advisor-echo/coverage.out -F advisor-echo
+      fi
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: '*/coverage.xml'
+    paths:
+      - relay/coverage.out
+      - advisor-echo/coverage.out
+    expire_in: 1 week
+
+# Zero dependencies still leaves the standard library, which is where the CVEs
+# that apply to a stdlib-only binary are filed.
+vulncheck:
+  extends: .go
+  script:
+    - go install golang.org/x/vuln/cmd/govulncheck@latest
+    - (cd relay && govulncheck ./...)
+    - (cd advisor-echo && govulncheck ./...)
 
 # The hook round trip is the number the whole design rests on. It records the
 # cost in the job log rather than gating the pipeline.
@@ -63,8 +95,111 @@ bench:
     - cd relay
     - go test ./internal/pipeline/ -run '^$' -bench BenchmarkHookRoundTrip -benchtime 2000x
 
+# The offline suite proves the pipeline; this proves the connectors still talk
+# to the endpoints they were written against. Scheduled on the default branch
+# only, so the provider key is a protected variable that a merge request from
+# a fork never sees.
+live:
+  stage: test
+  rules:
+    - if: $CI_PIPELINE_SOURCE == 'schedule' && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  variables:
+    SHOULDER_LIVE: '1'
+  script:
+    - export SHOULDER_LLM="${SHOULDER_LIVE_LLM:-gemini}"
+    - |
+      if [ -z "${GEMINI_API_KEY:-}${OPENROUTER_API_KEY:-}" ]; then
+        echo "no provider key configured; the live suite skipped itself"
+      fi
+    - cd relay && go test -run 'Live' -count=1 ./internal/llm/ ./internal/pipeline/
+
 sast:
   stage: test
 
 secret_detection:
   stage: secret-detection
+
+# --- Releases. A tag vX.Y.Z builds every binary, pushes the image, and creates
+# the release with the CHANGELOG section as its notes; the same tag does the
+# same on GitHub, so the two releases carry identical artefacts.
+
+.tagged:
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/
+
+# One number in three places has to agree before anything is built.
+verify-version:
+  extends: .tagged
+  stage: build
+  script:
+    - scripts/check-version.sh "$CI_COMMIT_TAG"
+
+binaries:
+  extends: .tagged
+  stage: build
+  needs: [verify-version]
+  script:
+    - |
+      set -e
+      mkdir -p dist
+      cd relay
+      for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+        export GOOS="${target%/*}" GOARCH="${target#*/}" CGO_ENABLED=0
+        name="shoulderd_${GOOS}_${GOARCH}"
+        [ "$GOOS" = windows ] && name="$name.exe"
+        go build -trimpath \
+          -ldflags "-s -w -X main.buildVersion=${CI_COMMIT_TAG} -X main.buildOrigin=release" \
+          -o "../dist/$name" ./cmd/shoulderd
+      done
+      cd ../dist && sha256sum shoulderd_* > SHA256SUMS
+    # The generic package registry is where the release links point.
+    - |
+      for f in dist/*; do
+        curl -fsS --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file "$f" \
+          "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/shoulderd/${CI_COMMIT_TAG#v}/$(basename "$f")"
+      done
+  artifacts:
+    paths: [dist/]
+    expire_in: 1 week
+
+container-image:
+  extends: .tagged
+  stage: build
+  needs: [verify-version]
+  image: docker:27
+  services:
+    - docker:27-dind
+  variables:
+    DOCKER_TLS_CERTDIR: /certs
+  before_script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - docker run --privileged --rm tonistiigi/binfmt --install arm64
+    - docker buildx create --use
+  script:
+    - |
+      ver="${CI_COMMIT_TAG#v}"
+      docker buildx build relay \
+        --platform linux/amd64,linux/arm64 \
+        --build-arg "VERSION=$CI_COMMIT_TAG" \
+        --tag "$IMAGE:$ver" \
+        --tag "$IMAGE:${ver%.*}" \
+        --tag "$IMAGE:latest" \
+        --push
+
+release:
+  extends: .tagged
+  stage: release
+  needs: [binaries, container-image]
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  script:
+    - apk add --no-cache bash
+    - scripts/changelog-section.sh "$CI_COMMIT_TAG" > notes.md
+    - |
+      base="$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/shoulderd/${CI_COMMIT_TAG#v}"
+      args=""
+      for f in dist/*; do
+        n=$(basename "$f")
+        args="$args --assets-link {\"name\":\"$n\",\"url\":\"$base/$n\",\"link_type\":\"package\"}"
+      done
+      # shellcheck disable=SC2086
+      release-cli create --name "$CI_COMMIT_TAG" --tag-name "$CI_COMMIT_TAG" --description notes.md $args

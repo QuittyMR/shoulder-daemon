@@ -1,15 +1,19 @@
 {
   "name": "shoulder-daemon",
-  "version": "0.1.1",
-  "description": "Quiet advisory context injection for Claude Code. Per-event hooks are pure HTTP callbacks to a local relay; one SessionStart script starts that relay if it is not running.",
+  "version": "0.1.0",
+  "description": "Context advisor for coding agents. Watches the session over HTTP hooks, keeps a store of facts, and injects the relevant ones back in when they matter. Starts the daemon itself; nothing else to install.",
   "author": {
-    "name": "shoulder-daemon contributors"
+    "name": "Thomas Raz",
+    "url": "https://gitlab.com/quittymr"
   },
+  "homepage": "https://gitlab.com/quittymr/shoulder-daemon",
+  "repository": "https://github.com/QuittyMR/shoulder-daemon",
   "license": "MIT",
   "keywords": [
+    "memory",
+    "context",
     "hooks",
-    "advisory",
-    "context-injection",
-    "http"
+    "advisor",
+    "facts"
   ]
 }

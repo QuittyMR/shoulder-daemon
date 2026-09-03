@@ -162,6 +162,10 @@ func (c *cli) doctor(args []string) int {
 	_ = resp.Body.Close()
 	out["relay"] = "ok"
 
+	b := currentBuild()
+	out["version"] = b.Version
+	out["origin"] = b.Origin
+
 	// What a harness actually runs is the copy of the plugin taken at install
 	// time, not the checkout somebody is editing. A stale copy posts to the
 	// address and with the header it was built against, so the symptom is
@@ -186,6 +190,16 @@ func (c *cli) doctor(args []string) int {
 			fmt.Println("relay:   ok")
 		}
 		return 0
+	}
+
+	// A newer release is worth one line, not an exit code: a daemon behind by a
+	// version is still a working daemon. The proxy being unreachable says
+	// nothing about this machine, so that is not reported at all.
+	if latest, err := latestRelease(context.Background()); err == nil {
+		out["latest"] = latest
+		if newer(latest, b.Version) {
+			out["update_available"] = latest
+		}
 	}
 
 	mresp, err := client.Get(*base + "/metrics")
@@ -225,6 +239,10 @@ func (c *cli) doctor(args []string) int {
 	}
 
 	fmt.Printf("relay:   %v\n", out["relay"])
+	fmt.Printf("version: %s (%s)\n", b.Version, b.Origin)
+	if latest, ok := out["update_available"].(string); ok {
+		fmt.Printf("update:  %s is out; %s\n", latest, updateHint(b.Origin))
+	}
 	fmt.Printf("metrics: %v\n", out["metrics"])
 	if stale, ok := out["plugin_stale"].([]string); ok {
 		fmt.Printf("plugin:  STALE: %v\n", stale)

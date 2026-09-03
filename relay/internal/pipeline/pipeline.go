@@ -815,7 +815,7 @@ func (p *Pipeline) store(ctx context.Context, origin, project string, merged []f
 	defer cancel()
 
 	for _, f := range kept {
-		p.writeFact(wctx, origin, project, key, f, seen)
+		p.writeFact(wctx, origin, project, f)
 	}
 	return kept
 }
@@ -828,10 +828,7 @@ func (p *Pipeline) store(ctx context.Context, origin, project string, merged []f
 // stale fact goes on being recalled. Replacing the memory that blocked it is
 // the correct recovery: if the new text really was redundant the supersede is
 // near enough a no-op, and if it was a correction it now lands.
-//
-// recalled is what this session read for its own scopes, and it is what makes
-// the recovery safe; see recalledHere.
-func (p *Pipeline) writeFact(ctx context.Context, origin, project, key string, f facts.Fact, recalled []facts.Recalled) {
+func (p *Pipeline) writeFact(ctx context.Context, origin, project string, f facts.Fact) {
 	category, ok := facts.NormaliseCategory(f.Category)
 	if !ok {
 		// Send no category rather than one nothing downstream agrees on.
