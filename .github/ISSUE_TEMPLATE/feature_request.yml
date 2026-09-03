@@ -1,0 +1,44 @@
+name: Feature request
+description: A connector, a harness, or a behaviour that should exist.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is the problem
+      description: >
+        Describe the situation you are in, not the solution you have in mind. What did
+        the agent fail to know, or know wrongly?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of change is this
+      options:
+        - A new model connector
+        - A new memory backend
+        - A new harness adapter
+        - A change to what gets stored, superseded or injected
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like it to do
+      description: >
+        If this is a connector or a backend, name the endpoint or the product and say
+        what it costs to call. Latency is the constraint that decides most of these -
+        the decision pass runs while the user's turn is open.
+
+  - type: checkboxes
+    id: budget
+    attributes:
+      label: Dependency budget
+      options:
+        - label: >
+            I understand neither Go module has a dependency outside the standard
+            library, and a change that adds one has to argue for itself.

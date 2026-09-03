@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/QuittyMR/shoulder-daemon/blob/main/SECURITY.md
+    about: Do not open a public issue. Report it privately - see the security policy.
+  - name: GitLab tracker
+    url: https://gitlab.com/quittymr/shoulder-daemon/-/issues
+    about: The same project, mirrored. Open your issue here or there, not both.

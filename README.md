@@ -5,6 +5,11 @@
 
 # shoulder-daemon
 
+[![CI](https://github.com/QuittyMR/shoulder-daemon/actions/workflows/ci.yml/badge.svg)](https://github.com/QuittyMR/shoulder-daemon/actions/workflows/ci.yml)
+[![pipeline](https://gitlab.com/quittymr/shoulder-daemon/badges/main/pipeline.svg)](https://gitlab.com/quittymr/shoulder-daemon/-/pipelines)
+[![Go](https://img.shields.io/badge/go-1.26-00ADD8?logo=go&logoColor=white)](relay/go.mod)
+[![licence: MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
+
 Context advisor for coding agents.
 Injects relevant information when needed. Records facts and keeps them up to date as they change.
 
@@ -60,7 +65,8 @@ curl -o ~/.config/opencode/plugins/shoulder-daemon.js https://gitlab.com/quittym
 /plugin install shoulder-daemon
 ```
 
-OpenCode is clearly the better informed harness here, as Claude Code removed thinking tokens. We deal with the pork we receive.
+OpenCode is the better informed of the two: Claude Code no longer exposes thinking tokens, so the
+decision pass sees less of what the agent is actually doing.
 
 Select a model:
 
@@ -134,25 +140,35 @@ each one.
 
 | | What triggers it | Where it stores | Why we built this instead |
 |---|---|---|---|
-| **shoulder-daemon** | a small model reads each turn | any backend behind a five-method interface | - |
+| **shoulder-daemon** | A small model reads each turn | any backend behind a five-method interface | - |
 | [Natural Memory Triggers](https://github.com/doobidoo/mcp-memory-service) | regex and keyword matches on your prompt | SQLite-vec, Cloudflare or Milvus | Triggers on preset keywords only |
-| [PowerContext](https://github.com/oceanbase/powercontext) | every prompt | SQLite / OceanBase | team-focused, no consolidation or supersesion and more invasive, but possibly the best alternative here |
-| [claude-code-semantic-memory](https://github.com/razor-ai/claude-code-semantic-memory) | embedding similarity on your prompt | SQLite/Ollama | Read-only - no learning, supersesion etc. |
-| [Letta Claude Subconscious](https://github.com/letta-ai/claude-subconscious) | a background agent reads each finished turn | Letta cloud | paid option is the clear focus (currently broken for ClaudeCode/SQLite) and very heavy |
-| [ContextStream](https://github.com/contextstream/mcp-server) | tools the agent chooses to call, plus hooks | hosted | no injection, no self-hosting |
+| [PowerContext](https://github.com/oceanbase/powercontext) | Every prompt | SQLite / OceanBase | Team-focused, no consolidation or supersession, and more invasive, but possibly the best alternative here |
+| [claude-code-semantic-memory](https://github.com/razor-ai/claude-code-semantic-memory) | Embedding similarity on your prompt | SQLite/Ollama | Read-only - no learning, no supersession |
+| [Letta Claude Subconscious](https://github.com/letta-ai/claude-subconscious) | A background agent reads each finished turn | Letta cloud | Paid option is the clear focus (currently broken for ClaudeCode/SQLite) and very heavy |
+| [ContextStream](https://github.com/contextstream/mcp-server) | Tools the agent chooses to call, plus hooks | hosted | No injection, no self-hosting |
 
 ## Docs
 
 - [How it works](docs/ARCHITECTURE.md) - the hot path, the injection budget, why a hook can't block
 - [Install and configure](docs/INSTALL.md)
 - [Advisor protocol](docs/ADVISOR.md) - bring your own decision model
+- [Contributing](CONTRIBUTING.md) - house rules, and what a new connector or adapter takes
+- [Security policy](SECURITY.md) - what is in scope, and how to report privately
+- [Changelog](CHANGELOG.md)
 
 ## Status
 
-Working and tested against Claude Code 2.1.251 and OpenCode 1.18.25. More model
-and memory connectors are coming. Contributing notes and the house rules are in
-[docs/INSTALL.md](docs/INSTALL.md); issues and merge requests at
-<https://gitlab.com/quittymr/shoulder-daemon>.
+Working and tested against Claude Code 2.1.251 and OpenCode 1.18.25. Neither Go
+module depends on anything outside the standard library. More model and memory
+connectors are coming; no version has been tagged yet.
+
+Development happens on [GitLab](https://gitlab.com/quittymr/shoulder-daemon) and on
+[GitHub](https://github.com/QuittyMR/shoulder-daemon). Both are live - open an issue
+or a change on whichever you already use, but not on both. The house rules are in
+[CONTRIBUTING.md](CONTRIBUTING.md). For a vulnerability, do not open a public issue;
+see [SECURITY.md](SECURITY.md).
+
+The Go module path is `gitlab.com/quittymr/shoulder-daemon/relay` on either remote.
 
 ## Licence
 

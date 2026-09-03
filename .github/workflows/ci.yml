@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: ${{ matrix.module }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [relay, advisor-echo]
+    defaults:
+      run:
+        working-directory: ${{ matrix.module }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Neither module has a dependency outside the standard library, so there
+      # is no go.sum for the module cache to key on.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache: false
+
+      # gofmt exits 0 whether or not it found anything, so the file list is the
+      # only signal.
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt needs to run on:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+      # The live provider and live memory tests skip themselves without their
+      # credentials, and the integration suite is behind the `integration` build
+      # tag, so this is the offline subset.
+      - name: go test
+        run: go test -race ./...
+
+  bench:
+    name: hook round trip
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: relay/go.mod
+          cache: false
+      # The hook round trip is the number the whole design rests on. This does
+      # not gate the merge; it records the cost in the job log.
+      - name: benchmark
+        working-directory: relay
+        run: go test ./internal/pipeline/ -run '^$' -bench BenchmarkHookRoundTrip -benchtime 2000x

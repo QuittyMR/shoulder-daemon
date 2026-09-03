@@ -1,19 +1,70 @@
-# You can override the included template(s) by including variable overrides
-# SAST customization: https://docs.gitlab.com/user/application_security/sast/#available-cicd-variables
-# Secret Detection customization: https://docs.gitlab.com/user/application_security/secret_detection/pipeline/configure/
-# Dependency Scanning customization: https://docs.gitlab.com/user/application_security/dependency_scanning/dependency_scanning_sbom/#customizing-analyzer-behavior
-# Container Scanning customization: https://docs.gitlab.com/user/application_security/container_scanning/#customizing-analyzer-behavior
-# Note that environment variables can be set in several places
-# See https://docs.gitlab.com/ci/variables/#cicd-variable-precedence
-stages:
-- test
-- secret-detection
-sast:
-  stage: test
+# Security templates are managed by GitLab; see
+# https://docs.gitlab.com/user/application_security/sast/ and
+# https://docs.gitlab.com/user/application_security/secret_detection/.
 include:
-- template: Security/SAST.gitlab-ci.yml
-- template: Security/Secret-Detection.gitlab-ci.yml
+  - template: Security/SAST.gitlab-ci.yml
+  - template: Security/Secret-Detection.gitlab-ci.yml
+
+stages:
+  - test
+  - secret-detection
+
 variables:
   SECRET_DETECTION_ENABLED: 'true'
+  # Neither module depends on anything outside the standard library, so the
+  # only cache worth keeping is the compiled one.
+  GOCACHE: $CI_PROJECT_DIR/.gocache
+  GOFLAGS: -buildvcs=false
+
+default:
+  image: golang:1.26
+  cache:
+    key: gocache-$CI_COMMIT_REF_SLUG
+    paths:
+      - .gocache/
+
+.go:
+  stage: test
+  rules:
+    - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# gofmt exits 0 whether or not it found anything, so the file list is the only
+# signal.
+lint:
+  extends: .go
+  script:
+    - (cd relay && go vet ./...)
+    - (cd advisor-echo && go vet ./...)
+    - unformatted=$(gofmt -l relay advisor-echo)
+    - test -z "$unformatted" || { echo "gofmt needs to run on:"; echo "$unformatted"; exit 1; }
+
+build:
+  extends: .go
+  script:
+    - cd relay && go build ./...
+    - cd ../advisor-echo && go build ./...
+
+# The live provider and live memory tests skip themselves without their
+# credentials, and the integration suite is behind the `integration` build tag,
+# so this is the offline subset.
+test:
+  extends: .go
+  script:
+    - cd relay && go test -race ./...
+    - cd ../advisor-echo && go test -race ./...
+
+# The hook round trip is the number the whole design rests on. It records the
+# cost in the job log rather than gating the pipeline.
+bench:
+  extends: .go
+  allow_failure: true
+  script:
+    - cd relay
+    - go test ./internal/pipeline/ -run '^$' -bench BenchmarkHookRoundTrip -benchtime 2000x
+
+sast:
+  stage: test
+
 secret_detection:
   stage: secret-detection

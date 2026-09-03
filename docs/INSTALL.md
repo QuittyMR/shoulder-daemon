@@ -24,7 +24,8 @@ Put the `export` in your shell profile (or wherever you set env vars for the ter
 runs in) so it is present every time, not just this once.
 
 **Why this matters:** Claude Code sends **no authentication header by default** - verified in
-Phase 0 (`spikes/results/PHASE0-FINDINGS.md`, S1). Every hook request arrives at the relay with
+Phase 0 against Claude Code 2.1.251, whose captured hook payloads are in
+`testdata/hook-payloads/2.1.251/`. Every hook request arrives at the relay with
 only `Accept, Accept-Encoding, Connection, Content-Length, Content-Type, User-Agent`. Without a
 token configured, the relay's `127.0.0.1:8787` listener is open to **any local process** that can
 reach loopback - not just Claude Code. The token is what turns that into an authenticated channel:
