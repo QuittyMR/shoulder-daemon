@@ -4,7 +4,7 @@ COMPOSE := docker compose -f deploy/docker-compose.yml
 
 GOLANGCI := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
 
-.PHONY: build test cover bench lint vulncheck release-check docker-build up down logs doctor e2e clean install-plugins update
+.PHONY: build test cover bench lint vulncheck release-check release docker-build up down logs doctor e2e clean install-plugins update
 
 build:
 	@mkdir -p $(BIN)
@@ -39,6 +39,11 @@ release-check:
 	@test -n "$(TAG)" || { echo "usage: make release-check TAG=vX.Y.Z"; exit 2; }
 	scripts/check-version.sh $(TAG)
 	scripts/changelog-section.sh $(TAG)
+
+# Three tags, every remote. See scripts/tag-release.sh for why three.
+release:
+	@test -n "$(TAG)" || { echo "usage: make release TAG=vX.Y.Z"; exit 2; }
+	scripts/tag-release.sh $(TAG)
 
 # What a harness runs is the copy of the adapter it took when the plugin was
 # installed, not this checkout. Editing the adapter here changes nothing the

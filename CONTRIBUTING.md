@@ -74,9 +74,14 @@ prints the notes that will go on the release.
 
 ```bash
 make release-check TAG=v0.2.0
-git tag -a v0.2.0 -m "v0.2.0"
-git push origin v0.2.0 && git push origingh v0.2.0
+make release TAG=v0.2.0
 ```
+
+`make release` runs `scripts/tag-release.sh`, which creates three tags and pushes them to every
+remote: `v0.2.0`, which the pipelines build from, and `relay/v0.2.0` and `advisor-echo/v0.2.0`,
+which are what the Go module proxy reads - each module lives in a subdirectory, and Go only
+recognises a nested module's tag when it carries the directory as a prefix. Without those two,
+`go install ...@latest` keeps resolving to a pseudo-version of `main`.
 
 Both pipelines then build the binaries, push the images, and create the release with the
 changelog section as its notes. The plugin picks the new binary up on the next editor start
