@@ -155,6 +155,7 @@ binaries:
       cd ../dist && sha256sum shoulderd_* > SHA256SUMS
     # The generic package registry is where the release links point.
     - |
+      cd "$CI_PROJECT_DIR"
       for f in dist/*; do
         curl -fsS --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file "$f" \
           "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/shoulderd/${CI_COMMIT_TAG#v}/$(basename "$f")"
@@ -175,7 +176,10 @@ container-image:
   before_script:
     - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
     - docker run --privileged --rm tonistiigi/binfmt --install arm64
-    - docker buildx create --use
+    # buildx cannot take the dind daemon from the TLS environment variables
+    # alone; it needs a named context to build on.
+    - docker context create dind
+    - docker buildx create --use dind
   script:
     - |
       ver="${CI_COMMIT_TAG#v}"
