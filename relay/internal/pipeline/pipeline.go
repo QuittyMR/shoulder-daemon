@@ -191,9 +191,15 @@ func (p *Pipeline) Run(ctx context.Context) {
 					go p.consolidateBoth(ctx, p.sessionProject([]session.Event{ev}))
 				}
 			}
+			// The claim is released before anyone is told the consult is
+			// over. Whoever waits on that signal posts the next event, and
+			// an event that lands while the claim is still held is skipped
+			// as in flight; with nothing else coming, that is a stall.
 			go func(sessionID string) {
-				defer p.Registry.ReleaseAdvisor(sessionID)
-				p.Consult(ctx, sessionID)
+				func() {
+					defer p.Registry.ReleaseAdvisor(sessionID)
+					p.Consult(ctx, sessionID)
+				}()
 				if p.OnConsulted != nil {
 					p.OnConsulted(sessionID)
 				}

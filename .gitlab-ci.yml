@@ -196,6 +196,7 @@ container-image:
 # than a rebuild: start a pipeline on main with MIRROR_TAG set to the version.
 mirror-image:
   stage: build
+  needs: []
   rules:
     - if: $MIRROR_TAG
   image:
