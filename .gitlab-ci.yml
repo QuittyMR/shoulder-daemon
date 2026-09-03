@@ -50,15 +50,16 @@ build:
 
 # The live provider and live memory tests skip themselves without their
 # credentials, and the integration suite is behind the `integration` build tag,
-# so this is the offline subset. The last line of `go tool cover -func` is what
-# the coverage regex reads; the Cobertura file is what shows per-line coverage
-# in a merge request diff.
+# so this is the offline subset. The coverage regex takes the last `total:`
+# line in the log, so the relay - the product - runs last and is the number
+# on the badge; the Cobertura files are what show per-line coverage in a
+# merge request diff.
 test:
   extends: .go
   coverage: '/^total:\s+\(statements\)\s+(\d+\.\d+)%/'
   script:
-    - (cd relay && go test -race -count=1 -covermode=atomic -coverprofile=coverage.out ./... && go tool cover -func=coverage.out | tail -1)
     - (cd advisor-echo && go test -race -count=1 -covermode=atomic -coverprofile=coverage.out ./... && go tool cover -func=coverage.out | tail -1)
+    - (cd relay && go test -race -count=1 -covermode=atomic -coverprofile=coverage.out ./... && go tool cover -func=coverage.out | tail -1)
     - go run github.com/boumenot/gocover-cobertura@latest < relay/coverage.out > relay/coverage.xml
     - go run github.com/boumenot/gocover-cobertura@latest < advisor-echo/coverage.out > advisor-echo/coverage.xml
   artifacts:
