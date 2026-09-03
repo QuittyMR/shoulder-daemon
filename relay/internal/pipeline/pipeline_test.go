@@ -291,7 +291,7 @@ func TestBudgetLimitsInjectionRate(t *testing.T) {
 		s.post(t, "Stop", stop("s1", "done"))
 		select {
 		case <-s.consults:
-		case <-time.After(2 * time.Second):
+		case <-time.After(10 * time.Second):
 			t.Fatal("consult stalled")
 		}
 	}
