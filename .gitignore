@@ -15,3 +15,7 @@ bin/
 # Phase 0 hook experiments. Kept on disk, out of the repository; what they produced
 # and what still matters are the fixtures in testdata/hook-payloads/.
 spikes/
+
+# Coverage profiles written by make cover and by CI.
+coverage.out
+coverage.xml
