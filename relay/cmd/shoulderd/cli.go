@@ -95,7 +95,8 @@ Flags come before the text: shoulderd message --no-update "your question"
 
 const doctorUsage = `usage: shoulderd doctor [--addr=URL] [--json] [--liveness]
 
-Report whether the relay is running and whether the harness has ever reached it.
+Report whether the relay is running, whether the harness has ever reached it,
+and whether anything is being remembered.
 
   --addr URL   relay base URL (default http://127.0.0.1:8787)
   --json       machine-readable output

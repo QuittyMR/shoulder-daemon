@@ -1,0 +1,22 @@
+vectors.bin is derived from the GloVe pre-trained word vectors published by the
+Stanford NLP Group.
+
+    Jeffrey Pennington, Richard Socher, and Christopher D. Manning. 2014.
+    GloVe: Global Vectors for Word Representation.
+    https://nlp.stanford.edu/projects/glove/
+
+Source file: glove.6B.100d.txt, from glove.6B.zip (Wikipedia 2014 + Gigaword 5,
+6 billion tokens, 400k vocabulary, uncased).
+
+Those vectors are made available under the Open Data Commons Public Domain
+Dedication and Licence (PDDL) v1.0:
+
+    https://opendatacommons.org/licenses/pddl/1-0/
+
+The table here is the first 40,000 entries of that file whose word is made only
+of lower-case letters and digits and is at least two characters long, with each
+row scaled to a signed byte. mkvectors.go in this directory is what produced it
+and documents the format; it takes minutes to reproduce from the source file.
+
+Nothing else in shoulder-daemon is derived from third-party work, and the rest
+of the repository is MIT-licensed as stated in LICENSE.

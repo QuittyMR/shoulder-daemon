@@ -68,8 +68,10 @@ func TestLiveMCPMemory(t *testing.T) {
 		t.Errorf("placement lost in round trip: scope=%q project=%q", found.Scope, found.Project)
 	}
 	for _, tag := range found.Tags {
-		if strings.HasPrefix(tag, "shoulder-") {
-			t.Errorf("placement tag %q leaked into Tags", tag)
+		for _, prefix := range []string{tagScopePrefix, tagProjectPrefix, tagKindPrefix, tagSessionPrefix} {
+			if strings.HasPrefix(tag, prefix) {
+				t.Errorf("placement tag %q leaked into Tags", tag)
+			}
 		}
 	}
 	if found.Score <= 0 {

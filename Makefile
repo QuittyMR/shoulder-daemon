@@ -4,7 +4,7 @@ COMPOSE := docker compose -f deploy/docker-compose.yml
 
 GOLANGCI := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
 
-.PHONY: build test cover bench lint vulncheck release-check release docker-build up down logs doctor e2e clean install-plugins update
+.PHONY: build test cover bench lint vulncheck release-check release docker-build up down logs memory doctor e2e clean install-plugins update
 
 build:
 	@mkdir -p $(BIN)
@@ -65,6 +65,12 @@ docker-build:
 
 up:
 	$(COMPOSE) up -d
+
+# mcp-memory-service, for an install that wants it instead of the store the
+# daemon keeps itself. First start pulls an embedding model and takes a few
+# minutes. Set SHOULDER_MEMORY_URL too, or the daemon goes on using its own file.
+memory:
+	$(COMPOSE) --profile memory up -d memory
 
 down:
 	$(COMPOSE) down

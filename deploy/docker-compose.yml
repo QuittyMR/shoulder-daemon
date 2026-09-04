@@ -29,10 +29,63 @@ services:
       - ${SHOULDER_ENV_FILE:-.env}
     environment:
       SHOULDER_ADDR: "127.0.0.1:8787"
-      SHOULDER_MEMORY_URL: "http://127.0.0.1:8100"
+      # The store the daemon keeps itself, on a volume rather than in the
+      # container: the point of the built-in one is that nothing else has to be
+      # running, and that is worth nothing if `down` takes the facts with it.
+      # The path is named rather than left to default because a distroless
+      # image has no HOME to derive one from.
+      HOME: "/home/nonroot"
+      SHOULDER_MEMORY_PATH: "/home/nonroot/.local/share/shoulder-daemon/facts.json"
+    volumes:
+      - facts:/home/nonroot
     healthcheck:
       test: ["CMD", "/shoulderd", "doctor", "-liveness", "-addr", "http://127.0.0.1:8787"]
       interval: 30s
       timeout: 3s
       retries: 3
       start_period: 5s
+
+  # The alternative store, for a memory shared between machines or one large
+  # enough that embedding-based recall earns its keep. It is behind a profile
+  # because the daemon has a store of its own and needs nothing here: `make up`
+  # leaves this alone, `make memory` starts it. Set SHOULDER_MEMORY_URL on the
+  # relay as well, or it will go on using its own file.
+  memory:
+    profiles: ["memory"]
+    # -slim is the multi-arch tag; the unsuffixed one is amd64 only.
+    image: ${SHOULDER_MEMORY_IMAGE:-docker.io/doobidoo/mcp-memory-service:11-slim}
+    # Same reasoning as above, and the reason the port below is a loopback
+    # one: this store holds everything you have said in front of an agent.
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      MCP_MODE: "http"
+      MCP_HTTP_HOST: "127.0.0.1"
+      MCP_HTTP_PORT: "8100"
+      MCP_MEMORY_STORAGE_BACKEND: "sqlite_vec"
+      MCP_MEMORY_SQLITE_PATH: "/app/data/sqlite_vec.db"
+      MCP_MEMORY_BACKUPS_PATH: "/app/data/backups"
+      # Without this the store answers 401 to everything, and the daemon logs
+      # a write it never made. It grants what a loopback-only store already
+      # implies: anything on this machine can read it, exactly as it could
+      # read the SQLite file. For a key instead, set MCP_API_KEY here and
+      # SHOULDER_MEMORY_KEY on the relay and delete this line — while it is
+      # true the key is checked first and then not required.
+      MCP_ALLOW_ANONYMOUS_ACCESS: "true"
+    volumes:
+      - memory-data:/app/data
+    healthcheck:
+      # curl is not in the slim image; python is, by construction.
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # First start downloads the ONNX embedding model, which took ~3 minutes
+      # here. Later starts are seconds.
+      start_period: 300s
+
+volumes:
+  # Named, not bind mounts: the facts outlive `down` and any checkout.
+  facts:
+  memory-data:

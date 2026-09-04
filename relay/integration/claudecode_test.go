@@ -195,8 +195,11 @@ func TestClaudeCodeRevivesADeadDaemon(t *testing.T) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("the boot script must never fail a hook: %v\n%s", err, out)
 	}
-	if _, err := os.Stat(started); err != nil {
-		t.Fatalf("nothing was listening and the boot script did not start anything: %v", err)
+	// The script backgrounds the start command and exits without waiting for
+	// it, which is the whole point — a hook may not block a prompt — so the
+	// file appears shortly after the script has already returned.
+	if !appears(started, 10*time.Second) {
+		t.Fatal("nothing was listening and the boot script did not start anything")
 	}
 	_ = dir
 }
@@ -219,8 +222,25 @@ func TestTheBootScriptIsQuietWhenTheDaemonIsUp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	if _, err := os.Stat(started); err == nil {
+	// Long enough that a start command which was going to run has run: the
+	// script backgrounds it, so an immediate look proves nothing.
+	if appears(started, 3*time.Second) {
 		t.Fatal("a second daemon was started while the first was answering")
+	}
+}
+
+// appears waits for a path to exist. Every assertion about the boot script is
+// about something it left behind after returning.
+func appears(path string, within time.Duration) bool {
+	deadline := time.Now().Add(within)
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 

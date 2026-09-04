@@ -12,7 +12,8 @@ somewhere else. That separation is the whole design.
        │                              │─────── non-blocking ──────▶ │
        │                              │                             ├─▶ decision model
        │                              │                             │   (SHOULDER_LLM)
-       │                              │                             ├─▶ memory backend
+       │                              │                             ├─▶ the store: a file of
+       │                              │                             │   its own, or a service
        │                              │                             │   (SHOULDER_MEMORY_URL)
        │                              │◀──── at most one short note ┘
        ├── next hook ────────────────▶│

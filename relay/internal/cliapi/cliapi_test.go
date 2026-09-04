@@ -3,6 +3,7 @@ package cliapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -33,6 +34,7 @@ type fakeMemory struct {
 	queries    []memory.Query
 	forgotten  []string
 	storeErr   error
+	searchErr  error
 }
 
 func newFakeMemory() *fakeMemory {
@@ -45,6 +47,9 @@ func (f *fakeMemory) Search(_ context.Context, q memory.Query) ([]memory.Record,
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.queries = append(f.queries, q)
+	if f.searchErr != nil {
+		return nil, f.searchErr
+	}
 	return f.held[q.Scope], nil
 }
 
@@ -134,6 +139,15 @@ func (f *fakeLLM) Chat(_ context.Context, msgs []llm.Message, _ []llm.Tool) (llm
 func newTestServer(t *testing.T, token string, model llm.Provider) (http.Handler, *fakeMemory, *metrics.Metrics) {
 	t.Helper()
 	mem := newFakeMemory()
+	h, m := newTestServerWith(t, token, model, mem)
+	return h, mem, m
+}
+
+// newTestServerWith is the same server holding a connector the caller chose,
+// which is what a test of the memory probe needs: the probe's whole job is to
+// report a store that is absent or refusing.
+func newTestServerWith(t *testing.T, token string, model llm.Provider, mem memory.Connector) (http.Handler, *metrics.Metrics) {
+	t.Helper()
 	m := metrics.New()
 	cfg := config.Load()
 	cfg.Budget = budget.Default()
@@ -150,7 +164,7 @@ func newTestServer(t *testing.T, token string, model llm.Provider) (http.Handler
 	}
 	mux := http.NewServeMux()
 	New(pipe, token).Mount(mux)
-	return mux, mem, m
+	return mux, m
 }
 
 func do(t *testing.T, h http.Handler, method, path, body string, headers ...string) *httptest.ResponseRecorder {
@@ -762,5 +776,47 @@ func TestConfigRefusesAPost(t *testing.T) {
 	}
 	if live.Pickiness() != prompts.Careful {
 		t.Fatalf("a POST turned the daemon to %v", live.Pickiness())
+	}
+}
+
+func TestMemoryProbeReportsAStoreThatAnswers(t *testing.T) {
+	h, _, _ := newTestServer(t, "", nil)
+	rec := do(t, h, http.MethodGet, "/v1/cli/memory", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	got := decode[MemoryStatus](t, rec)
+	if got.Name != "fake" || !got.Configured || !got.OK || got.Error != "" {
+		t.Fatalf("a store that answers must read as configured and ok: %+v", got)
+	}
+}
+
+// The whole point of the probe: a daemon holding a store it cannot read looks
+// identical from outside to a healthy one, because hooks fail open.
+func TestMemoryProbeReportsAStoreThatRefuses(t *testing.T) {
+	mem := newFakeMemory()
+	mem.searchErr = errors.New("status 401: authorization_required")
+	h, _ := newTestServerWith(t, "", nil, mem)
+	got := decode[MemoryStatus](t, do(t, h, http.MethodGet, "/v1/cli/memory", ""))
+	if !got.Configured {
+		t.Fatalf("a store that refuses is still configured: %+v", got)
+	}
+	if got.OK || !strings.Contains(got.Error, "401") {
+		t.Fatalf("the backend's own reason must survive: %+v", got)
+	}
+}
+
+func TestMemoryProbeSeparatesNoStoreFromABrokenOne(t *testing.T) {
+	h, _ := newTestServerWith(t, "", nil, memory.Nop{})
+	got := decode[MemoryStatus](t, do(t, h, http.MethodGet, "/v1/cli/memory", ""))
+	if got.Configured || got.OK || got.Error != "" {
+		t.Fatalf("no store is not a failing store: %+v", got)
+	}
+}
+
+func TestMemoryProbeNeedsTheToken(t *testing.T) {
+	h, _, _ := newTestServer(t, "secret", nil)
+	if rec := do(t, h, http.MethodGet, "/v1/cli/memory", ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status %d, want 401: the probe makes the daemon read the store", rec.Code)
 	}
 }

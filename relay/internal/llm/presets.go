@@ -2,9 +2,10 @@ package llm
 
 import (
 	"fmt"
-	"os"
 	"sort"
 	"strings"
+
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/config"
 )
 
 // Preset captures the three things that differ between providers, plus the
@@ -96,7 +97,7 @@ func Presets() []string {
 // because a model swapped at runtime has to be applied to the same chain of
 // providers that was configured at boot, and a built Provider no longer says
 // which presets it came from.
-func EnvSpec() string { return strings.TrimSpace(os.Getenv("SHOULDER_LLM")) }
+func EnvSpec() string { return strings.TrimSpace(config.Setting("SHOULDER_LLM")) }
 
 // FromEnv builds the configured provider. SHOULDER_LLM names one preset,
 // or several separated by commas, in which case they are tried in order. Base
@@ -164,10 +165,10 @@ func build(name string, allowOverrides bool, model string) (Provider, error) {
 
 	key := ""
 	if allowOverrides {
-		key = os.Getenv("SHOULDER_LLM_KEY")
+		key = config.Setting("SHOULDER_LLM_KEY")
 	}
 	if key == "" && p.KeyEnv != "" {
-		key = os.Getenv(p.KeyEnv)
+		key = config.Setting(p.KeyEnv)
 	}
 	if key == "" && p.KeyEnv != "" {
 		return nil, fmt.Errorf("provider %q needs %s or SHOULDER_LLM_KEY", name, p.KeyEnv)
@@ -175,11 +176,11 @@ func build(name string, allowOverrides bool, model string) (Provider, error) {
 
 	base := p.BaseURL
 	if allowOverrides {
-		if v := os.Getenv("SHOULDER_LLM_BASE_URL"); v != "" {
+		if v := config.Setting("SHOULDER_LLM_BASE_URL"); v != "" {
 			base = v
 		}
 		if model == "" {
-			model = os.Getenv("SHOULDER_LLM_MODEL")
+			model = config.Setting("SHOULDER_LLM_MODEL")
 		}
 	}
 	if model == "" {

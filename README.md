@@ -65,35 +65,31 @@ mkdir -p ~/.config/opencode/plugins
 curl -o ~/.config/opencode/plugins/shoulder-daemon.js https://gitlab.com/quittymr/shoulder-daemon/-/raw/main/adapters/opencode/shoulder-daemon.js
 ```
 
-### Getting the daemon yourself
+That is the whole install. There is no store to run, no embedding model to pull
+and no token to generate: the daemon remembers in a file of its own, ranks with
+a model compiled into the binary, and generates the shared secret the hooks need
+where the editor reads it.
 
-- **Release binary** - every [release](https://github.com/QuittyMR/shoulder-daemon/releases/latest)
-  carries Linux, macOS and Windows builds for amd64 and arm64 beside a
-  `SHA256SUMS`; the [GitLab release](https://gitlab.com/quittymr/shoulder-daemon/-/releases)
-  carries the same files.
-- **`go install`** - into `$(go env GOPATH)/bin`, which needs to be on your `PATH`:
+One more file gives it a decision model, and it is the only thing anybody has to
+write by hand:
 
-  ```bash
-  go install gitlab.com/quittymr/shoulder-daemon/relay/cmd/shoulderd@latest
-  ```
+```bash
+mkdir -p ~/.config/shoulder-daemon
+cat > ~/.config/shoulder-daemon/env <<'EOF'
+SHOULDER_LLM=gemini
+GEMINI_API_KEY=...
+EOF
+chmod 600 ~/.config/shoulder-daemon/env
+```
 
-- **Container** - `ghcr.io/quittymr/shoulder-daemon` and
-  `registry.gitlab.com/quittymr/shoulder-daemon`, both multi-arch.
-  [`deploy/docker-compose.yml`](deploy/docker-compose.yml) runs it on host
-  networking so hooks still reach `127.0.0.1:8787`.
-
-`shoulderd version` says which one you have and where it came from, and
-`shoulderd doctor` tells you when a newer release exists.
+The daemon reads that file itself, so nothing needs exporting and no editor has
+to be told about it. Restart yours and `shoulderd doctor` will say what is
+still missing. Everything else - the daemon by hand, a memory service instead of
+the built-in store, running from a checkout, and every setting there is - lives
+in [docs/INSTALL.md](docs/INSTALL.md).
 
 OpenCode is the better informed of the two: Claude Code no longer exposes thinking tokens, so the
 decision pass sees less of what the agent is actually doing.
-
-Select a model:
-
-```bash
-export SHOULDER_LLM=gemini          # and GEMINI_API_KEY
-export SHOULDER_MEMORY_URL=http://127.0.0.1:8100    # optional; without it nothing is stored
-```
 
 ### Choosing a model
 
@@ -119,9 +115,53 @@ one machine `gemini-3.5-flash-lite` answered in 0.9s and one coding-plan
 endpoint took 29s, so time your own choice - the `shoulder_hook_latency_seconds`
 metric with `event="advisor"` reports what the pass is costing you.
 
-Those variables have to reach the daemon, which is not always the shell you
-typed them in. If you run it as a container, a service, or from an editor
-adapter, see [docs/INSTALL.md](docs/INSTALL.md) for where to put them.
+Put the choice and its key in `~/.config/shoulder-daemon/env` as above. The
+daemon reads that file wherever it was started from - a container, a service
+manager or an editor - which is what stops a key that is set in your login shell
+from being invisible to the process that needs it.
+
+### Where the facts go
+
+By default, into the daemon: held in memory while it runs and written to one
+JSON file, `~/.local/share/shoulder-daemon/facts.json`, mode 600, replaced whole
+through a temporary file so an interrupted write cannot cost you the previous
+facts.
+
+Recall is by embedding. The model is compiled into the binary — 40,000 GloVe
+word vectors quantised to a byte a dimension, about 4MB of it, mean-pooled with
+rarity weighting and the common direction taken back out — so a question is
+answered by what it means and not by which words it repeats. "where does this
+get deployed" recalls "we ship to the staging cluster", which shares not one
+word with it. There is no model to pull, no key, no service and no network call:
+it works the moment the daemon is installed, on a machine with nothing else on
+it.
+
+It is a word-vector model, not a transformer: word order is lost and negation is
+invisible to it, which is why a fact and its contradiction collide and supersede
+each other rather than both being stored. Set `SHOULDER_MEMORY_URL` and it uses
+[mcp-memory-service](https://github.com/doobidoo/mcp-memory-service) instead —
+worth it for a store shared between machines, or one large enough to want a
+transformer behind it. Which of its own backends sits there (SQLite-vec,
+Cloudflare, Milvus) is invisible from here. [docs/INSTALL.md](docs/INSTALL.md)
+has the one command that starts it.
+
+How much the built-in store gives up is measured rather than asserted:
+`relay/internal/memory/compare_test.go` loads both stores with the same corpus
+and asks the same questions. Today it answers 11 of 15 with the right fact
+first, against 14 of 15 for the service, and holds every fact either does;
+[docs/INSTALL.md](docs/INSTALL.md) has the command and what the four it loses
+have in common.
+
+More connectors are coming. A backend sits behind a five-method `Connector`
+interface that names nothing specific to any product, and `memory.TestConnector`
+is a conformance suite a new one runs against itself — the built-in store passes
+the same suite as the service — so a connector is a small, self-contained piece
+of work; see [CONTRIBUTING.md](CONTRIBUTING.md). If you want a particular store,
+say so: open an issue on
+[GitLab](https://gitlab.com/quittymr/shoulder-daemon/-/issues) or
+[GitHub](https://github.com/QuittyMR/shoulder-daemon/issues), or mail
+thomas@lumea-technologies.com. Naming the one you use is the fastest way to get
+it built, and a patch is welcome too.
 
 Use `shoulderd doctor` to verify the validity of your installation and setup.
 
@@ -160,7 +200,7 @@ each one.
 
 | | What triggers it | Where it stores | Why we built this instead |
 |---|---|---|---|
-| **shoulder-daemon** | A small model reads each turn | any backend behind a five-method interface | - |
+| **shoulder-daemon** | A small model reads each turn | a file it manages, embeddings included, or mcp-memory-service | - |
 | [Natural Memory Triggers](https://github.com/doobidoo/mcp-memory-service) | regex and keyword matches on your prompt | SQLite-vec, Cloudflare or Milvus | Triggers on preset keywords only |
 | [PowerContext](https://github.com/oceanbase/powercontext) | Every prompt | SQLite / OceanBase | Team-focused, no consolidation or supersession, and more invasive, but possibly the best alternative here |
 | [claude-code-semantic-memory](https://github.com/razor-ai/claude-code-semantic-memory) | Embedding similarity on your prompt | SQLite/Ollama | Read-only - no learning, no supersession |
@@ -170,17 +210,19 @@ each one.
 ## Docs
 
 - [How it works](docs/ARCHITECTURE.md) - the hot path, the injection budget, why a hook can't block
-- [Install and configure](docs/INSTALL.md)
+- [Install and configure](docs/INSTALL.md) - the whole install, every setting, and how the built-in store measures up against a memory service
 - [Advisor protocol](docs/ADVISOR.md) - bring your own decision model
-- [Contributing](CONTRIBUTING.md) - house rules, and what a new connector or adapter takes
+- [Contributing](CONTRIBUTING.md) - house rules, what a new connector or adapter takes, and the four test suites and what each one is for
 - [Security policy](SECURITY.md) - what is in scope, and how to report privately
 - [Changelog](CHANGELOG.md)
 
 ## Status
 
 Working and tested against Claude Code 2.1.251 and OpenCode 1.18.25. Neither Go
-module depends on anything outside the standard library. More model and memory
-connectors are coming; no version has been tagged yet.
+module depends on anything outside the standard library; the one piece of
+third-party material is the embedding table, which is public-domain GloVe data
+(see `relay/internal/memory/vectors/NOTICE`). More model and memory connectors
+are coming - ask for the one you want; no version has been tagged yet.
 
 Development happens on [GitLab](https://gitlab.com/quittymr/shoulder-daemon) and on
 [GitHub](https://github.com/QuittyMR/shoulder-daemon). Both are live - open an issue

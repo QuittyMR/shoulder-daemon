@@ -13,27 +13,32 @@ one settings key. Nothing here needs Node, Python, Go, or any other runtime; the
 Sections 1 to 4 cover the adapter. Sections 5 to 7 cover the relay it talks to, the command
 line you use to talk to it yourself, and the settings that command can change on a running daemon.
 
-## 1. Set `SHOULDER_TOKEN` before starting Claude Code
+## 1. The token, which you do not have to set
 
-```bash
-export SHOULDER_TOKEN="$(openssl rand -hex 32)"
-claude
-```
+The daemon generates a token on first start, keeps it in
+`~/.local/share/shoulder-daemon/token`, and writes it into `env.SHOULDER_TOKEN` of
+`~/.claude/settings.json` and into its own env file. Nothing else in your setup changes, and the
+CLI reads the same value, so a terminal that has sourced nothing can still talk to the daemon. You
+do not have to do anything here.
 
-Put the `export` in your shell profile (or wherever you set env vars for the terminal Claude Code
-runs in) so it is present every time, not just this once.
-
-**Why this matters:** Claude Code sends **no authentication header by default** - verified in
-Phase 0 against Claude Code 2.1.251, whose captured hook payloads are in
+**Why there is a token at all:** Claude Code sends **no authentication header by default** -
+verified against Claude Code 2.1.251, whose captured hook payloads are in
 `testdata/hook-payloads/2.1.251/`. Every hook request arrives at the relay with
 only `Accept, Accept-Encoding, Connection, Content-Length, Content-Type, User-Agent`. Without a
-token configured, the relay's `127.0.0.1:8787` listener is open to **any local process** that can
-reach loopback - not just Claude Code. The token is what turns that into an authenticated channel:
-`hooks/hooks.json` sends it as `X-Shoulder-Token: ${SHOULDER_TOKEN}`, and the relay must
-reject requests that don't present the matching value.
+token, the relay's `127.0.0.1:8787` listener is open to **any local process** that can reach
+loopback - and to any page open in a browser, for which localhost is not special. `hooks.json`
+sends the value as `X-Shoulder-Token: ${SHOULDER_TOKEN}` and the relay rejects requests that do not
+present it.
 
-If you run several Claude Code projects against the same relay, use the same token for all of them;
-the relay authenticates the caller, not the project.
+An editor reads its environment when it launches, so the session that started the daemon may
+predate the value being written. Until the daemon sees one correct token it accepts hooks without
+one, and from that moment it requires it; the window closes on the first hook of the first session
+that has it, not on a timer.
+
+Setting `SHOULDER_TOKEN` yourself overrides all of this and nothing is written to your files. Do
+that if you run several machines against one relay, or if you would rather the value came from your
+own secret store. The relay authenticates the caller, not the project, so every project on one
+machine uses one token.
 
 ## 2. Check `allowedHttpHookUrls` - the silent-block trap
 
@@ -151,7 +156,7 @@ stored, every fact superseded, and every piece of advice queued and injected, wi
 to `balanced` (2). Higher stores less and takes only a rule the user stated outright; lower stores
 more, including a rule only implied, and leans on the existing consolidation pass to clean up after
 itself. Like `LOG_LEVEL`, an unrecognised value falls back to the default rather than refusing to
-start. It's read at boot but not fixed there - section 7 covers changing it, and the other three live
+start. It's read at boot but not fixed there - section 8 covers changing it, and the other three live
 settings, on a daemon that's already running.
 
 It stops when the last session ends: the harness sends `SessionEnd`, and if no
@@ -169,14 +174,14 @@ into something that thinks:
 ```bash
 export SHOULDER_LLM=gemini            # or glm-coding, glm, openrouter, openai, opencode-go, local
 export GEMINI_API_KEY=…               # the key variable belongs to the preset you chose
-export SHOULDER_MEMORY_URL=http://127.0.0.1:8100
+export SHOULDER_MEMORY_URL=http://127.0.0.1:8100   # optional; without it the built-in store is used
 export SHOULDER_MEMORY_KEY=…          # if your memory service requires one
 ```
 
 A comma-separated `SHOULDER_LLM` is a failover chain tried left to right. With `SHOULDER_LLM`
 unset the relay logs a warning naming the available presets and never speaks; with
-`SHOULDER_MEMORY_URL` unset it warns that nothing will be recalled or stored and runs on the no-op
-connector. Neither is fatal, and neither affects your coding session. The full variable table is in
+`SHOULDER_MEMORY_URL` unset it remembers in its own file and says where. Neither is fatal, and
+neither affects your coding session. The full variable table is in
 the repository README; `docs/ADVISOR.md` covers the model side in detail.
 
 `make up` runs the same binary under `deploy/docker-compose.yml` with host networking, which is
@@ -185,7 +190,7 @@ what keeps the listener on loopback with no port published to any other interfac
 To check the relay itself rather than the hooks:
 
 ```bash
-./bin/shoulderd doctor            # relay, metrics, and which hook events have ever fired
+./bin/shoulderd doctor            # relay, metrics, the store, and which hook events have ever fired
 ./bin/shoulderd doctor --json     # the same, machine-readable
 ./bin/shoulderd doctor --liveness # only "is the process serving?", for container healthchecks
 ```
@@ -193,7 +198,80 @@ To check the relay itself rather than the hooks:
 `--liveness` exists because a correctly running relay has seen no hooks at all until somebody
 starts a coding session, so a healthcheck must ask the weaker question.
 
-## 6. Talk to it directly: local and global knowledge
+## 6. Where the facts go
+
+The daemon has a store inside it and uses it unless told otherwise, so this section is optional.
+Everything it learns is held in memory and written to one JSON file — `facts.json` under
+`~/.local/share/shoulder-daemon/`, or wherever `SHOULDER_MEMORY_PATH` points — as a whole file
+through a temporary one, so an interrupted write leaves the previous facts rather than half of the
+new ones. It is mode 600, because everything you have said in front of an agent is in it.
+
+Recall is by embedding, with the model compiled into the binary: 40,000 GloVe word vectors at 100
+dimensions, quantised to a signed byte each, mean-pooled with rarity weighting and the vocabulary's
+common direction projected back out. It adds about 4MB to the binary and needs nothing at runtime —
+no download, no key, no service, no network. Vectors are computed once per record and stored beside
+it, tagged with the model that produced them, so a later table cannot be compared against an
+earlier one's numbers. A record whose vector is missing or stale is scored on words in common
+instead of being lost.
+
+What it is not is a transformer. Word order is lost and negation is invisible, so "releases ship on
+Fridays" and "releases never ship on Fridays" read as the same claim — which is why the second one
+collides with the first and supersedes it rather than being stored beside it. Sentences of three or
+four words are too short to place well; a turn's worth of text is not.
+
+`shoulderd doctor` reports which store is in use on its `memory:` line, and the daemon names the
+table and its vocabulary size at startup.
+
+**How much you give up.** Measured, not asserted:
+`relay/internal/memory/compare_test.go` loads both stores with the same twenty facts and asks the
+same fifteen questions - plain recall, families of facts that differ by one identifier, direction,
+paths and identifiers, long facts, negation, synonymy - and reports where each put the record that
+answers each question:
+
+```bash
+podman run -d --rm --name mem --network host -e MCP_MODE=http -e MCP_HTTP_HOST=127.0.0.1 \
+  -e MCP_HTTP_PORT=8101 -e MCP_ALLOW_ANONYMOUS_ACCESS=true \
+  docker.io/doobidoo/mcp-memory-service:11-slim
+SHOULDER_MEMORY_URL=http://127.0.0.1:8101 go test -tags compare ./internal/memory/ -run TestCompare -v
+```
+
+At the time of writing the built-in store answers 11 of 15 with the right fact first and 14 of 15
+within the top three; mcp-memory-service answers 14 of 15 first. The four it puts second or lower
+are questions whose only link to the stored fact is that two words are related in meaning, which a
+mean of word vectors barely represents and a transformer does. It wins one the service loses. Run it
+yourself before believing either number, and run `TestCompareIdentifierFamily` too: that one is the
+scenario a store like this fails worst, eight facts that differ only in a port number, and it is
+what the numeric guard in the store exists for.
+
+**Using mcp-memory-service instead.** Set `SHOULDER_MEMORY_URL` and the daemon uses
+[mcp-memory-service](https://github.com/doobidoo/mcp-memory-service) for everything instead of its
+own file. It is the right move for a store shared between machines, or one large enough that
+embedding-based recall earns its keep. A container is the short version:
+
+```bash
+docker run -d --name shoulder-memory --network host --restart unless-stopped \
+  -e MCP_MODE=http -e MCP_HTTP_HOST=127.0.0.1 -e MCP_HTTP_PORT=8100 \
+  -e MCP_ALLOW_ANONYMOUS_ACCESS=true -v shoulder-memory:/app/data \
+  docker.io/doobidoo/mcp-memory-service:11-slim
+```
+
+From a checkout, `make memory` starts the same service out of `deploy/docker-compose.yml`. Use the
+`-slim` tags: the unsuffixed ones are amd64 only. The first start downloads an ONNX embedding model
+and takes a few minutes. Then `SHOULDER_MEMORY_URL=http://127.0.0.1:8100` where the daemon reads
+it, and restart it.
+
+**Anonymous access or a key.** `MCP_ALLOW_ANONYMOUS_ACCESS=true` is what makes writes work at all;
+without it the store answers 401 to every request and the daemon logs a write it never made. On a
+listener bound to 127.0.0.1 it grants what a local database file already grants: anything on this
+machine can read it. To require a key instead, set `MCP_API_KEY` on the store and the same value as
+`SHOULDER_MEMORY_KEY` on the daemon, and leave anonymous access off - with it on, a key is checked
+first and then not required, which is a key that protects nothing.
+
+Nothing above the connector boundary knows which of the two is running. A third backend is a
+five-method interface in `relay/internal/memory/` and a conformance suite it has to pass; see
+[CONTRIBUTING.md](../CONTRIBUTING.md), and say which store you want.
+
+## 7. Talk to it directly: local and global knowledge
 
 Everything shoulder-daemon stores is either **local** to one project or **global** to you.
 
@@ -228,10 +306,12 @@ covers both scopes. The project is the root of the git worktree, or the working 
 when that is not a checkout.
 
 Every subcommand is a thin HTTP client against the running relay. It reads the address from
-`SHOULDER_ADDR` (override with `--addr`) and the token from `SHOULDER_TOKEN`. If nothing is
-listening you get one line saying so and a non-zero exit - the CLI does not start a daemon for you.
+`SHOULDER_ADDR` (override with `--addr`) and the token from `SHOULDER_TOKEN`, the env file, or the
+generated token file, in that order, so a terminal that has sourced nothing still works. If nothing
+is listening you get one line saying so and a non-zero exit - the CLI does not start a daemon for
+you.
 
-## 7. Change settings on a running daemon
+## 8. Change settings on a running daemon
 
 Four of the settings above don't need a restart: the log level, the pickiness, and the provider and
 model that answer. `shoulderd config` reads them; `shoulderd config set` turns them.
@@ -260,14 +340,13 @@ Both commands are a thin client over `GET /v1/cli/config` and `PATCH /v1/cli/con
 
 ## Where configuration lives
 
-Everything is environment driven, which raises the only awkward question here:
-whose environment. A daemon you start by hand inherits the shell you typed in.
-A daemon started by an editor adapter, a container or a service manager does
-not, and the failure is quiet - it comes up, reports itself healthy, observes
-every turn and has no model to ask, so it stays silent and looks like it is
-simply never finding anything to say.
+Everything is environment driven, which used to raise an awkward question: whose
+environment. A daemon you start by hand inherits the shell you typed in; a daemon started by an
+editor adapter, a container or a service manager does not, and the failure is quiet - it comes up,
+reports itself healthy, observes every turn and has no model to ask, so it stays silent and looks
+like it is simply never finding anything to say.
 
-Keep the settings in a file and point at it:
+So there is one file, and the daemon reads it itself. Nothing has to be exported for it to be found:
 
 ```bash
 mkdir -p ~/.config/shoulder-daemon
@@ -275,13 +354,19 @@ cat > ~/.config/shoulder-daemon/env <<'EOF'
 SHOULDER_LLM=glm-coding,gemini
 GLM_API_KEY=...
 GEMINI_API_KEY=...
-SHOULDER_TOKEN=a-shared-secret
 SHOULDER_MEMORY_URL=http://127.0.0.1:8100
 SHOULDER_MEMORY_KEY=...
 EOF
 chmod 600 ~/.config/shoulder-daemon/env
-export SHOULDER_ENV_FILE=~/.config/shoulder-daemon/env
 ```
+
+Restart the daemon and it is running on those settings. `$SHOULDER_ENV_FILE` names a different file
+if you keep yours elsewhere, and anything already in the process environment wins over the file, so
+a value you exported deliberately is never overridden by one you may have forgotten. The CLI reads
+the same file, which is why `shoulderd doctor` works in a terminal that has sourced nothing.
+
+Switching the store is that file and a restart: add `SHOULDER_MEMORY_URL` for a memory service,
+remove it for the one built into the daemon.
 
 `deploy/docker-compose.yml` reads `${SHOULDER_ENV_FILE:-.env}`, so with that
 variable set `make up` uses your file, and without it falls back to `deploy/.env`
@@ -291,9 +376,11 @@ preference to nothing, which is how a daemon ends up running on settings you
 forgot you wrote.
 
 `SHOULDER_TOKEN` has to match on both sides: the daemon checks it, and the
-adapter sends it as `X-Shoulder-Token`. When they differ every hook is rejected
-and the session carries on as though nothing were installed, because hooks fail
-open. `shoulderd doctor` reports that as `auth: N REJECTED`.
+adapter sends it as `X-Shoulder-Token`. The daemon keeps them in step by
+generating the value and writing it into both places, so this only comes apart
+when somebody sets it themselves in one of them. When they differ every hook is
+rejected and the session carries on as though nothing were installed, because
+hooks fail open. `shoulderd doctor` reports that as `auth: N REJECTED`.
 
 `make install-plugins`, which `make update` runs, writes the path-dependent
 settings itself: `SHOULDER_START_CMD` for the checkout it is run from, a
@@ -302,18 +389,15 @@ the `env` block of `~/.claude/settings.json`. Moving or renaming the checkout is
 therefore repaired by running it again, rather than by hunting a stale absolute
 path through two config files.
 
-The OpenCode adapter falls back to the env file for any `SHOULDER_` variable its
-process does not already have, looking at `$SHOULDER_ENV_FILE` and then at
-`~/.config/shoulder-daemon/env`. An editor started from a desktop launcher
-inherits the session environment rather than your login shell's, so the exports
-above are usually missing from it, and without the token the adapter posts
-unauthenticated against a daemon that is up and healthy.
+The OpenCode adapter reads the same file for any `SHOULDER_` variable its process does not already
+have. An editor started from a desktop launcher inherits the session environment rather than your
+login shell's, so exports are usually missing from it, and that file is what keeps such a session
+observed anyway.
 
-The Claude Code adapter has no such fallback: its hooks are configured with
-`${SHOULDER_TOKEN}` and the value is interpolated by the editor, so both
-`SHOULDER_ENV_FILE` and `SHOULDER_START_CMD` belong wherever your editor sets
-environment at startup. For Claude Code that is the `env` block in
-`~/.claude/settings.json`:
+The Claude Code adapter cannot: its hooks carry `${SHOULDER_TOKEN}` and the editor interpolates it
+from its own environment before any of our code runs. That is why the daemon writes the token into
+`~/.claude/settings.json` rather than expecting you to. `SHOULDER_START_CMD` belongs there too when
+you run the daemon from a checkout, since the editor is what runs it:
 
 ```json
 {
@@ -324,6 +408,28 @@ environment at startup. For Claude Code that is the `env` block in
   }
 }
 ```
+
+## Getting the daemon yourself
+
+The Claude Code plugin fetches it for you. Every other route to the same binary:
+
+- **Release binary** - every [release](https://github.com/QuittyMR/shoulder-daemon/releases/latest)
+  carries Linux, macOS and Windows builds for amd64 and arm64 beside a `SHA256SUMS`; the
+  [GitLab release](https://gitlab.com/quittymr/shoulder-daemon/-/releases) carries the same files.
+- **`go install`** - into `$(go env GOPATH)/bin`, which needs to be on your `PATH`:
+
+  ```bash
+  go install gitlab.com/quittymr/shoulder-daemon/relay/cmd/shoulderd@latest
+  ```
+
+- **Container** - `ghcr.io/quittymr/shoulder-daemon` and
+  `registry.gitlab.com/quittymr/shoulder-daemon`, both multi-arch.
+  [`deploy/docker-compose.yml`](../deploy/docker-compose.yml) runs it on host networking so hooks
+  still reach `127.0.0.1:8787`, and keeps its store on a volume.
+
+`shoulderd version` says which one you have and where it came from, and `shoulderd doctor` tells you
+when a newer release exists. A `shoulderd` already on `PATH` is used in preference to the fetched
+one, so none of these is ever second-guessed by the plugin.
 
 ## Running from a checkout
 
@@ -343,21 +449,25 @@ Everything is environment driven. The only two you need:
 | Variable | Purpose |
 |---|---|
 | `SHOULDER_LLM` | `gemini`, `glm`, `glm-coding`, `openrouter`, `openai`, `opencode-go`, `local`. Comma-separate for a failover chain. |
-| `SHOULDER_MEMORY_URL` | Base URL of your memory backend. Unset means it observes and answers but stores nothing. |
+| `SHOULDER_MEMORY_URL` | Base URL of a memory service. Unset means the store built into the daemon. |
+| `SHOULDER_MEMORY_PATH` | Where that built-in store writes. Defaults to `~/.local/share/shoulder-daemon/facts.json`. |
 
-Then `SHOULDER_TOKEN` (shared secret for the hooks, strongly advised),
-`SHOULDER_ADDR`, `SHOULDER_MEMORY_KEY`, `SHOULDER_LOG`, `SHOULDER_DRY_RUN`, and
-the `WINDOW_*`, `BUDGET_*` and `ADVISOR_*` tuning knobs. See
-[docs/INSTALL.md](docs/INSTALL.md).
+Then `SHOULDER_TOKEN` (generated for you; set it only to override),
+`SHOULDER_ADDR`, `SHOULDER_MEMORY_KEY`, `SHOULDER_LOG`, `SHOULDER_DRY_RUN`,
+`SHOULDER_IDLE_EXIT_MINUTES` (60; zero turns it off) and the `WINDOW_*`,
+`BUDGET_*` and `ADVISOR_*` tuning knobs, all of which belong in the env file
+described under "Where configuration lives".
 
 **Models.** Gemini, GLM (pay-as-you-go and Coding Plan), OpenRouter, OpenCode Go,
 OpenAI, and any OpenAI-compatible endpoint including a local Ollama. Comma-
 separate `SHOULDER_LLM` for a failover chain. More coming.
 
-**Memory.** [mcp-memory-service](https://github.com/doobidoo/mcp-memory-service)
-today. Backends sit behind a five-method `Connector` interface that names nothing
-specific to any product; `memory.TestConnector` is an exported conformance suite
-a new one can run against itself. More coming.
+**Memory.** The store built into the daemon by default, and
+[mcp-memory-service](https://github.com/doobidoo/mcp-memory-service) when
+`SHOULDER_MEMORY_URL` is set; section 6 covers both. Backends sit behind a
+five-method `Connector` interface that names nothing specific to any product;
+`memory.TestConnector` is an exported conformance suite a new one can run
+against itself. More coming - ask for the one you want.
 
 ## After an update
 

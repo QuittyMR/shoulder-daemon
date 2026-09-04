@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -24,6 +25,7 @@ import (
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/httpapi"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/llm"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/memory"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/memory/vectors"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/outbox"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/pipeline"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/session"
@@ -50,14 +52,22 @@ func serve() error {
 	level.Set(cfg.LogLevel)
 	log := newLogger(cfg.LogPath, level)
 
-	if cfg.Token == "" {
-		log.Warn("SHOULDER_TOKEN is unset; any local process can post events and read advice for a live session")
+	// A generated token is one the harness has not necessarily been given yet:
+	// an editor reads its environment at launch, and the daemon it started may
+	// be the run that wrote the value into the editor's settings. Adopting
+	// tells the hook surface to let that session through until it sees the
+	// token once, rather than turning away every hook until somebody restarts
+	// their editor.
+	token, adopting := ensureToken(log)
+	if token == "" {
+		log.Warn("running with no token; any local process can post events and read advice for a live session")
 	}
 
 	reg := session.NewRegistry(200)
 	box := outbox.New()
 	queue := make(chan session.Event, cfg.QueueSize)
-	srv := httpapi.New(reg, box, queue, cfg.Token, cfg.Budget)
+	srv := httpapi.New(reg, box, queue, token, cfg.Budget)
+	srv.Adopting = adopting
 	srv.Log = log
 	provider, err := llm.FromEnv()
 	if err != nil {
@@ -68,8 +78,13 @@ func serve() error {
 			"hint", "set SHOULDER_LLM to one of: "+strings.Join(llm.Presets(), ", "))
 	}
 
-	var mem memory.Connector = memory.Nop{}
-	if cfg.MemoryURL != "" {
+	// A memory service if one was named, and otherwise the store that ships
+	// inside this binary. Nothing is the last resort rather than the default,
+	// because a daemon that cannot write is a daemon that watched a whole
+	// session and kept none of it.
+	var mem memory.Connector
+	switch {
+	case cfg.MemoryURL != "":
 		store := memory.NewMCPMemory(cfg.MemoryURL, cfg.MemoryKey, 15*time.Second)
 		// What the store discards on the way to an answer is invisible from
 		// above it: a recall that returns nothing because the project's own
@@ -77,9 +92,29 @@ func serve() error {
 		// an empty store.
 		store.Metrics = srv.Metrics
 		mem = store
-	} else {
-		log.Warn("no memory backend configured; nothing will be recalled or stored",
-			"hint", "set SHOULDER_MEMORY_URL to an mcp-memory-service base URL")
+	default:
+		local, lerr := memory.NewLocal(cfg.MemoryPath, vectors.Embedder{})
+		if lerr != nil {
+			// Refusing to start would take the session's advice down with the
+			// store, and the two are not the same loss. This is loud instead:
+			// an unreadable file is somebody's facts, and overwriting them is
+			// the one outcome that cannot be undone.
+			log.Error("the local store could not be opened; nothing will be recalled or stored",
+				"path", cfg.MemoryPath, "error", lerr)
+			mem = memory.Nop{}
+			break
+		}
+		words, verr := vectors.Words()
+		if verr != nil {
+			// The table is compiled in, so this is a build that went wrong
+			// rather than a machine that is missing something. Recall still
+			// works on words in common; it is simply worse than it should be.
+			log.Warn("the embedding table did not load; recall will be lexical", "error", verr)
+		}
+		log.Info("remembering locally", "path", local.Path(), "facts", local.Len(),
+			"embedding", vectors.Model, "vocabulary", words,
+			"hint", "set SHOULDER_MEMORY_URL to use a memory service instead")
+		mem = local
 	}
 	// Wrapping here is what makes local-or-global a property of the system: no
 	// caller above this line can reach a backend with a record that never chose.
@@ -101,7 +136,7 @@ func serve() error {
 	// and live in another package only because this one may not import the
 	// advisor or the store.
 	mux := srv.Handler()
-	cliapi.New(pipe, cfg.Token).Mount(mux)
+	cliapi.New(pipe, token).Mount(mux)
 
 	hs := &http.Server{
 		Addr:              cfg.Addr,
@@ -117,7 +152,7 @@ func serve() error {
 
 	log.Info("shoulderd listening",
 		"addr", cfg.Addr, "llm", providerName(provider), "memory", mem.Name(),
-		"pickiness", cfg.Pickiness, "dry_run", cfg.Budget.DryRun, "auth", cfg.Token != "")
+		"pickiness", cfg.Pickiness, "dry_run", cfg.Budget.DryRun, "auth", token != "")
 
 	if err := hs.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
@@ -192,6 +227,27 @@ func (c *cli) doctor(args []string) int {
 		return 0
 	}
 
+	// Asked last, because it is the one check that makes the daemon do work,
+	// and asked at all because nothing else here can see it: a daemon pointed
+	// at a store that never answers passes every other line on this report
+	// while remembering nothing.
+	if st, merr := memoryStatus(*base); merr != nil {
+		out["memory"] = "unknown: " + merr.Error()
+	} else {
+		out["memory_name"] = st.Name
+		switch {
+		case !st.Configured:
+			out["memory"] = "none"
+			code = 1
+		case st.OK:
+			out["memory"] = "ok"
+		default:
+			out["memory"] = "unreachable"
+			out["memory_error"] = st.Error
+			code = 1
+		}
+	}
+
 	// A newer release is worth one line, not an exit code: a daemon behind by a
 	// version is still a working daemon. The proxy being unreachable says
 	// nothing about this machine, so that is not reported at all.
@@ -254,6 +310,20 @@ func (c *cli) doctor(args []string) int {
 		fmt.Println("         SHOULDER_TOKEN must hold the same value here and wherever the harness")
 		fmt.Println("         runs. Hooks fail open, so a session looks normal while nothing is observed.")
 	}
+	switch out["memory"] {
+	case "ok":
+		fmt.Printf("memory:  ok (%v)\n", out["memory_name"])
+	case "none":
+		fmt.Println("memory:  NONE: nothing is stored and nothing is recalled")
+		fmt.Println("         Start a store and give the daemon SHOULDER_MEMORY_URL; the two-line")
+		fmt.Println("         version is in the README, the rest in docs/INSTALL.md.")
+	case "unreachable":
+		fmt.Printf("memory:  UNREACHABLE (%v): %v\n", out["memory_name"], out["memory_error"])
+		fmt.Println("         The daemon holds a store it cannot read. Sessions look normal and")
+		fmt.Println("         every fact learned since it broke is gone.")
+	default:
+		fmt.Printf("memory:  %v\n", out["memory"])
+	}
 	if missing, ok := out["events_never_seen"].([]string); ok {
 		if len(missing) == 0 {
 			fmt.Println("hooks:   all expected events have fired at least once")
@@ -264,6 +334,36 @@ func (c *cli) doctor(args []string) int {
 		}
 	}
 	return code
+}
+
+// memoryStatus asks the daemon whether anything is being remembered. Only the
+// daemon can answer: the store is named in its environment, not in the shell
+// doctor was typed into, and reaching a URL proves nothing about a backend that
+// refuses every request behind it.
+func memoryStatus(base string) (cliapi.MemoryStatus, error) {
+	var st cliapi.MemoryStatus
+	req, err := http.NewRequest(http.MethodGet, strings.TrimSuffix(base, "/")+"/v1/cli/memory", nil)
+	if err != nil {
+		return st, err
+	}
+	if token := setting("SHOULDER_TOKEN"); token != "" {
+		req.Header.Set("X-Shoulder-Token", token)
+	}
+	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	if err != nil {
+		return st, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		// A daemon older than this CLI has never heard of the route, and a
+		// token mismatch is already reported on its own line. Neither is a
+		// verdict on the store, so neither becomes one.
+		return st, fmt.Errorf("the daemon answered %s", resp.Status)
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxReplyBytes)).Decode(&st); err != nil {
+		return st, err
+	}
+	return st, nil
 }
 
 // counterValue reads one Prometheus counter out of a scrape. It returns 0 when

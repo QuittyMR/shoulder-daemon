@@ -13,12 +13,22 @@ import (
 	"sync"
 	"testing"
 
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/cliapi"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/httpapi"
 )
 
-// relay stands in for a daemon that has seen the given events and turned away
-// the given number of hooks. doctor reads both off the metrics scrape.
+// relay stands in for a daemon that has seen the given events, turned away the
+// given number of hooks, and holds a store that answers. doctor reads the first
+// two off the metrics scrape and asks the daemon for the third.
 func relay(t *testing.T, healthy bool, seen []string, unauthorised int) *httptest.Server {
+	t.Helper()
+	return relayWithMemory(t, healthy, seen, unauthorised,
+		&cliapi.MemoryStatus{Name: "mcp-memory-service", Configured: true, OK: true})
+}
+
+// relayWithMemory is the same stand-in with the store's answer chosen by the
+// caller. A nil status is a daemon too old to know the route.
+func relayWithMemory(t *testing.T, healthy bool, seen []string, unauthorised int, mem *cliapi.MemoryStatus) *httptest.Server {
 	t.Helper()
 	var scrape strings.Builder
 	for _, e := range seen {
@@ -37,6 +47,12 @@ func relay(t *testing.T, healthy bool, seen []string, unauthorised int) *httptes
 			_, _ = io.WriteString(w, `{"ok":true}`)
 		case "/metrics":
 			_, _ = io.WriteString(w, scrape.String())
+		case "/v1/cli/memory":
+			if mem == nil {
+				http.NotFound(w, r)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(mem)
 		default:
 			http.NotFound(w, r)
 		}
@@ -190,6 +206,55 @@ func TestDoctorReportsANewerRelease(t *testing.T) {
 	out := stdout(t, func() { c.dispatch("doctor", []string{"--addr=" + srv.URL}) })
 	if !strings.Contains(out, "update:  v99.0.0 is out") {
 		t.Fatalf("a newer release must be announced:\n%s", out)
+	}
+}
+
+func TestDoctorSaysWhenNoStoreIsConfigured(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	noRelease(t)
+	srv := relayWithMemory(t, true, httpapi.RoutineEvents(), 0,
+		&cliapi.MemoryStatus{Name: "none"})
+	c := &cli{out: io.Discard, err: io.Discard}
+	var code int
+	out := stdout(t, func() { code = c.dispatch("doctor", []string{"--addr=" + srv.URL}) })
+	if code != 1 {
+		t.Fatalf("exit %d, want 1: a daemon that stores nothing is not healthy", code)
+	}
+	if !strings.Contains(out, "memory:  NONE") || !strings.Contains(out, "SHOULDER_MEMORY_URL") {
+		t.Fatalf("output must name the missing store and how to give it one:\n%s", out)
+	}
+}
+
+func TestDoctorSaysWhenTheStoreWillNotAnswer(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	noRelease(t)
+	srv := relayWithMemory(t, true, httpapi.RoutineEvents(), 0,
+		&cliapi.MemoryStatus{Name: "mcp-memory-service", Configured: true, Error: "status 401"})
+	c := &cli{out: io.Discard, err: io.Discard}
+	var code int
+	out := stdout(t, func() { code = c.dispatch("doctor", []string{"--addr=" + srv.URL}) })
+	if code != 1 {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	if !strings.Contains(out, "memory:  UNREACHABLE") || !strings.Contains(out, "status 401") {
+		t.Fatalf("output must carry the backend's own reason:\n%s", out)
+	}
+}
+
+// A daemon that has never heard of the route is old, not broken, and doctor
+// says so without turning a missing answer into a verdict on the store.
+func TestDoctorDoesNotCondemnAStoreItCouldNotAskAbout(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	noRelease(t)
+	srv := relayWithMemory(t, true, httpapi.RoutineEvents(), 0, nil)
+	c := &cli{out: io.Discard, err: io.Discard}
+	var code int
+	out := stdout(t, func() { code = c.dispatch("doctor", []string{"--addr=" + srv.URL}) })
+	if code != 0 {
+		t.Fatalf("exit %d, want 0", code)
+	}
+	if !strings.Contains(out, "memory:  unknown") {
+		t.Fatalf("output must say it could not ask:\n%s", out)
 	}
 }
 

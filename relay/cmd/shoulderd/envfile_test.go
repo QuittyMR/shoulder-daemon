@@ -3,8 +3,9 @@ package main
 import (
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
+
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/config"
 )
 
 // The file is read once per process. Each test here wants its own file, so
@@ -16,9 +17,8 @@ func resetEnvFile(t *testing.T, contents string) string {
 		t.Fatal(err)
 	}
 	t.Setenv("SHOULDER_ENV_FILE", path)
-	envOnce = sync.Once{}
-	envVars = nil
-	t.Cleanup(func() { envOnce = sync.Once{}; envVars = nil })
+	config.ResetEnvFile()
+	t.Cleanup(config.ResetEnvFile)
 	return path
 }
 
@@ -41,17 +41,20 @@ func TestASettingMissingFromTheShellComesFromTheDaemonsFile(t *testing.T) {
 	if got := setting("SHOULDER_ADDR"); got != "127.0.0.1:9000" {
 		t.Fatalf("spaced assignment read as %q", got)
 	}
-	if got := envFile()["PATH"]; got != "" {
-		t.Fatalf("only SHOULDER_ variables belong to the daemon, but PATH was read as %q", got)
+	// Every assignment is read, not only the SHOULDER_ ones: the daemon is
+	// configured from this file and a provider key is not called SHOULDER_
+	// anything. Nothing is applied to the process — a name is only ever looked
+	// up because something asked for it — so a PATH in the file is inert.
+	if got := setting("GEMINI_API_KEY"); got != "" {
+		t.Fatalf("a key that is not in the file was read as %q", got)
 	}
 }
 
 func TestAMissingFileIsSimplyNoSettings(t *testing.T) {
 	t.Setenv("SHOULDER_ENV_FILE", filepath.Join(t.TempDir(), "absent"))
 	t.Setenv("SHOULDER_TOKEN", "")
-	envOnce = sync.Once{}
-	envVars = nil
-	t.Cleanup(func() { envOnce = sync.Once{}; envVars = nil })
+	config.ResetEnvFile()
+	t.Cleanup(config.ResetEnvFile)
 	if got := setting("SHOULDER_TOKEN"); got != "" {
 		t.Fatalf("got %q from a file that does not exist", got)
 	}

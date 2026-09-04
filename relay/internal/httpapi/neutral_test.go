@@ -160,3 +160,44 @@ func TestWriteJSONFallsBackToSilenceWhenTheValueCannotBeEncoded(t *testing.T) {
 		t.Fatalf("an unencodable reply must become the silent answer, got %s", rec.Body.String())
 	}
 }
+
+// The daemon generates its own token, and the editor that started it read its
+// environment before that value existed. Enforcing immediately would turn away
+// every hook of the session that started the daemon, silently, which is the
+// failure this whole mechanism exists to remove.
+func TestAGeneratedTokenIsNotEnforcedUntilTheHarnessHasIt(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Token = "generated"
+	s.Adopting = true
+	h := s.Handler()
+
+	if rec := postNeutral(h, `{"session_id":"a1","event":"user_prompt"}`); rec.Code != http.StatusOK {
+		t.Fatalf("a hook with no token was turned away during adoption: %d", rec.Code)
+	}
+	if _, _, ok := s.Registry.Snapshot("a1"); !ok {
+		t.Fatal("the event was not observed")
+	}
+
+	// One correct header proves the harness has been restarted and holds the
+	// value; from here the window is closed for good.
+	if rec := postNeutral(h, `{"session_id":"a2","event":"user_prompt"}`, "generated"); rec.Code != http.StatusOK {
+		t.Fatalf("a correct token was rejected: %d", rec.Code)
+	}
+	before := s.Metrics.Get("shoulder_unauthorised_total")
+	postNeutral(h, `{"session_id":"a3","event":"user_prompt"}`)
+	if s.Metrics.Get("shoulder_unauthorised_total") != before+1 {
+		t.Error("a hook with no token was still accepted after the harness proved it has the token")
+	}
+}
+
+// A token somebody set by hand is not being adopted, and a wrong one is wrong
+// from the first request.
+func TestATokenGivenToTheDaemonIsEnforcedImmediately(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Token = "chosen-by-hand"
+	h := s.Handler()
+	postNeutral(h, `{"session_id":"b1","event":"user_prompt"}`)
+	if s.Metrics.Get("shoulder_unauthorised_total") != 1 {
+		t.Error("a hook with no token was accepted against a token the operator set")
+	}
+}

@@ -4,12 +4,12 @@ package config
 
 import (
 	"log/slog"
-	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/budget"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/memory"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/prompts"
 )
 
@@ -43,9 +43,16 @@ type Config struct {
 	MemoryURL string
 	MemoryKey string
 
-	// IdleExit stops the daemon after this long with no session. It is off by
-	// default: what ends the daemon is the last session ending, not a timer.
-	// Set it when a harness may die without sending SessionEnd.
+	// MemoryPath is the file the built-in store writes to, and is used only
+	// when no memory service was named.
+	MemoryPath string
+
+	// IdleExit stops the daemon after this long with no session. What normally
+	// ends it is the last session ending; this is the backstop for the harness
+	// that dies without saying goodbye, which otherwise leaves a daemon sitting
+	// on the machine until it is rebooted. An hour is long enough that nobody
+	// between two sessions ever notices it and short enough that a crash does
+	// not cost the day. Zero turns it off.
 	IdleExit time.Duration
 
 	QueueSize int
@@ -61,23 +68,24 @@ type Config struct {
 func Load() Config {
 	c := Config{
 		Addr:           Env("SHOULDER_ADDR", "127.0.0.1:8787"),
-		Token:          os.Getenv("SHOULDER_TOKEN"),
+		Token:          Setting("SHOULDER_TOKEN"),
 		AdvisorBaseURL: Env("ADVISOR_BASE_URL", "http://127.0.0.1:9090"),
 		AdvisorModel:   Env("ADVISOR_MODEL", "shoulder"),
-		AdvisorAPIKey:  os.Getenv("ADVISOR_API_KEY"),
+		AdvisorAPIKey:  Setting("ADVISOR_API_KEY"),
 		AdvisorTimeout: time.Duration(envInt("ADVISOR_TIMEOUT_SECONDS", 90)) * time.Second,
 		SystemPrompt:   Env("ADVISOR_SYSTEM_PROMPT", prompts.Advisor),
 		MessageTimeout: time.Duration(envInt("MESSAGE_TIMEOUT_SECONDS", 60)) * time.Second,
 		DigestTimeout:  time.Duration(envInt("DIGEST_TIMEOUT_SECONDS", 120)) * time.Second,
 		WindowEvents:   envInt("WINDOW_EVENTS", 40),
 		WindowChars:    envInt("WINDOW_CHARS", 12000),
-		MemoryURL:      os.Getenv("SHOULDER_MEMORY_URL"),
-		MemoryKey:      os.Getenv("SHOULDER_MEMORY_KEY"),
+		MemoryURL:      Setting("SHOULDER_MEMORY_URL"),
+		MemoryKey:      Setting("SHOULDER_MEMORY_KEY"),
+		MemoryPath:     Env("SHOULDER_MEMORY_PATH", memory.DefaultLocalPath()),
 		QueueSize:      envInt("QUEUE_SIZE", 1024),
-		IdleExit:       time.Duration(envInt("SHOULDER_IDLE_EXIT_MINUTES", 0)) * time.Minute,
-		LogPath:        os.Getenv("SHOULDER_LOG"),
+		IdleExit:       time.Duration(envInt("SHOULDER_IDLE_EXIT_MINUTES", 60)) * time.Minute,
+		LogPath:        Setting("SHOULDER_LOG"),
 		LogLevel:       logLevel(Env("LOG_LEVEL", "info")),
-		Pickiness:      pickiness(os.Getenv("SHOULDER_PICKINESS")),
+		Pickiness:      pickiness(Setting("SHOULDER_PICKINESS")),
 	}
 	g := budget.Default()
 	g.MinTurnGap = envInt("BUDGET_MIN_TURN_GAP", g.MinTurnGap)
@@ -92,7 +100,7 @@ func Load() Config {
 // empty. Exported so the packages that read their own variables use the same
 // empty-means-unset rule as Load.
 func Env(k, d string) string {
-	if v := os.Getenv(k); v != "" {
+	if v := Setting(k); v != "" {
 		return v
 	}
 	return d
@@ -129,7 +137,7 @@ func pickiness(s string) prompts.Pickiness {
 }
 
 func envInt(k string, d int) int {
-	if v := os.Getenv(k); v != "" {
+	if v := Setting(k); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			return n
 		}
@@ -138,7 +146,7 @@ func envInt(k string, d int) int {
 }
 
 func envBool(k string, d bool) bool {
-	if v := os.Getenv(k); v != "" {
+	if v := Setting(k); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
 			return b
 		}

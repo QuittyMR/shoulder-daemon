@@ -35,14 +35,40 @@ import (
 
 // model is free and small. Anything that can follow a one-line instruction will
 // do: these tests assert on what the daemon saw, not on what the model said.
-const model = "opencode-go/minimax-m3"
+// model is the one the editor is driven with. The default is free, which is the
+// right default for a suite anybody can run, and free endpoints stop answering
+// for hours at a time — every OpenCode test then skips and the suite proves
+// nothing. SHOULDER_IT_MODEL points it at one that is answering today.
+var model = envOr("SHOULDER_IT_MODEL", "opencode-go/minimax-m3")
 
-// runFor bounds one OpenCode invocation. A free model endpoint answers in about
-// fifteen seconds when it is answering at all and never when it is not, so this
-// is set to fail over to a skip rather than to wait out a queue.
-const runFor = 3 * time.Minute
+func envOr(name, fallback string) string {
+	if v := os.Getenv(name); v != "" {
+		return v
+	}
+	return fallback
+}
 
-var shoulderd string
+// runFor bounds one OpenCode invocation, and runTries is how many are worth
+// making. A hosted model answers in ten to forty seconds when it is answering,
+// and simply never when it is not — measured on one endpoint here, every other
+// invocation returned in under 40s and the rest had not answered after three
+// minutes. Waiting longer does not help and one more attempt usually does, so
+// the budget is spent on a second try rather than on a longer first one.
+const (
+	runFor   = 90 * time.Second
+	runTries = 2
+)
+
+var (
+	shoulderd string
+	// editorConfig is a configuration directory of the suite's own for the
+	// editor to load. Without it a run loads whatever the person running the
+	// suite has installed globally, and their plugins are then part of every
+	// test: one here answered a turn with a tool call the provider refused, so
+	// the editor exited non-zero and the daemon was blamed for it. Built once,
+	// because the first run against an empty one costs a minute.
+	editorConfig string
+)
 
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "shoulder-it")
@@ -51,6 +77,12 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	defer os.RemoveAll(dir)
+
+	editorConfig = filepath.Join(dir, "config")
+	if err := os.MkdirAll(editorConfig, 0o755); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 
 	shoulderd = filepath.Join(dir, "shoulderd")
 	build := exec.Command("go", "build", "-o", shoulderd, "./cmd/shoulderd")
@@ -88,6 +120,7 @@ type daemon struct {
 	t     *testing.T
 	addr  string
 	token string
+	facts string
 	cmd   *exec.Cmd
 	log   *strings.Builder
 	// stopped is closed, not sent on: both the cleanup and a test waiting for
@@ -110,12 +143,26 @@ func startDaemon(t *testing.T, extra ...string) *daemon {
 
 	d.cmd = exec.Command(shoulderd)
 	// A clean environment, not the developer's: an inherited SHOULDER_MEMORY_URL
-	// would have these tests writing into a real memory store.
+	// would have these tests writing into a real memory store, and the store the
+	// daemon keeps itself defaults to one under HOME, which is the same leak by
+	// another route. Both are pointed at a directory of this test's own.
+	//
+	// Not t.TempDir(): the daemon writes its store while it shuts down, and the
+	// framework removes that directory the moment the test ends, so the two
+	// race and the loser is reported as a failure of whatever test happened to
+	// be running. This one is removed after the daemon has actually exited.
+	factsDir, err := os.MkdirTemp("", "shoulder-facts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(factsDir) })
+	d.facts = filepath.Join(factsDir, "facts.json")
 	d.cmd.Env = append([]string{
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + os.Getenv("HOME"),
 		"SHOULDER_ADDR=" + d.addr,
 		"SHOULDER_TOKEN=" + d.token,
+		"SHOULDER_MEMORY_PATH=" + d.facts,
 		"LOG_LEVEL=DEBUG",
 	}, extra...)
 	d.cmd.Stdout = d.log
@@ -254,10 +301,37 @@ func (d *daemon) watch() (stop func() []observedSession) {
 // editor and can still be asked what it saw. A daemon whose last session ends
 // stops, which is the behaviour under test elsewhere in this file and would
 // otherwise make every assertion after a run a connection refused.
+//
+// It keeps posting, because holding a session open is not the same as opening
+// one: a session silent for a minute is evicted when any other session ends,
+// and an editor answering a slow model is silent for exactly that long. Without
+// the heartbeat this pin holds nothing whenever the model is having a bad day,
+// which is when a run takes long enough for it to matter.
 func (d *daemon) pin() {
 	d.t.Helper()
 	d.event(`{"session_id":"integration-pin","event":"session_start","cwd":"/"}`)
+
+	done := make(chan struct{})
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		tick := time.NewTicker(15 * time.Second)
+		defer tick.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-tick.C:
+				// A tool result, not a prompt: it keeps the session alive
+				// without asking the decision model anything, so a test that
+				// reads what the model was sent reads its own turns only.
+				d.event(`{"session_id":"integration-pin","event":"tool_result","tool_name":"Read"}`)
+			}
+		}
+	}()
 	d.t.Cleanup(func() {
+		close(done)
+		<-stopped
 		d.event(`{"session_id":"integration-pin","event":"session_end","cwd":"/"}`)
 	})
 }
@@ -310,16 +384,57 @@ func project(t *testing.T) string {
 	return dir
 }
 
-// run drives one OpenCode invocation to completion. env is added to a copy of
-// the caller's, because OpenCode needs its own credentials from the real HOME.
+// run drives one OpenCode invocation to completion, and gives up on the test
+// when the model behind the editor will not answer.
 func run(t *testing.T, dir, prompt string, env ...string) {
+	t.Helper()
+	if err := tryRun(t, dir, prompt, env...); err != nil {
+		t.Skipf("%v", err)
+	}
+}
+
+// runContinuing drives a second turn of the session the last run left behind.
+// Two invocations are two sessions otherwise, and advice is delivered to the
+// session that earned it on its next turn — so a test that wants to see advice
+// arrive has to give that session another turn rather than start a new one.
+func runContinuing(t *testing.T, dir, prompt string, env ...string) {
+	t.Helper()
+	var err error
+	for range runTries {
+		if err = runOnce(t, dir, prompt, []string{"--continue"}, env...); err == nil {
+			return
+		}
+	}
+	t.Skipf("%v", err)
+}
+
+// tryRun is the same thing for a caller that cannot skip: a skip from a
+// goroutine ends that goroutine alone, so a test that ran two editors at once
+// and skipped inside them went on to assert on sessions that never happened
+// and reported the model's silence as a leak between projects.
+//
+// env is added to a copy of the caller's, because OpenCode needs its own
+// credentials from the real HOME.
+func tryRun(t *testing.T, dir, prompt string, env ...string) error {
+	t.Helper()
+	var err error
+	for range runTries {
+		if err = runOnce(t, dir, prompt, nil, env...); err == nil {
+			return nil
+		}
+	}
+	return err
+}
+
+func runOnce(t *testing.T, dir, prompt string, flags []string, env ...string) error {
 	t.Helper()
 	bin := opencodeOrSkip(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), runFor)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, bin, "run", "--dir", dir, "-m", model, prompt)
+	args := append([]string{"run", "--dir", dir, "-m", model}, flags...)
+	cmd := exec.CommandContext(ctx, bin, append(args, prompt)...)
 	cmd.Dir = dir
 	// The editor keeps the caller's environment, because it needs the real HOME
 	// for its own credentials, but not one variable of ours. Whoever is running
@@ -327,7 +442,12 @@ func run(t *testing.T, dir, prompt string, env ...string) {
 	// own daemon, and the adapter prefers its process environment to any file -
 	// so an inherited SHOULDER_TOKEN silently overrides what a test is trying
 	// to set up and the test reports on the developer's machine instead.
-	cmd.Env = append(clean(os.Environ()), "SHOULDER_ENV_FILE=/dev/null")
+	cmd.Env = append(clean(os.Environ()),
+		"SHOULDER_ENV_FILE=/dev/null",
+		// After the copy, so it wins: the editor loads the suite's plugins and
+		// not the developer's.
+		"XDG_CONFIG_HOME="+editorConfig,
+	)
 	cmd.Env = append(cmd.Env, env...)
 	// Killing the editor does not close the pipes its children inherited, so
 	// without this a hung model holds CombinedOutput open long past the
@@ -335,11 +455,12 @@ func run(t *testing.T, dir, prompt string, env ...string) {
 	cmd.WaitDelay = 10 * time.Second
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {
-		t.Skipf("opencode did not finish within %s; the model endpoint is not answering:\n%s", runFor, out)
+		return fmt.Errorf("opencode did not finish within %s; the model endpoint is not answering:\n%s", runFor, out)
 	}
 	if err != nil {
 		t.Fatalf("opencode run: %v\n%s", err, out)
 	}
+	return nil
 }
 
 // clean drops every SHOULDER_ variable from an environment.
@@ -458,10 +579,12 @@ func TestOpenCodeReceivesAdvice(t *testing.T) {
 	d.pin()
 	dir := project(t)
 
-	// Two turns: the first produces the advice, the second is the one it can
-	// be delivered on. Advice is never returned to the turn that caused it.
+	// Two turns of one session: the first produces the advice, the second is
+	// the one it can be delivered on, because advice is never returned to the
+	// turn that caused it. Two separate invocations would be two sessions, and
+	// the advice the first earned would have nowhere to go.
 	run(t, dir, "reply with exactly: one", "SHOULDER_ADDR="+d.addr, "SHOULDER_TOKEN="+d.token)
-	run(t, dir, "reply with exactly: two", "SHOULDER_ADDR="+d.addr, "SHOULDER_TOKEN="+d.token)
+	runContinuing(t, dir, "reply with exactly: two", "SHOULDER_ADDR="+d.addr, "SHOULDER_TOKEN="+d.token)
 
 	if got := d.metric("shoulder_advice_emitted_total"); got == 0 {
 		t.Fatalf("the daemon produced advice but never handed it to the adapter:\n%s", d.log.String())

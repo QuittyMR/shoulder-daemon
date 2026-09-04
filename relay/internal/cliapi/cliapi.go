@@ -12,6 +12,7 @@
 package cliapi
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -21,6 +22,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/facts"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/llm"
@@ -57,6 +59,7 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/cli/digest", s.handleDigest)
 	mux.HandleFunc("/v1/cli/consolidate", s.handleConsolidate)
 	mux.HandleFunc("/v1/cli/config", s.handleConfig)
+	mux.HandleFunc("/v1/cli/memory", s.handleMemory)
 }
 
 // The request and reply types below are the wire contract. They are exported
@@ -420,7 +423,7 @@ func (s *Server) refusedRest(w http.ResponseWriter, err error) {
 	case errors.Is(err, memory.ErrNoBackend):
 		s.Pipe.Metrics.Inc("shoulder_cli_fact_nowhere_total")
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-			"error": "nothing was written: no memory backend is configured, so set SHOULDER_MEMORY_URL to an mcp-memory-service base URL and restart the daemon",
+			"error": "nothing was written: this daemon has no store at all, which happens when its own file could not be opened; the startup log says why, and SHOULDER_MEMORY_PATH or SHOULDER_MEMORY_URL points it somewhere it can write",
 		})
 	case errors.Is(err, memory.ErrDuplicateExact):
 		s.Pipe.Metrics.Inc("shoulder_cli_fact_duplicate_total")
@@ -473,6 +476,58 @@ func (s *Server) handleConsolidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, ConsolidateResponse{Dropped: dropped, Merged: merged})
+}
+
+// memoryProbeTimeout bounds the probe below. It is generous because the first
+// read of a cold store can be slow — an embedding model may still be loading —
+// and a doctor that calls that unreachable would be lying about the one thing
+// it was asked.
+const memoryProbeTimeout = 10 * time.Second
+
+// MemoryStatus answers the question no metric can: is anything actually being
+// remembered. Configured separates a daemon told about no store at all from one
+// pointed at a store that will not answer, because the two are different
+// mistakes; OK is the result of a real read, since a URL that resolves proves
+// nothing about a backend refusing every request.
+type MemoryStatus struct {
+	Name       string `json:"name"`
+	Configured bool   `json:"configured"`
+	OK         bool   `json:"ok"`
+	Error      string `json:"error,omitempty"`
+}
+
+// handleMemory probes the store and reports what happened. It lives on the
+// daemon rather than in the CLI because the store is named in the daemon's
+// environment, which is routinely not the shell anybody types in: a container,
+// a service file, or an editor's idea of the environment.
+func (s *Server) handleMemory(w http.ResponseWriter, r *http.Request) {
+	if !s.authorised(w, r) {
+		return
+	}
+	if r.Method != http.MethodGet {
+		s.fail(w, http.StatusMethodNotAllowed, errors.New("use GET to check the memory backend"))
+		return
+	}
+
+	st := MemoryStatus{Name: s.Pipe.Memory.Name()}
+	st.Configured = st.Name != memory.Nop{}.Name()
+	if !st.Configured {
+		writeJSON(w, http.StatusOK, st)
+		return
+	}
+
+	// A read, not a write. The probe must be able to run on a healthy daemon as
+	// often as somebody types the command without leaving anything in the store
+	// to explain later, and a backend that refuses reads is already broken for
+	// every purpose this daemon has.
+	ctx, cancel := context.WithTimeout(r.Context(), memoryProbeTimeout)
+	defer cancel()
+	if _, err := s.Pipe.Memory.Search(ctx, memory.Query{Text: "reachability probe", Limit: 1, Scope: scope.Global}); err != nil {
+		st.Error = err.Error()
+	} else {
+		st.OK = true
+	}
+	writeJSON(w, http.StatusOK, st)
 }
 
 // ConfigResponse is what the daemon is doing now. It is the same shape whether
