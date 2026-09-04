@@ -15,6 +15,28 @@ import (
 
 const maxResponseBytes = 1 << 20
 
+// defaultClient is shared by every connector that does not bring its own. The
+// transport is not http.DefaultTransport because that one never notices a
+// silently dropped HTTP/2 connection: every later request queues on the dead
+// stream and burns the whole client timeout, one after another, until the
+// process restarts. Pinging an idle connection and closing it when the ping
+// goes unanswered turns that into one failed call and a fresh dial.
+var defaultClient = &http.Client{
+	Timeout: 20 * time.Second,
+	Transport: &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          8,
+		IdleConnTimeout:       60 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: time.Second,
+		HTTP2: &http.HTTP2Config{
+			SendPingTimeout: 10 * time.Second,
+			PingTimeout:     5 * time.Second,
+		},
+	},
+}
+
 // OpenAICompatible talks to any server implementing POST {base}/chat/completions.
 // BaseURL must already include the provider's version segment, because every
 // provider documents it differently: OpenRouter ends /api/v1, Gemini's
@@ -109,7 +131,7 @@ func (c *OpenAICompatible) post(ctx context.Context, payload map[string]any) (ch
 
 	client := c.HTTP
 	if client == nil {
-		client = &http.Client{Timeout: 20 * time.Second}
+		client = defaultClient
 	}
 	resp, err := client.Do(req)
 	if err != nil {

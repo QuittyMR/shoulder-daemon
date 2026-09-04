@@ -185,7 +185,21 @@ neither affects your coding session. The full variable table is in
 the repository README; `docs/ADVISOR.md` covers the model side in detail.
 
 `make up` runs the same binary under `deploy/docker-compose.yml` with host networking, which is
-what keeps the listener on loopback with no port published to any other interface.
+what keeps the listener on loopback with no port published to any other interface. It also mounts
+`~/.claude/projects` read-only, where Claude Code writes each session's transcript: the Stop hook
+carries only the last thing the assistant said in a turn, and the transcript is where the rest of
+it is read from. Those files are mode 600, so the container runs its nonroot user as you
+(`userns_mode: keep-id`) and, because an SELinux host labels them as your home and refuses a
+confined container whatever its uid, with SELinux confinement off for this one container
+(`label=disable`). A `facts` volume created before that mapping existed is owned by the
+old one and must be re-owned once, or the daemon cannot write its store:
+
+```bash
+podman unshare chown -R 0:0 "$(podman volume inspect shoulder-daemon_facts -f '{{.Mountpoint}}')"
+```
+
+Without the mount the daemon still runs; it logs once per session that the transcript is
+unreadable and sees only the last message of each turn.
 
 To check the relay itself rather than the hooks:
 
@@ -494,6 +508,10 @@ make update
 `make update` rebuilds the binary and the container image, replaces each
 harness's installed copy of the adapter, and restarts the daemon. Then restart
 your editor so it reloads the plugin, and run `shoulderd doctor`.
+
+Updating a container install from before the transcript mount, run the
+volume re-owning command from section 5 once, or the daemon comes up unable
+to write its store.
 
 The step that is easy to miss is the adapter. A harness runs the copy it took
 when the plugin was installed, not your checkout, so editing the adapter here

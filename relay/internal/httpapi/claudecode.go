@@ -64,6 +64,10 @@ type claudeHook struct {
 	ToolInput     json.RawMessage `json:"tool_input"`
 	ToolResponse  json.RawMessage `json:"tool_response"`
 
+	// Every event; read on Stop. The JSONL session file, which holds every
+	// text block of the turn where last_assistant_message holds the last.
+	TranscriptPath string `json:"transcript_path"`
+
 	// Stop
 	LastAssistantMessage string `json:"last_assistant_message"`
 
@@ -71,16 +75,18 @@ type claudeHook struct {
 	Reason string `json:"reason"`
 }
 
-// parseClaudeCode maps one Claude Code hook payload onto a neutral event.
-func parseClaudeCode(event string, body []byte, now time.Time) (session.Event, bool) {
+// parseClaudeCode maps one Claude Code hook payload onto a neutral event. The
+// decoded payload comes with it, for the fields that inform the handler
+// without being part of the event.
+func parseClaudeCode(event string, body []byte, now time.Time) (session.Event, claudeHook, bool) {
+	var h claudeHook
 	mapped, ok := claudeEvents[event]
 	if !ok {
-		return session.Event{}, false
+		return session.Event{}, h, false
 	}
 	kind := mapped.kind
-	var h claudeHook
 	if err := json.Unmarshal(body, &h); err != nil || h.SessionID == "" {
-		return session.Event{}, false
+		return session.Event{}, h, false
 	}
 
 	ev := session.Event{
@@ -108,7 +114,7 @@ func parseClaudeCode(event string, body []byte, now time.Time) (session.Event, b
 	case session.KindSessionEnd:
 		ev.StopReason = h.Reason
 	}
-	return ev, true
+	return ev, h, true
 }
 
 // flatten reduces a tool_response to text. Claude Code sends either a string or

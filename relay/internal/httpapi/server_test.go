@@ -2,8 +2,10 @@ package httpapi
 
 import (
 	"encoding/json"
+	"fmt"
 	"go/parser"
 	"go/token"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -260,4 +262,88 @@ func TestHotPathHasNoSlowDependencies(t *testing.T) {
 			}
 		}
 	}
+}
+
+// The Stop hook carries the last text block of a turn; the transcript holds
+// every one. What the registry sees is the whole turn when the file can be
+// read, with the hook's text kept as the tail when the file lags it.
+func TestStopReadsWholeTurnFromTranscript(t *testing.T) {
+	stop := func(sid, last string) string {
+		b, _ := json.Marshal(map[string]any{
+			"session_id": sid, "hook_event_name": "Stop", "cwd": "/p",
+			"transcript_path": "/home/u/.claude/projects/-p/" + sid + ".jsonl", "last_assistant_message": last,
+		})
+		return string(b)
+	}
+	assistant := func(t *testing.T, srv *Server, sid string) string {
+		t.Helper()
+		events, _, ok := srv.Registry.Snapshot(sid)
+		if !ok || len(events) == 0 {
+			t.Fatal("Stop not ingested")
+		}
+		return events[len(events)-1].Assistant
+	}
+
+	cases := []struct {
+		name, transcript, last, want string
+		err                          error
+	}{
+		{"appends the hook's text when the file lags", "Looking first.\n\nThe client hangs.", "Done.", "Looking first.\n\nThe client hangs.\n\nDone.", nil},
+		{"does not repeat a tail the file already has", "Looking first.\n\nDone.", "Done.", "Looking first.\n\nDone.", nil},
+		{"keeps the hook's text when the file is unreadable", "", "Done.", "Done.", os.ErrNotExist},
+		{"keeps the hook's text when the turn has none", "", "Done.", "Done.", nil},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, _ := newTestServer(t)
+			srv.TurnText = func(string) (string, error) { return tc.transcript, tc.err }
+			sid := fmt.Sprintf("s%d", i)
+			post(srv.Handler(), "Stop", stop(sid, tc.last))
+			if got := assistant(t, srv, sid); got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	t.Run("an unreadable transcript is said once per session", func(t *testing.T) {
+		srv, _ := newTestServer(t)
+		var buf strings.Builder
+		srv.Log = slog.New(slog.NewTextHandler(&buf, nil))
+		srv.TurnText = func(string) (string, error) { return "", os.ErrPermission }
+		for range 3 {
+			post(srv.Handler(), "Stop", stop("s9", "Done."))
+		}
+		if n := strings.Count(buf.String(), "transcript unreadable"); n != 1 {
+			t.Fatalf("logged %d times:\n%s", n, buf.String())
+		}
+		if srv.Metrics.Get("shoulder_transcript_unreadable_total") != 3 {
+			t.Fatalf("metric: %d", srv.Metrics.Get("shoulder_transcript_unreadable_total"))
+		}
+	})
+
+	t.Run("a path that is not a transcript is never opened", func(t *testing.T) {
+		srv, _ := newTestServer(t)
+		srv.TurnText = func(string) (string, error) { t.Fatal("read attempted"); return "", nil }
+		b, _ := json.Marshal(map[string]any{
+			"session_id": "s11", "hook_event_name": "Stop",
+			"transcript_path": "/etc/passwd", "last_assistant_message": "Done.",
+		})
+		post(srv.Handler(), "Stop", string(b))
+		if got := assistant(t, srv, "s11"); got != "Done." {
+			t.Fatalf("got %q", got)
+		}
+		if srv.Metrics.Get("shoulder_transcript_rejected_total") != 1 {
+			t.Fatal("rejection not counted")
+		}
+	})
+
+	t.Run("a Stop without a transcript path keeps the hook's text", func(t *testing.T) {
+		srv, _ := newTestServer(t)
+		srv.TurnText = func(string) (string, error) { t.Fatal("read attempted"); return "", nil }
+		b, _ := json.Marshal(map[string]any{"session_id": "s10", "hook_event_name": "Stop", "last_assistant_message": "Done."})
+		post(srv.Handler(), "Stop", string(b))
+		if got := assistant(t, srv, "s10"); got != "Done." {
+			t.Fatalf("got %q", got)
+		}
+	})
 }

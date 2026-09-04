@@ -247,3 +247,22 @@ func TestProviderStateOnAToolCallIsReplayedVerbatim(t *testing.T) {
 		t.Fatalf("the provider's state was not sent back:\n%s", second)
 	}
 }
+
+// A connector without its own client must get one that closes a connection
+// whose peer has gone quiet, or a dropped HTTP/2 stream costs every later call
+// the full timeout.
+func TestDefaultClientDetectsDeadConnections(t *testing.T) {
+	tr, ok := defaultClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("default transport is %T, want *http.Transport", defaultClient.Transport)
+	}
+	if tr.HTTP2 == nil || tr.HTTP2.SendPingTimeout <= 0 || tr.HTTP2.PingTimeout <= 0 {
+		t.Fatalf("HTTP/2 health pings not configured: %+v", tr.HTTP2)
+	}
+	if defaultClient.Timeout == 0 {
+		t.Fatal("client has no timeout")
+	}
+	if tr.HTTP2.SendPingTimeout+tr.HTTP2.PingTimeout >= defaultClient.Timeout {
+		t.Fatalf("a dead connection is noticed after %v, later than the %v client timeout", tr.HTTP2.SendPingTimeout+tr.HTTP2.PingTimeout, defaultClient.Timeout)
+	}
+}

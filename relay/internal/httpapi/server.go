@@ -19,6 +19,7 @@ import (
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/metrics"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/outbox"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/session"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/transcript"
 )
 
 const maxBodyBytes = 8 << 20
@@ -48,9 +49,16 @@ type Server struct {
 	// Log is optional. It is used for one line, on the first rejected request.
 	Log *slog.Logger
 
+	// TurnText reads a turn's assistant text from a transcript path. Nil
+	// means the transcript package with its default tail; tests replace it.
+	TurnText func(path string) (string, error)
+
 	adopted    atomic.Bool
 	saidDenied sync.Once
 	saidAdopt  sync.Once
+
+	// Sessions whose transcript could not be read, so each is said once.
+	transcriptWarned sync.Map
 }
 
 func New(reg *session.Registry, box *outbox.Box, queue chan session.Event, token string, gate budget.Gate) *Server {
@@ -146,11 +154,14 @@ func (s *Server) handleClaudeCode(w http.ResponseWriter, r *http.Request) {
 		s.Log.Debug("hook received", "event", event, "bytes", len(body))
 	}
 
-	ev, ok := parseClaudeCode(event, body, s.Now())
+	ev, hook, ok := parseClaudeCode(event, body, s.Now())
 	if !ok {
 		s.Metrics.Inc("shoulder_unmapped_event_total")
 		writeRaw(w, silentJSON)
 		return
+	}
+	if ev.Kind == session.KindTurnEnd {
+		ev.Assistant = s.assistantText(ev.SessionID, hook.TranscriptPath, ev.Assistant)
 	}
 
 	s.ingest(ev)
@@ -163,6 +174,43 @@ func (s *Server) handleClaudeCode(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeRaw(w, silentJSON)
+}
+
+// assistantText widens the Stop hook's last message to everything the
+// assistant said this turn, when the transcript can be read. The hook's
+// message is still appended if the file does not end with it: the file can
+// lag the hook by one write. Anything short of that keeps the hook's message,
+// which is what the pass saw before transcripts were read at all.
+func (s *Server) assistantText(sessionID, path, last string) string {
+	if path == "" {
+		return last
+	}
+	if !transcript.IsSessionFile(path) {
+		s.Metrics.Inc("shoulder_transcript_rejected_total")
+		return last
+	}
+	read := s.TurnText
+	if read == nil {
+		read = func(p string) (string, error) { return transcript.TurnAssistantText(p, transcript.DefaultTail) }
+	}
+	text, err := read(path)
+	if err != nil {
+		s.Metrics.Inc("shoulder_transcript_unreadable_total")
+		if _, seen := s.transcriptWarned.LoadOrStore(sessionID, true); !seen && s.Log != nil {
+			s.Log.Info("transcript unreadable; only the last assistant message of each turn is seen",
+				"session", sessionID, "path", path, "err", err)
+		}
+		return last
+	}
+	if text == "" {
+		s.Metrics.Inc("shoulder_transcript_empty_total")
+		return last
+	}
+	s.Metrics.Inc("shoulder_transcript_read_total")
+	if tail := strings.TrimSpace(last); tail != "" && !strings.HasSuffix(text, tail) {
+		text += "\n\n" + tail
+	}
+	return text
 }
 
 // saidAdvice records the moment advice actually reaches a harness. The queued

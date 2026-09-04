@@ -38,6 +38,20 @@ services:
       SHOULDER_MEMORY_PATH: "/home/nonroot/.local/share/shoulder-daemon/facts.json"
     volumes:
       - facts:/home/nonroot
+      # Claude Code's session transcripts, read-only and at the host path,
+      # because a hook payload names the file by that path. The Stop hook
+      # carries only the last text of a turn; the file has all of it.
+      - ${HOME}/.claude/projects:${HOME}/.claude/projects:ro
+    # The transcripts are mode 600 and owned by you, so the container's
+    # nonroot user has to be you. Under rootless podman that is this mapping;
+    # a facts volume created before it was set is owned by the old one and
+    # needs re-owning once, see docs/INSTALL.md.
+    userns_mode: "keep-id:uid=65532,gid=65532"
+    # On an SELinux host the transcripts carry the home label and a confined
+    # container is refused them whatever its uid. Relabelling your home
+    # directory is the alternative, and worse.
+    security_opt:
+      - label=disable
     healthcheck:
       test: ["CMD", "/shoulderd", "doctor", "-liveness", "-addr", "http://127.0.0.1:8787"]
       interval: 30s

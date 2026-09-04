@@ -182,10 +182,14 @@ most `WINDOW_EVENTS` events (default 40) inside `WINDOW_CHARS` characters
 (default 12000), rendered oldest first and dropped from the oldest end when the
 character budget runs out.
 
-`<thinking>` blocks appear only when the harness supplies reasoning text. Claude
-Code does not: every thinking block it persists has an empty body. OpenCode's
-`ReasoningPart` does carry text, so the same model sees more from an OpenCode
-session than a Claude Code one.
+The `<assistant>` block is the whole turn's text, not only its last message.
+Claude Code's Stop hook carries only the final text block, so the daemon reads
+the rest from the session transcript the hook names; when that file cannot be
+read, the hook's message is all it has, and it says so once per session in the
+log. `<thinking>` blocks appear only when the harness supplies reasoning text.
+Claude Code does not: every thinking block it persists has an empty body.
+OpenCode's `ReasoningPart` does carry text, so the same model sees more from an
+OpenCode session than a Claude Code one.
 
 The stored facts are what a semantic search over the memory backend matched,
 capped at eight. More is not better here: the model has to notice one

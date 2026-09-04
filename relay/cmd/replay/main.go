@@ -18,33 +18,8 @@ import (
 
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/session"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/textutil"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/transcript"
 )
-
-type entry struct {
-	Type        string          `json:"type"`
-	IsMeta      bool            `json:"isMeta"`
-	IsSidechain bool            `json:"isSidechain"`
-	Timestamp   string          `json:"timestamp"`
-	Message     json.RawMessage `json:"message"`
-}
-
-type message struct {
-	ID         string          `json:"id"`
-	Role       string          `json:"role"`
-	StopReason string          `json:"stop_reason"`
-	Content    json.RawMessage `json:"content"`
-}
-
-type block struct {
-	Type      string          `json:"type"`
-	Text      string          `json:"text"`
-	Name      string          `json:"name"`
-	ID        string          `json:"id"`
-	Input     json.RawMessage `json:"input"`
-	ToolUseID string          `json:"tool_use_id"`
-	Content   json.RawMessage `json:"content"`
-	IsError   bool            `json:"is_error"`
-}
 
 func main() {
 	var (
@@ -84,12 +59,8 @@ func main() {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		var e entry
-		if json.Unmarshal([]byte(line), &e) != nil || e.IsSidechain {
-			continue
-		}
-		var m message
-		if len(e.Message) == 0 || json.Unmarshal(e.Message, &m) != nil {
+		e, m, ok := transcript.Parse([]byte(line))
+		if !ok || e.IsSidechain {
 			continue
 		}
 		ts := parseTS(e.Timestamp)
@@ -98,16 +69,15 @@ func main() {
 		case "user":
 			// A real prompt has content as a plain string; tool results and
 			// injected context arrive as an array of blocks.
-			var s string
-			if json.Unmarshal(m.Content, &s) == nil {
-				if e.IsMeta || isNoise(s) {
-					continue
-				}
+			if s, ok := transcript.Prompt(e, m); ok {
 				prompts++
 				c.send(session.Event{TS: ts, Kind: session.KindUserPrompt, Prompt: s})
 				continue
 			}
-			for _, b := range blocks(m.Content) {
+			if _, isString := prompt(m); isString {
+				continue
+			}
+			for _, b := range transcript.Blocks(m.Content) {
 				if b.Type != "tool_result" {
 					continue
 				}
@@ -117,12 +87,12 @@ func main() {
 				}
 				c.send(session.Event{
 					TS: ts, Kind: kind, ToolUseID: b.ToolUseID,
-					ToolName: toolNames[b.ToolUseID], ToolResult: flatten(b.Content),
+					ToolName: toolNames[b.ToolUseID], ToolResult: transcript.Flatten(b.Content),
 				})
 			}
 
 		case "assistant":
-			for _, b := range blocks(m.Content) {
+			for _, b := range transcript.Blocks(m.Content) {
 				switch b.Type {
 				case "text":
 					pendingText.WriteString(b.Text)
@@ -199,51 +169,20 @@ func (c *client) send(e session.Event) string {
 	return ""
 }
 
-func blocks(raw json.RawMessage) []block {
-	var bs []block
-	if json.Unmarshal(raw, &bs) != nil {
-		return nil
-	}
-	return bs
-}
-
-// flatten reduces a tool_result payload to text.
-func flatten(raw json.RawMessage) string {
-	if len(raw) == 0 {
-		return ""
-	}
-	var s string
-	if json.Unmarshal(raw, &s) == nil {
-		return s
-	}
-	var bs []block
-	if json.Unmarshal(raw, &bs) == nil {
-		var out strings.Builder
-		for _, b := range bs {
-			out.WriteString(b.Text)
-		}
-		return out.String()
-	}
-	return string(raw)
-}
-
-// isNoise drops transcript entries that were never something the user typed.
-func isNoise(s string) bool {
-	t := strings.TrimSpace(s)
-	if t == "" {
-		return true
-	}
-	for _, p := range []string{"[Request interrupted", "<system-reminder>", "Base directory for this skill:", "<command-name>", "Caveat: The messages below"} {
-		if strings.HasPrefix(t, p) {
-			return true
-		}
-	}
-	return false
-}
-
 func parseTS(s string) time.Time {
 	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
 		return t
 	}
 	return time.Now()
+}
+
+// prompt reports whether the content is a plain string, which a user entry
+// has only when it was typed; anything typed but unusable is skipped, not
+// scanned for blocks.
+func prompt(m transcript.Message) (string, bool) {
+	var s string
+	if json.Unmarshal(m.Content, &s) != nil {
+		return "", false
+	}
+	return s, true
 }
