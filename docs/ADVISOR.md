@@ -249,9 +249,10 @@ final content must be a JSON object with three fields:
 ```
 
 **`inject`** is what to say to the session, and empty is the correct and most
-common answer. The prompt asks for one short note, spoken only when a stored
-fact contradicts what the assistant just said or is about to do, or supplies
-something it plainly lacks.
+common answer. The prompt asks for one short note, spoken in two cases: a stored
+fact contradicts what the assistant just said or is about to do, or a stored
+fact says how this codebase does the thing just asked for, which the assistant
+would otherwise spend the turn searching for.
 
 **`keywords`** are the terms the model took from the turn and from whatever it
 just injected: nouns and identifiers - file paths, function and type names,

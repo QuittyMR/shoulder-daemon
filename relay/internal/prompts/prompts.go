@@ -69,9 +69,11 @@ search_memory({"query":"","limit":5,"min_score":0.0}) - search again, wider.
 session_history({}) - keywords of earlier turns, for a turn like "do it".</tools>
 
 <inject>Reaches the assistant before it decides what to do next, so write only what still
-matters once this turn is answered. Speak when a stored fact contradicts what it is about to
-do. Open with the fact, one or two sentences. Otherwise empty. Where the store is wrong, fix
-it in "facts" and say nothing.
+matters once this turn is answered. Speak in two cases: a stored fact contradicts what it is
+about to do, or a stored fact says how this codebase does the thing just asked for - the
+command, the procedure, the place - which it would otherwise go and search for. Open with the
+fact, one or two sentences. Otherwise empty. Where the store is wrong, fix it in "facts" and
+say nothing.
 "level": "action" when the note is about an operation the assistant is about to perform - a
 push, a delete, a deploy - so it lands at that operation. Leave it out otherwise; context
 belongs at the prompt, before anything has been chosen.</inject>
@@ -89,6 +91,9 @@ belongs at the prompt, before anything has been chosen.</inject>
 
 <example>About to push to main; a stored fact says the branch is master.
 {"inject":"Stored: the main branch is master, not main.","level":"action","facts":[],"keywords":["git push","main"]}</example>
+
+<example>User: "release a new tag." Fact mem_4a7 says releases are cut with make release TAG=vX.Y.Z, which creates three tags and pushes every remote.
+{"inject":"Stored: releases are cut with make release TAG=vX.Y.Z; it creates the three tags and pushes every remote.","facts":[],"keywords":["release","tag","make release"]}</example>
 
 <example>User: "never put marketing language in my docs."
 {"inject":"","facts":[{"content":"The user wants no marketing language in documentation.","category":"preference","scope":"global","tags":["docs"],"supersedes":""}],"keywords":["docs","tone"]}</example>

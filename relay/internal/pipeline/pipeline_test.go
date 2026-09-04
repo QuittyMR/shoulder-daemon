@@ -1257,3 +1257,48 @@ func TestMessageDropsAFactTheModelLeftUnscoped(t *testing.T) {
 		t.Error("the drop must be counted, not silent")
 	}
 }
+
+type slowProvider struct {
+	delay time.Duration
+	err   error
+}
+
+func (s slowProvider) Name() string { return "slow" }
+
+func (s slowProvider) Complete(context.Context, string, string) (string, error) { return "", nil }
+
+func (s slowProvider) Chat(context.Context, []llm.Message, []llm.Tool) (llm.Message, error) {
+	time.Sleep(s.delay)
+	return llm.Message{Role: "assistant", Content: `{"inject":"","facts":[]}`}, s.err
+}
+
+// A call that stalls must leave a line behind whether or not it eventually
+// answered: the failures worth diagnosing are the ones that come in just under
+// the client timeout and look like success everywhere else.
+func TestCountedStepsWarnsOnSlowCall(t *testing.T) {
+	var buf strings.Builder
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{{"answered", nil}, {"timed out", errors.New("Client.Timeout exceeded while awaiting headers")}} {
+		t.Run(tc.name, func(t *testing.T) {
+			buf.Reset()
+			c := &countedSteps{Provider: slowProvider{delay: 2 * time.Millisecond, err: tc.err}, Log: log, Session: "s1", Slow: time.Millisecond}
+			_, _ = c.Chat(context.Background(), nil, nil)
+			out := buf.String()
+			if !strings.Contains(out, "model call slow") || !strings.Contains(out, "session=s1") || !strings.Contains(out, "step=1") {
+				t.Fatalf("slow call not reported: %q", out)
+			}
+			if tc.err != nil && !strings.Contains(out, "awaiting headers") {
+				t.Fatalf("the error must travel with the timing: %q", out)
+			}
+		})
+	}
+	buf.Reset()
+	c := &countedSteps{Provider: slowProvider{}, Log: log, Session: "s1", Slow: time.Second}
+	_, _ = c.Chat(context.Background(), nil, nil)
+	if buf.Len() != 0 {
+		t.Fatalf("an ordinary call must stay quiet, got %q", buf.String())
+	}
+}

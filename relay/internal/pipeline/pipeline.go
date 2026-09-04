@@ -284,7 +284,7 @@ func (p *Pipeline) Consult(ctx context.Context, sessionID string) {
 	// The decision is a tool loop rather than one question: a turn that says
 	// only "do it" is unreadable without what came before, and the model is the
 	// one that knows whether this is such a turn.
-	counted := &countedSteps{Provider: prov}
+	counted := &countedSteps{Provider: prov, Log: p.Log, Session: sessionID, Slow: slowCall}
 	start := time.Now()
 	raw, err := llm.Run(cctx, counted, prompts.Decision(pick), decisionPrompt(window, recalled),
 		p.decisionTools(sessionID, project), decisionSteps)
@@ -317,13 +317,32 @@ func (p *Pipeline) Consult(ctx context.Context, sessionID string) {
 // another tool and there was no step left to answer it in.
 type countedSteps struct {
 	llm.Provider
+	Log     *slog.Logger
+	Session string
+	// Slow is the call duration past which a step is reported. The usual call
+	// answers in about a second; one that takes several is the provider or
+	// the path stalling, and until it was logged the only trace of a stall was
+	// the timeout twenty seconds later, or nothing when it came in just under.
+	Slow    time.Duration
 	mu      sync.Mutex
 	steps   int
 	pending bool
 }
 
+// slowCall is the threshold Consult uses. Five times the median is past any
+// generation-length variance a classification answer can have.
+const slowCall = 5 * time.Second
+
 func (c *countedSteps) Chat(ctx context.Context, msgs []llm.Message, tools []llm.Tool) (llm.Message, error) {
+	c.mu.Lock()
+	step := c.steps + 1
+	c.mu.Unlock()
+	start := time.Now()
 	m, err := c.Provider.Chat(ctx, msgs, tools)
+	if took := time.Since(start); took > c.Slow && c.Log != nil {
+		c.Log.Warn("model call slow", "session", c.Session, "step", step,
+			"took", took.Round(time.Millisecond), "err", err)
+	}
 	if err != nil {
 		return m, err
 	}

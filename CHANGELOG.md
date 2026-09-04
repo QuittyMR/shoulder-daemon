@@ -6,6 +6,19 @@ Notable changes to shoulder-daemon. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The decision pass speaks in a second case. It used to inject only when a stored fact
+  contradicted what the assistant was about to do, so a fact that said how this codebase
+  does the thing just asked for stayed in the store while the assistant searched the
+  repository for the same answer. Now such a fact is surfaced at the prompt, before the
+  search starts. A live test pins it on every configured provider beside the contradiction
+  and silence cases.
+- A model call that takes more than five seconds is logged as a warning with the session,
+  the step and the error if there was one. Stalls on the way to the provider used to leave
+  a trace only when they outlived the twenty-second client timeout, and none at all when
+  they came in just under it.
+
 ## [0.2.0] - 2026-09-04
 
 ### Added

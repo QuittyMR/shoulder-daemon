@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,6 +37,35 @@ func TestLiveDecisionAcrossProviders(t *testing.T) {
 			t.Logf("inject=%q facts=%d", d.Inject, len(d.Facts))
 			if d.Inject == "" {
 				t.Error("a stored constraint contradicting the turn should have produced an injection")
+			}
+		})
+	}
+}
+
+// TestLiveProcedureIsSurfaced pins the other reason to speak: a stored fact
+// that answers how to do what was just asked. A model that only reports
+// contradictions leaves the assistant to rediscover what the store holds.
+func TestLiveProcedureIsSurfaced(t *testing.T) {
+	if os.Getenv("SHOULDER_LIVE") == "" {
+		t.Skip("set SHOULDER_LIVE=1")
+	}
+	for _, preset := range []string{"glm-coding", "gemini"} {
+		t.Run(preset, func(t *testing.T) {
+			t.Setenv("SHOULDER_LLM", preset)
+			p, err := FromEnv()
+			if err != nil {
+				t.Skipf("not configured: %v", err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			defer cancel()
+
+			d, err := Decide(ctx, p, prompts.Default, liveProcedureWindow, liveProcedureRecall)
+			if err != nil {
+				t.Fatalf("decide: %v", err)
+			}
+			t.Logf("inject=%q facts=%d", d.Inject, len(d.Facts))
+			if !strings.Contains(strings.ToLower(d.Inject), "make release") {
+				t.Errorf("a stored procedure for the thing asked should have been surfaced, got %q", d.Inject)
 			}
 		})
 	}
