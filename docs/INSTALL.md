@@ -267,9 +267,15 @@ machine can read it. To require a key instead, set `MCP_API_KEY` on the store an
 `SHOULDER_MEMORY_KEY` on the daemon, and leave anonymous access off - with it on, a key is checked
 first and then not required, which is a key that protects nothing.
 
-Nothing above the connector boundary knows which of the two is running. A third backend is a
-five-method interface in `relay/internal/memory/` and a conformance suite it has to pass; see
-[CONTRIBUTING.md](../CONTRIBUTING.md), and say which store you want.
+Nothing above the connector boundary knows which of the two is running, and which of the
+service's own backends sits behind it (SQLite-vec, Cloudflare, Milvus) is invisible from here. A
+third backend is a five-method `Connector` interface in `relay/internal/memory/` that names nothing
+specific to any product, and `memory.TestConnector` is a conformance suite a new one runs against
+itself - the built-in store passes the same suite as the service - so a connector is a small,
+self-contained piece of work; see [CONTRIBUTING.md](../CONTRIBUTING.md). If you want a particular
+store, say so: open an issue on [GitLab](https://gitlab.com/quittymr/shoulder-daemon/-/issues) or
+[GitHub](https://github.com/QuittyMR/shoulder-daemon/issues), or mail thomas@lumea-technologies.com.
+Naming the one you use is the fastest way to get it built, and a patch is welcome too.
 
 ## 7. Talk to it directly: local and global knowledge
 

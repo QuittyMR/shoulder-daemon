@@ -120,48 +120,20 @@ daemon reads that file wherever it was started from - a container, a service
 manager or an editor - which is what stops a key that is set in your login shell
 from being invisible to the process that needs it.
 
-### Where the facts go
+#### Storage backends
 
-By default, into the daemon: held in memory while it runs and written to one
-JSON file, `~/.local/share/shoulder-daemon/facts.json`, mode 600, replaced whole
-through a temporary file so an interrupted write cannot cost you the previous
-facts.
-
-Recall is by embedding. The model is compiled into the binary — 40,000 GloVe
-word vectors quantised to a byte a dimension, about 4MB of it, mean-pooled with
-rarity weighting and the common direction taken back out — so a question is
-answered by what it means and not by which words it repeats. "where does this
-get deployed" recalls "we ship to the staging cluster", which shares not one
-word with it. There is no model to pull, no key, no service and no network call:
-it works the moment the daemon is installed, on a machine with nothing else on
-it.
-
-It is a word-vector model, not a transformer: word order is lost and negation is
-invisible to it, which is why a fact and its contradiction collide and supersede
-each other rather than both being stored. Set `SHOULDER_MEMORY_URL` and it uses
-[mcp-memory-service](https://github.com/doobidoo/mcp-memory-service) instead —
-worth it for a store shared between machines, or one large enough to want a
-transformer behind it. Which of its own backends sits there (SQLite-vec,
-Cloudflare, Milvus) is invisible from here. [docs/INSTALL.md](docs/INSTALL.md)
-has the one command that starts it.
-
-How much the built-in store gives up is measured rather than asserted:
-`relay/internal/memory/compare_test.go` loads both stores with the same corpus
-and asks the same questions. Today it answers 11 of 15 with the right fact
-first, against 14 of 15 for the service, and holds every fact either does;
-[docs/INSTALL.md](docs/INSTALL.md) has the command and what the four it loses
-have in common.
-
-More connectors are coming. A backend sits behind a five-method `Connector`
-interface that names nothing specific to any product, and `memory.TestConnector`
-is a conformance suite a new one runs against itself — the built-in store passes
-the same suite as the service — so a connector is a small, self-contained piece
-of work; see [CONTRIBUTING.md](CONTRIBUTING.md). If you want a particular store,
-say so: open an issue on
+Facts live in the daemon by default: held in memory and written whole to
+`~/.local/share/shoulder-daemon/facts.json`, mode 600, recalled by an embedding
+model compiled into the binary, so nothing needs pulling, keying or running.
+Set `SHOULDER_MEMORY_URL` and
+[mcp-memory-service](https://github.com/doobidoo/mcp-memory-service) is used
+instead - worth it for a store shared between machines or one large enough to
+want a transformer behind it. What each gives up, and the test that measures it,
+is in [docs/INSTALL.md](docs/INSTALL.md). Want a different store? Say so on
 [GitLab](https://gitlab.com/quittymr/shoulder-daemon/-/issues) or
-[GitHub](https://github.com/QuittyMR/shoulder-daemon/issues), or mail
-thomas@lumea-technologies.com. Naming the one you use is the fastest way to get
-it built, and a patch is welcome too.
+[GitHub](https://github.com/QuittyMR/shoulder-daemon/issues); a backend is a
+five-method interface with a conformance suite, see
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 Use `shoulderd doctor` to verify the validity of your installation and setup.
 
