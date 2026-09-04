@@ -208,8 +208,11 @@ new ones. It is mode 600, because everything you have said in front of an agent 
 
 Recall is by embedding, with the model compiled into the binary: 40,000 GloVe word vectors at 100
 dimensions, quantised to a signed byte each, mean-pooled with rarity weighting and the vocabulary's
-common direction projected back out. It adds about 4MB to the binary and needs nothing at runtime —
-no download, no key, no service, no network. Vectors are computed once per record and stored beside
+common direction projected back out, so a question is answered by what it means and not by which
+words it repeats: "where does this get deployed" recalls "we ship to the staging cluster", which
+shares not one word with it. It adds about 4MB to the binary and needs nothing at runtime — no
+download, no key, no service, no network — so it works the moment the daemon is installed, on a
+machine with nothing else on it. Vectors are computed once per record and stored beside
 it, tagged with the model that produced them, so a later table cannot be compared against an
 earlier one's numbers. A record whose vector is missing or stale is scored on words in common
 instead of being lost.
@@ -245,8 +248,8 @@ what the numeric guard in the store exists for.
 
 **Using mcp-memory-service instead.** Set `SHOULDER_MEMORY_URL` and the daemon uses
 [mcp-memory-service](https://github.com/doobidoo/mcp-memory-service) for everything instead of its
-own file. It is the right move for a store shared between machines, or one large enough that
-embedding-based recall earns its keep. A container is the short version:
+own file. It recalls better, as the numbers above show, because a transformer sits behind it, and
+it can be shared between machines. Start it:
 
 ```bash
 docker run -d --name shoulder-memory --network host --restart unless-stopped \
@@ -257,8 +260,14 @@ docker run -d --name shoulder-memory --network host --restart unless-stopped \
 
 From a checkout, `make memory` starts the same service out of `deploy/docker-compose.yml`. Use the
 `-slim` tags: the unsuffixed ones are amd64 only. The first start downloads an ONNX embedding model
-and takes a few minutes. Then `SHOULDER_MEMORY_URL=http://127.0.0.1:8100` where the daemon reads
-it, and restart it.
+and takes a few minutes. Then point the daemon at it:
+
+```bash
+echo 'SHOULDER_MEMORY_URL=http://127.0.0.1:8100' >> ~/.config/shoulder-daemon/env
+```
+
+The daemon picks it up the next time it starts, which is the next editor session once the current
+ones end. `shoulderd doctor` then reports `memory:  ok (mcp-memory-service)`.
 
 **Anonymous access or a key.** `MCP_ALLOW_ANONYMOUS_ACCESS=true` is what makes writes work at all;
 without it the store answers 401 to every request and the daemon logs a write it never made. On a

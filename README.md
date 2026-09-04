@@ -122,18 +122,14 @@ from being invisible to the process that needs it.
 
 #### Storage backends
 
-Facts live in the daemon by default: held in memory and written whole to
-`~/.local/share/shoulder-daemon/facts.json`, mode 600, recalled by an embedding
-model compiled into the binary, so nothing needs pulling, keying or running.
-Set `SHOULDER_MEMORY_URL` and
-[mcp-memory-service](https://github.com/doobidoo/mcp-memory-service) is used
-instead - worth it for a store shared between machines or one large enough to
-want a transformer behind it. What each gives up, and the test that measures it,
-is in [docs/INSTALL.md](docs/INSTALL.md). Want a different store? Say so on
+Facts are kept by the daemon itself, on disk, with nothing to install or
+configure. [mcp-memory-service](https://github.com/doobidoo/mcp-memory-service)
+recalls them better and can be shared between machines; it is one container to
+start and one setting, `SHOULDER_MEMORY_URL`, to point at it, both in
+[docs/INSTALL.md](docs/INSTALL.md). Other stores can be added; ask for the one
+you use on
 [GitLab](https://gitlab.com/quittymr/shoulder-daemon/-/issues) or
-[GitHub](https://github.com/QuittyMR/shoulder-daemon/issues); a backend is a
-five-method interface with a conformance suite, see
-[CONTRIBUTING.md](CONTRIBUTING.md).
+[GitHub](https://github.com/QuittyMR/shoulder-daemon/issues).
 
 Use `shoulderd doctor` to verify the validity of your installation and setup.
 
