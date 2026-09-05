@@ -1,6 +1,6 @@
 {
   "name": "shoulder-daemon",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Context advisor for coding agents. Watches the session over HTTP hooks, keeps a store of facts, and injects the relevant ones back in when they matter. Starts the daemon itself; nothing else to install.",
   "author": {
     "name": "Thomas Raz",
