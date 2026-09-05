@@ -35,6 +35,9 @@ const maxReplyBytes = 4 << 20
 type cli struct {
 	out io.Writer
 	err io.Writer
+	// done ends a command that would otherwise wait forever; the process uses
+	// signals, tests close this.
+	done <-chan struct{}
 }
 
 // dispatch runs one subcommand and returns the process exit code: 0 success,
@@ -53,6 +56,8 @@ func (c *cli) dispatch(name string, args []string) int {
 		return c.consolidate(args)
 	case "config":
 		return c.config(args)
+	case "monitor":
+		return c.monitor(args)
 	case "version", "-v", "-version", "--version":
 		return c.version(args)
 	case "help", "-h", "-help", "--help":
@@ -82,6 +87,7 @@ const usage = `usage:
   shoulderd consolidate --local|--global
   shoulderd config [show]                                      what the daemon is doing now
   shoulderd config set [--log-level=L] [--pickiness=P] [--provider=N] [--model=M]
+  shoulderd monitor [--log=PATH] [--all] [--no-follow] [--json]   watch facts move
   shoulderd version [--json]                                   which build this is
 
 --local is this project alone; --global follows you into every other one.

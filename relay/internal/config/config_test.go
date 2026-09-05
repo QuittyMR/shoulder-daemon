@@ -1,6 +1,8 @@
 package config
 
 import (
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -57,5 +59,23 @@ func TestPickinessIsReadFromTheEnvironmentAndForgivesATypo(t *testing.T) {
 				t.Fatalf("SHOULDER_PICKINESS=%q started the daemon at %v, want %v", c.set, got, c.want)
 			}
 		})
+	}
+}
+
+func TestLogPathDefaultsToAFileAndStderrMeansNone(t *testing.T) {
+	t.Setenv("SHOULDER_ENV_FILE", filepath.Join(t.TempDir(), "absent"))
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	t.Setenv("SHOULDER_LOG", "")
+	if got, want := Load().LogPath, DefaultLogPath(); got != want || !strings.HasSuffix(got, filepath.Join("shoulder-daemon", "shoulderd.log")) {
+		t.Errorf("unset: got %q, want %q", got, want)
+	}
+	t.Setenv("SHOULDER_LOG", "stderr")
+	if got := Load().LogPath; got != "" {
+		t.Errorf("stderr: got %q, want no file", got)
+	}
+	t.Setenv("SHOULDER_LOG", "/var/log/shoulderd.log")
+	if got := Load().LogPath; got != "/var/log/shoulderd.log" {
+		t.Errorf("explicit: got %q", got)
 	}
 }

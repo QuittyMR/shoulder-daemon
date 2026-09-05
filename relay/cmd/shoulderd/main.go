@@ -152,7 +152,8 @@ func serve() error {
 
 	log.Info("shoulderd listening",
 		"addr", cfg.Addr, "llm", providerName(provider), "memory", mem.Name(),
-		"pickiness", cfg.Pickiness, "dry_run", cfg.Budget.DryRun, "auth", token != "")
+		"pickiness", cfg.Pickiness, "dry_run", cfg.Budget.DryRun, "auth", token != "",
+		"log", cfg.LogPath)
 
 	if err := hs.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
@@ -160,18 +161,40 @@ func serve() error {
 	return nil
 }
 
-// newLogger writes to a file when one is configured and to stderr otherwise.
-// It never writes to stdout: on the command-hook fallback path stdout belongs
-// to the harness, and polluting it is how the reference project corrupted its
-// own hook output.
+// logRotateBytes is the size past which the log is moved aside at startup.
+// The file is append-only and the daemon is restarted every editor session,
+// so one rename at boot is all the rotation it needs.
+const logRotateBytes = 8 << 20
+
+// newLogger writes to stderr and, when a path is given, to that file as well.
+// Both, always: the file is what `shoulderd monitor` reads, and the adapters
+// start the daemon with stderr closed, so a daemon that chose one or the other
+// would be silent for whichever reader it did not pick. It never writes to
+// stdout: on the command-hook fallback path stdout belongs to the harness, and
+// polluting it is how the reference project corrupted its own hook output.
 func newLogger(path string, level slog.Leveler) *slog.Logger {
 	opts := &slog.HandlerOptions{Level: level}
+	var out io.Writer = os.Stderr
 	if path != "" {
-		if f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil { //nolint:gosec // G304: SHOULDER_LOG is the operator's own setting
-			return slog.New(slog.NewJSONHandler(f, opts))
+		if f, err := openLog(path); err == nil {
+			out = io.MultiWriter(os.Stderr, f)
+		} else {
+			fmt.Fprintf(os.Stderr, "shoulderd: log file %s: %v; logging to stderr only\n", path, err)
 		}
 	}
-	return slog.New(slog.NewJSONHandler(os.Stderr, opts))
+	return slog.New(slog.NewJSONHandler(out, opts))
+}
+
+// openLog opens the log for appending, creating its directory and moving a
+// file that has grown past logRotateBytes to path.1 first.
+func openLog(path string) (*os.File, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	if st, err := os.Stat(path); err == nil && st.Size() > logRotateBytes {
+		_ = os.Rename(path, path+".1")
+	}
+	return os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) //nolint:gosec // G304: SHOULDER_LOG is the operator's own setting
 }
 
 func (c *cli) doctor(args []string) int {

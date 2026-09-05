@@ -43,9 +43,9 @@ having to ask for it.
 ## Install
 
 **Claude Code** - the plugin is the whole install. On first start it fetches the
-daemon for your platform from the latest release, verifies the checksum, and
-starts it; after that it starts the daemon whenever a session needs one and
-sessions share it.
+daemon for your platform from the latest release, verifies the checksum, links
+it into `~/.local/bin` so `shoulderd` works in a terminal, and starts it; after
+that it starts the daemon whenever a session needs one and sessions share it.
 
 ```
 /plugin marketplace add QuittyMR/shoulder-daemon
@@ -120,20 +120,7 @@ daemon reads that file wherever it was started from - a container, a service
 manager or an editor - which is what stops a key that is set in your login shell
 from being invisible to the process that needs it.
 
-#### Storage backends
-
-Facts are kept by the daemon itself, on disk, with nothing to install or
-configure. [mcp-memory-service](https://github.com/doobidoo/mcp-memory-service)
-recalls them better and can be shared between machines; it is one container to
-start and one setting, `SHOULDER_MEMORY_URL`, to point at it, both in
-[docs/INSTALL.md](docs/INSTALL.md). Other stores can be added; ask for the one
-you use on
-[GitLab](https://gitlab.com/quittymr/shoulder-daemon/-/issues) or
-[GitHub](https://github.com/QuittyMR/shoulder-daemon/issues).
-
 Use `shoulderd doctor` to verify the validity of your installation and setup.
-
-`shoulderd config` reads or changes the log level, pickiness, provider and model on a running daemon, no restart required.
 
 Running from a checkout, a container or a service manager is covered in
 [docs/INSTALL.md](docs/INSTALL.md), along with every setting.
@@ -163,7 +150,94 @@ $ shoulderd digest                      # narrative summary; --local or --global
 answers without writing. Writes demand `--local` or `--global`; reads default to
 this project, except `digest`, which covers both. `shoulderd help` spells out
 each one.
+## Configuration and tweaking
 
+Every setting is a line in `~/.config/shoulder-daemon/env`, and the four that
+matter day to day can also be turned on a running daemon:
+
+```bash
+shoulderd config                        # log level, pickiness, provider and model in use
+shoulderd config set --pickiness=careful
+shoulderd config set --provider=gemini --model=gemini-2.5-flash-lite
+```
+
+`config set` takes effect on the next turn and writes nothing down; a restart
+returns to what the env file says.
+
+### Pickiness
+
+Pickiness is how reluctant the decision model is to write a new fact. There is
+no right answer: a memory that stores everything fills with noise, and one that
+stores nothing is an expensive way to forget. `SHOULDER_PICKINESS` in the env
+file sets the starting level, `config set --pickiness` moves it live, and
+either takes a name or the number behind it.
+
+| Level | Stores |
+|---|---|
+| `eager` (0) | anything the turn established, stated or not; when in doubt, store it |
+| `open` (1) | rules you state, and ones you clearly imply |
+| `balanced` (2) | the default: rules stated or made plain, keeping only the part it is sure of |
+| `careful` (3) | only rules you state; when in doubt, nothing |
+| `strict` (4) | only a rule it could quote from the turn, in your words |
+
+Lower levels lean on the tidying pass, which the daemon runs every few turns
+and when a session ends, and which `shoulderd consolidate` runs by hand. Higher
+levels keep the store clean and miss rules you only implied. If the monitor
+shows facts that are really history - what you did this turn rather than how
+things are done - go up one; if a correction you gave never appears, go down one.
+
+### Monitoring
+
+```bash
+shoulderd monitor
+```
+
+This follows the daemon's log and shows only the facts moving: stored,
+superseded, merged, dropped, refused, and advice queued and injected, one line
+each with the text. It opens on the last twenty and waits for more; `--all`
+shows the whole file, `--no-follow` prints and exits, `--json` passes the raw
+records through.
+
+```
+14:02:11  stored      local shoulder-daemon     (structure) "main branch is master"  id=mem_12
+14:09:40  queued      session 3f9a1c07 turn 6   "the branch is master, not main"  id=adv_4
+14:09:41  injected    session 3f9a1c07 UserPromptSubmit  "the branch is master, not main"  id=adv_4
+14:31:05  superseded  global                   [cli]  (preference) "terse answers, no preamble"  supersedes=mem_2
+14:40:00  merged      local shoulder-daemon     "integration tests need a live Postgres"  kept=mem_5  replaced=mem_7,mem_9
+```
+
+The log itself is `~/.local/share/shoulder-daemon/shoulderd.log`, JSON, one
+record per line, and the daemon writes it wherever it was started from. At the
+default `info` level it holds every movement above and nothing per hook;
+`config set --log-level=debug` adds each hook arrival. `SHOULDER_LOG` moves the
+file, and `SHOULDER_LOG=stderr` turns it off for a daemon whose output something
+else collects, which is also the one case `monitor` cannot watch. Counters for
+the same events are at `/metrics` on the daemon's address.
+
+### Storage backend
+
+Facts are kept by the daemon itself, in
+`~/.local/share/shoulder-daemon/facts.json`, with nothing to install or
+configure; `SHOULDER_MEMORY_PATH` moves the file. Recall ranks by meaning with
+an embedding table compiled into the binary, so a question worded differently
+from the fact that answers it still finds it.
+
+[mcp-memory-service](https://github.com/doobidoo/mcp-memory-service) recalls
+better and can be shared between machines. It is one container to start and one
+setting to point at it:
+
+```bash
+make memory                             # from a checkout; first start pulls an embedding model
+echo SHOULDER_MEMORY_URL=http://127.0.0.1:8100 >> ~/.config/shoulder-daemon/env
+```
+
+Restart the daemon and it uses the service; remove the line and restart to go
+back. Facts do not migrate between the two. `SHOULDER_MEMORY_KEY` carries the
+service's API key if it demands one; how the two stores compare is measured in
+[docs/INSTALL.md](docs/INSTALL.md). Other stores can be added; ask for the one
+you use on
+[GitLab](https://gitlab.com/quittymr/shoulder-daemon/-/issues) or
+[GitHub](https://github.com/QuittyMR/shoulder-daemon/issues).
 ## Alternatives
 
 | | What triggers it | Where it stores | Why we built this instead |

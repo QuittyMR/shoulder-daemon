@@ -4,6 +4,7 @@ package config
 
 import (
 	"log/slog"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -83,7 +84,7 @@ func Load() Config {
 		MemoryPath:     Env("SHOULDER_MEMORY_PATH", memory.DefaultLocalPath()),
 		QueueSize:      envInt("QUEUE_SIZE", 1024),
 		IdleExit:       time.Duration(envInt("SHOULDER_IDLE_EXIT_MINUTES", 60)) * time.Minute,
-		LogPath:        Setting("SHOULDER_LOG"),
+		LogPath:        logPath(Setting("SHOULDER_LOG")),
 		LogLevel:       logLevel(Env("LOG_LEVEL", "info")),
 		Pickiness:      pickiness(Setting("SHOULDER_PICKINESS")),
 	}
@@ -104,6 +105,29 @@ func Env(k, d string) string {
 		return v
 	}
 	return d
+}
+
+// DefaultLogPath is the file the daemon writes its log to when nobody says
+// otherwise. It sits beside the store because it is the same kind of thing: a
+// record the daemon keeps of itself, which `shoulderd monitor` reads back.
+func DefaultLogPath() string {
+	store := memory.DefaultLocalPath()
+	if store == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(store), "shoulderd.log")
+}
+
+// logPath resolves SHOULDER_LOG. Empty is the default file; "stderr" or "-"
+// is no file at all, for a daemon whose output something else is collecting.
+func logPath(s string) string {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "":
+		return DefaultLogPath()
+	case "stderr", "-":
+		return ""
+	}
+	return s
 }
 
 // logLevel reads the level by name. An unrecognised value is info rather than

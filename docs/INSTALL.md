@@ -142,14 +142,17 @@ make build
 ./bin/shoulderd
 ```
 
-It listens on `SHOULDER_ADDR` (default `127.0.0.1:8787`) and logs to stderr unless `SHOULDER_LOG`
-names a file. It never logs to stdout: on the command-hook fallback path stdout belongs to the
-harness.
+It listens on `SHOULDER_ADDR` (default `127.0.0.1:8787`) and logs to stderr and to
+`~/.local/share/shoulder-daemon/shoulderd.log`, one JSON record per line. `SHOULDER_LOG` moves the
+file; `SHOULDER_LOG=stderr` writes no file, for a daemon whose output something else collects. A
+file past 8 MB is moved to `.1` at the next start. It never logs to stdout: on the command-hook
+fallback path stdout belongs to the harness.
 
 `LOG_LEVEL` takes `debug`, `info`, `warn` or `error` and defaults to `info`. An unrecognised value
 falls back to `info` rather than refusing to start, because a typo in a log setting is a poor reason
 to have no daemon. At `debug` every hook arrival is logged; at `info` you still get every fact
 stored, every fact superseded, and every piece of advice queued and injected, with its text.
+`shoulderd monitor` follows the file and shows only those lines; section 8 covers it.
 
 `SHOULDER_PICKINESS` sets how reluctant the decision model is to store a new fact: `eager`, `open`,
 `balanced`, `careful`, `strict`, or the numbers `0` to `4` behind them, low to high, and it defaults
@@ -367,6 +370,22 @@ the single description of how the daemon is meant to run.
 Both commands are a thin client over `GET /v1/cli/config` and `PATCH /v1/cli/config`, which honour
 `SHOULDER_TOKEN` like every other CLI route.
 
+To see what a setting is doing, watch the facts move:
+
+```bash
+shoulderd monitor                 # the last twenty movements, then every new one as it happens
+shoulderd monitor --all           # the whole file first
+shoulderd monitor --no-follow     # print and exit
+shoulderd monitor --json          # the raw records
+```
+
+It reads the log file from section 5 - `--log=PATH` names another - and keeps the lines about
+facts: stored, superseded, merged and dropped by the tidying pass, refused or failed writes, and
+advice queued and injected. Each line carries the time, the scope and project or the session, the
+category and the text, and the ids involved. A fact typed with `shoulderd fact add` shows as
+`[cli]`. A daemon on `SHOULDER_LOG=stderr` writes no file, so there is nothing for `monitor` to
+read; a container's log is `make logs` instead.
+
 ## Where configuration lives
 
 Everything is environment driven, which used to raise an awkward question: whose
@@ -482,8 +501,9 @@ Everything is environment driven. The only two you need:
 | `SHOULDER_MEMORY_PATH` | Where that built-in store writes. Defaults to `~/.local/share/shoulder-daemon/facts.json`. |
 
 Then `SHOULDER_TOKEN` (generated for you; set it only to override),
-`SHOULDER_ADDR`, `SHOULDER_MEMORY_KEY`, `SHOULDER_LOG`, `SHOULDER_DRY_RUN`,
-`SHOULDER_IDLE_EXIT_MINUTES` (60; zero turns it off) and the `WINDOW_*`,
+`SHOULDER_ADDR`, `SHOULDER_MEMORY_KEY`, `SHOULDER_PICKINESS`, `SHOULDER_LOG` (the log file;
+`~/.local/share/shoulder-daemon/shoulderd.log`, or `stderr` for none), `LOG_LEVEL`,
+`SHOULDER_DRY_RUN`, `SHOULDER_IDLE_EXIT_MINUTES` (60; zero turns it off) and the `WINDOW_*`,
 `BUDGET_*` and `ADVISOR_*` tuning knobs, all of which belong in the env file
 described under "Where configuration lives".
 

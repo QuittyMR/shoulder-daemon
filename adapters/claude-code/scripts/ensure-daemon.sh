@@ -111,6 +111,19 @@ fetch() {
   say "installed $("$BIN" version 2>/dev/null || echo "$BIN")"
 }
 
+# link puts the fetched binary where a shell finds it, so `shoulderd monitor`
+# and `shoulderd doctor` are the same word in a terminal as in this script.
+# ~/.local/bin is on PATH by default on most Linux and macOS setups; when it is
+# not, the one line that fixes it is said once, at fetch time.
+link() {
+  local dir="$HOME/.local/bin"
+  mkdir -p "$dir" && ln -sf "$BIN" "$dir/shoulderd" || return 0
+  case ":$PATH:" in
+    *":$dir:"*) ;;
+    *) say "add $dir to your PATH to run shoulderd from a terminal: export PATH=\"$dir:\$PATH\"" ;;
+  esac
+}
+
 if [ -n "${SHOULDER_START_CMD:-}" ]; then
   ( eval "${SHOULDER_START_CMD}" ) >/dev/null 2>&1 &
   exit 0
@@ -118,7 +131,7 @@ fi
 
 exe="$(daemon)"
 if [ -z "$exe" ] && [ "$FETCH" = 1 ]; then
-  fetch && exe="$BIN"
+  fetch && exe="$BIN" && link
 fi
 if [ -z "$exe" ]; then
   [ "$FETCH" = 1 ] || say "nothing answering at ${ADDR}, and no 'shoulderd' on PATH."

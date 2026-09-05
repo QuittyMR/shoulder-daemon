@@ -6,8 +6,27 @@ Notable changes to shoulder-daemon. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `shoulderd monitor` follows the daemon's log and shows only the facts moving: stored,
+  superseded, merged and dropped by the tidying pass, refused or failed writes, and advice
+  queued and injected, one line each with the text. It opens on the last twenty and waits
+  for more; `--all`, `--no-follow` and `--json` change that.
+- A fact written with `shoulderd fact add` or `fact update` is logged like one the model
+  deduced, with `origin=cli`, so the monitor shows it too.
+- The Claude Code plugin links the daemon it fetches into `~/.local/bin`, so `shoulderd`
+  is a command in a terminal and not only a path the plugin knows. It says so once if that
+  directory is not on `PATH`.
+- The README has a section on configuration and tweaking: pickiness level by level,
+  monitoring, and the choice of storage backend.
+
 ### Changed
 
+- The daemon logs to a file by default, `~/.local/share/shoulder-daemon/shoulderd.log`, as
+  well as to stderr. It used to log to stderr alone unless `SHOULDER_LOG` named a file, and
+  the adapters start it with stderr closed, so a plugin install kept no log at all.
+  `SHOULDER_LOG` still moves the file; `SHOULDER_LOG=stderr` turns it off. A file past 8 MB
+  is moved to `.1` at the next start.
 - The decision pass speaks in a second case. It used to inject only when a stored fact
   contradicted what the assistant was about to do, so a fact that said how this codebase
   does the thing just asked for stayed in the store while the assistant searched the

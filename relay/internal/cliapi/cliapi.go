@@ -205,10 +205,17 @@ func (s *Server) writeFact(w http.ResponseWriter, r *http.Request) {
 		s.refused(w, err)
 		return
 	}
+	// Logged exactly as the pipeline logs its own writes, so `shoulderd monitor`
+	// shows a fact typed at the terminal beside the ones the model deduced.
 	if r.Method == http.MethodPatch {
 		s.Pipe.Metrics.Inc("shoulder_cli_fact_superseded_total")
+		s.Pipe.Log.Info("fact superseded", "origin", "cli", "scope", sc,
+			"project", scope.Label(rec.Project), "supersedes", req.ID,
+			"category", category, "content", rec.Content)
 	} else {
 		s.Pipe.Metrics.Inc("shoulder_cli_fact_stored_total")
+		s.Pipe.Log.Info("fact stored", "id", id, "origin", "cli", "scope", sc,
+			"project", scope.Label(rec.Project), "category", category, "content", rec.Content)
 	}
 	writeJSON(w, http.StatusOK, FactResponse{ID: id})
 }
