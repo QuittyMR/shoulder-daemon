@@ -84,6 +84,30 @@ jobs:
           files: dist/*
           fail_on_unmatched_files: true
 
+  # Published from here rather than GitLab because npm checks the provenance
+  # against package.json's repository, which is this one. NPM_TOKEN is a granular
+  # token limited to this package with two-factor bypass: trusted publishing
+  # needs 2FA on the owning account. Write tokens expire, so a missing or stale
+  # one fails the job rather than skipping a release artefact.
+  npm:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+      - working-directory: adapters/opencode
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          test -n "$NODE_AUTH_TOKEN" || { echo "NPM_TOKEN is not set" >&2; exit 1; }
+          npm publish --access public --provenance
+
   image:
     needs: verify
     runs-on: ubuntu-latest

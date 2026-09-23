@@ -228,22 +228,6 @@ mirror-image:
           "docker://ghcr.io/quittymr/shoulder-daemon:$t" "docker://$IMAGE:$t"
       done
 
-# The OpenCode adapter is one file, but OpenCode labels a plugin with the spec
-# it was installed by: a copied file shows as a path, an npm package shows as
-# its name. Publishing is what makes it read as "shoulder-daemon" in the
-# plugin list. NPM_TOKEN is a protected, masked variable; without it the job
-# fails rather than silently skipping a release artefact.
-npm-package:
-  extends: .tagged
-  stage: release
-  needs: [verify-version]
-  image: node:22-alpine
-  script:
-    - test -n "$NPM_TOKEN" || { echo "NPM_TOKEN is not set" >&2; exit 1; }
-    - npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
-    - cd adapters/opencode
-    - npm publish --access public
-
 release:
   extends: .tagged
   stage: release
