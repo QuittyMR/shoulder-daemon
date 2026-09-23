@@ -66,9 +66,11 @@ services:
 
   # The alternative store, for a memory shared between machines or one large
   # enough that embedding-based recall earns its keep. It is behind a profile
-  # because the daemon has a store of its own and needs nothing here: `make up`
-  # leaves this alone, `make memory` starts it. Set SHOULDER_MEMORY_URL on the
-  # relay as well, or it will go on using its own file.
+  # because the daemon has a store of its own and needs nothing here: until
+  # `make memory` has started this once, `make up` leaves it alone. After that
+  # the volume below is the record that this install wanted a store, and `make
+  # up` starts the two together. Set SHOULDER_MEMORY_URL on the relay as well,
+  # or it will go on using its own file.
   memory:
     profiles: ["memory"]
     # -slim is the multi-arch tag; the unsuffixed one is amd64 only.

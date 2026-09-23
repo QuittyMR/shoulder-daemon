@@ -19,6 +19,18 @@ Notable changes to shoulder-daemon. The format follows
   the skill stops and hands the user the line to run rather than writing a
   placeholder that reports as configured and fails on the first turn.
 
+### Fixed
+
+- `make update` no longer drops a running mcp-memory-service. Compose acts only
+  on the services its profiles select, so an update recreated the relay and left
+  it pointing at a store that was no longer there - which the daemon reported as
+  healthy while it dropped every search. It now selects the memory profile when
+  that container exists. `make up` instead names the relay and only the relay,
+  because it is what `SHOULDER_START_CMD` runs every time the daemon idles out
+  and a session brings it back, and podman-compose recreates whatever `up`
+  selects even when it is already healthy. `make down` removed the store either
+  way and now says so explicitly.
+
 ## [0.4.0] - 2026-09-06
 
 ### Added

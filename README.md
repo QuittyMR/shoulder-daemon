@@ -252,6 +252,9 @@ make memory                             # from a checkout; first start pulls an 
 echo SHOULDER_MEMORY_URL=http://127.0.0.1:8100 >> ~/.config/shoulder-daemon/env
 ```
 
+`make up` starts the service alongside the relay from then on, so the command
+your editor runs at session start brings both back.
+
 Restart the daemon and it uses the service; remove the line and restart to go
 back. Facts do not migrate between the two. `SHOULDER_MEMORY_KEY` carries the
 service's API key if it demands one; how the two stores compare is measured in
@@ -274,6 +277,7 @@ you use on
 
 - [How it works](docs/ARCHITECTURE.md) - the hot path, the injection budget, why a hook can't block
 - [Install and configure](docs/INSTALL.md) - the whole install, every setting, and how the built-in store measures up against a memory service
+- [Performance](docs/PERFORMANCE.md) - what each ranker recalls, what it costs in latency and memory, and how to measure it
 - [Advisor protocol](docs/ADVISOR.md) - bring your own decision model
 - [Contributing](CONTRIBUTING.md) - house rules, what a new connector or adapter takes, and the four test suites and what each one is for
 - [Security policy](SECURITY.md) - what is in scope, and how to report privately

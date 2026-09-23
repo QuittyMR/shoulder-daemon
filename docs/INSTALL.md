@@ -211,6 +211,13 @@ podman unshare chown -R 0:0 "$(podman volume inspect shoulder-daemon_facts -f '{
 Without the mount the daemon still runs; it logs once per session that the transcript is
 unreadable and sees only the last message of each turn.
 
+`make up` brings up everything this checkout runs and not only the relay: if the memory service
+has ever been started here, the volume it keeps its database on is still there, and `up` reads
+that as the install having asked for a store and starts it again. It recreates nothing that is
+already running, so it is safe against a healthy stack - which is what a command the editor runs
+at every session start has to be. A relay started without its store answers `/healthz` with
+`{"ok":true}` and then fails every recall behind it, quietly, for as long as nobody looks.
+
 To check the relay itself rather than the hooks:
 
 ```bash
@@ -375,7 +382,9 @@ docker run -d --name shoulder-memory --network host --restart unless-stopped \
   docker.io/doobidoo/mcp-memory-service:11-slim
 ```
 
-From a checkout, `make memory` starts the same service out of `deploy/docker-compose.yml`. Use the
+From a checkout, `make memory` starts the same service out of `deploy/docker-compose.yml`, and
+from then on `make up` starts it as well, so the start command the plugin runs brings back the
+whole stack rather than half of it. Use the
 `-slim` tags: the unsuffixed ones are amd64 only. The first start downloads an ONNX embedding model
 and takes a few minutes. Then point the daemon at it:
 
@@ -618,7 +627,9 @@ make up                                 # container; or: make build && ./bin/sho
 ```
 
 With a container or a systemd unit, point the plugin at it:
-`export SHOULDER_START_CMD="cd /path/to/shoulder-daemon && make up"`.
+`export SHOULDER_START_CMD="cd /path/to/shoulder-daemon && make up"`. That is the whole stack: an
+install that has added the memory service further down gets it back too, and an `up` against a
+stack that is already healthy leaves it alone.
 
 ## Every setting
 
