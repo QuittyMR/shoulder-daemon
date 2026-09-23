@@ -109,9 +109,19 @@ func (p *Pipeline) Consolidate(ctx context.Context, req ConsolidateRequest) (dro
 	// otherwise be handed to Forget, which deletes, and the boundary can only
 	// confirm the scope - not that this pass ever saw the record.
 	budget := int(float64(len(held)) * consolidateCeiling)
+	// A merge is a supersede and then its forgets; one cut off between the
+	// two leaves both wordings standing, which is what this pass is for.
+	ctx, done := Decided(ctx)
+	defer done()
 	where := memory.Query{Scope: sc, Project: project, Dir: req.Dir, Kind: memory.KindFact}
 
 	for _, m := range plan.Merge {
+		// Between merges is the one place a stop leaves nothing half done;
+		// past the grace every write would fail, and each failure would be
+		// counted and reported as the store refusing.
+		if ctx.Err() != nil {
+			break
+		}
 		keep, ok := byID[m.Keep]
 		if !ok || strings.TrimSpace(m.Content) == "" {
 			continue
@@ -150,6 +160,9 @@ func (p *Pipeline) Consolidate(ctx context.Context, req ConsolidateRequest) (dro
 	}
 
 	for _, id := range plan.Drop {
+		if ctx.Err() != nil {
+			break
+		}
 		r, ok := byID[id]
 		if !ok || dropped >= budget {
 			continue
@@ -180,7 +193,7 @@ func (p *Pipeline) forget(ctx context.Context, id string, where memory.Query) bo
 // hook path. Errors are logged rather than returned: nothing the session is
 // waiting on depends on this.
 func (p *Pipeline) consolidateBoth(ctx context.Context, at site) {
-	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+	cctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	for _, req := range []ConsolidateRequest{
 		{Scope: scope.Local, Project: at.project, Dir: at.dir}, {Scope: scope.Global},

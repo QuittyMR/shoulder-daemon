@@ -1406,3 +1406,499 @@ func TestACorrectionOfAPrivateFactStaysPrivate(t *testing.T) {
 		t.Fatalf("the correction published what it corrected: %+v", stored[0])
 	}
 }
+
+// stoppable is a pipeline over prov and mem whose end the test decides; ran
+// closes when Run has returned.
+func stoppable(t *testing.T, prov llm.Provider, mem memory.Connector) (*stack, context.CancelFunc, <-chan struct{}) {
+	t.Helper()
+	return stoppableWith(t, prov, mem, nil)
+}
+
+// stoppableWith lets the test set what Run reads before Run can read it.
+func stoppableWith(t *testing.T, prov llm.Provider, mem memory.Connector, configure func(*Pipeline)) (*stack, context.CancelFunc, <-chan struct{}) {
+	t.Helper()
+	reg := session.NewRegistry(100)
+	box := outbox.New()
+	q := make(chan session.Event, 16)
+	srv := httpapi.New(reg, box, q, "", budget.Default())
+	cfg := config.Load()
+	cfg.AdvisorTimeout = 5 * time.Second
+	cfg.Budget = budget.Default()
+	cfg.WindowEvents, cfg.WindowChars = 40, 12000
+	consults := make(chan string, 32)
+	p := &Pipeline{
+		Cfg: cfg, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Metrics: srv.Metrics, Registry: reg, Outbox: box, Queue: q, Memory: mem,
+		Settings: settings.ForProvider(prov), OnConsulted: func(id string) { consults <- id },
+	}
+	if configure != nil {
+		configure(p)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	ran := make(chan struct{})
+	go func() {
+		defer close(ran)
+		p.Run(ctx)
+	}()
+	return &stack{srv: srv, handler: srv.Handler(), pipe: p, consults: consults}, cancel, ran
+}
+
+func advisor(ts *httptest.Server) *llm.OpenAICompatible {
+	return &llm.OpenAICompatible{Label: "test", BaseURL: ts.URL, Model: "m", HTTP: &http.Client{Timeout: 5 * time.Second}}
+}
+
+// heldProvider holds every call until its context ends, then takes a moment
+// longer, the way a real client unwinds a request it has already sent.
+type heldProvider struct {
+	started  chan struct{}
+	finished chan struct{}
+}
+
+func (h *heldProvider) Name() string { return "held" }
+
+func (h *heldProvider) Complete(ctx context.Context, _, _ string) (string, error) {
+	_, err := h.Chat(ctx, nil, nil)
+	return "", err
+}
+
+func (h *heldProvider) Chat(ctx context.Context, _ []llm.Message, _ []llm.Tool) (llm.Message, error) {
+	h.started <- struct{}{}
+	<-ctx.Done()
+	time.Sleep(50 * time.Millisecond)
+	close(h.finished)
+	return llm.Message{}, ctx.Err()
+}
+
+// The store is closed as soon as Run returns, so Run must not return with a
+// consult still able to write to it, and must not start one after it has
+// begun waiting.
+func TestRunWaitsForTheConsultInFlight(t *testing.T) {
+	held := &heldProvider{started: make(chan struct{}, 1), finished: make(chan struct{})}
+	s, cancel, ran := stoppable(t, held, &fakeMemory{})
+	p := s.pipe
+
+	s.post(t, "UserPromptSubmit", prompt("s1", "which port does postgres use"))
+	select {
+	case <-held.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the consult never reached the model")
+	}
+
+	cancel()
+	select {
+	case <-ran:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after its context was cancelled")
+	}
+	select {
+	case <-held.finished:
+	default:
+		t.Fatal("Run returned while a consult was still running")
+	}
+	// Wait returns only after anything accepted has run, so a closed late
+	// means spawn took work after Run returned.
+	late := make(chan struct{})
+	p.spawn(&p.consults, func(context.Context) { close(late) })
+	p.consults.Wait()
+	select {
+	case <-late:
+		t.Fatal("new work was accepted after shutdown")
+	default:
+	}
+}
+
+// heldStore holds the first write until the test lets it go, and then honours
+// whatever the context says by then, as a real backend would.
+type heldStore struct {
+	fakeMemory
+	entered chan struct{}
+	proceed chan struct{}
+}
+
+func (h *heldStore) Store(ctx context.Context, r memory.Record) (string, error) {
+	h.entered <- struct{}{}
+	<-h.proceed
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return h.fakeMemory.Store(ctx, r)
+}
+
+// A shutdown that lands after the model has answered cancels nothing that is
+// left to ask; the fact it decided is written before Run returns.
+func TestShutdownKeepsAFactAlreadyDecided(t *testing.T) {
+	ts := advisorServer(t, 0, decisionBody(t, "",
+		map[string]any{"content": "prefers terse answers", "category": "preference", "scope": "global"}))
+	mem := &heldStore{entered: make(chan struct{}, 1), proceed: make(chan struct{})}
+	s, cancel, ran := stoppable(t, advisor(ts), mem)
+
+	s.post(t, "UserPromptSubmit", prompt("s1", "I always want terse answers"))
+	select {
+	case <-mem.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the decided fact never reached the store")
+	}
+	cancel()
+	close(mem.proceed)
+	select {
+	case <-ran:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after its context was cancelled")
+	}
+	stored, _, _ := mem.snapshot()
+	if len(stored) != 1 || stored[0].Content != "prefers terse answers" {
+		t.Fatalf("the fact decided before shutdown was lost; stored %+v", stored)
+	}
+}
+
+// A consult cancelled while writing its session note finishes that write
+// inside its grace, and the id comes back only then. Sweeping before waiting
+// for it takes the ids from a registry that does not hold that one yet, and
+// the note outlives its session.
+func TestWindDownSweepsTheNoteOfAConsultStillWriting(t *testing.T) {
+	ts := advisorServer(t, 0, keywordBody(t, "parser"))
+	mem := &heldStore{entered: make(chan struct{}, 1), proceed: make(chan struct{})}
+	s, cancel, ran := stoppable(t, advisor(ts), mem)
+
+	s.post(t, "UserPromptSubmit", promptIn("s1", "fix the parser", t.TempDir()))
+	select {
+	case <-mem.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the note never reached the store")
+	}
+	cancel()
+	// Long enough for a sweep that does not wait to have happened already.
+	time.Sleep(100 * time.Millisecond)
+	close(mem.proceed)
+	select {
+	case <-ran:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return after its context was cancelled")
+	}
+	stored, _, _ := mem.snapshot()
+	if len(notes(stored)) != 1 {
+		t.Fatalf("expected the note to have been written, got %+v", stored)
+	}
+	if got := mem.forgets(); len(got) != 1 || got[0] != "mem_1" {
+		t.Fatalf("the note written during shutdown outlived its session; forgot %v", got)
+	}
+}
+
+// A tidying pass stuck on a model that does not answer must not hold exit past
+// the budget, and Run must still not return until it has let go of the store.
+func TestWindDownCancelsChoresThatOutlastTheBudget(t *testing.T) {
+	model := &heldProvider{started: make(chan struct{}, 1), finished: make(chan struct{})}
+	s, cancel, ran := stoppable(t, model, &fakeMemory{listed: map[scope.Scope][]memory.Record{scope.Global: held(10)}})
+
+	s.post(t, "SessionEnd", `{"session_id":"s1","hook_event_name":"SessionEnd"}`)
+	select {
+	case <-model.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the tidying pass never reached the model")
+	}
+	cancel()
+	select {
+	case <-ran:
+	case <-time.After(ShutdownBudget + 5*time.Second):
+		t.Fatal("a chore that never finishes held Run past its budget")
+	}
+	select {
+	case <-model.finished:
+	default:
+		t.Fatal("Run returned while a chore was still running")
+	}
+}
+
+// hungForget never answers a delete; only the caller's deadline ends one.
+type hungForget struct {
+	fakeMemory
+}
+
+func (h *hungForget) Forget(ctx context.Context, _ string, _ memory.Query) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// The budget holds in the worst case: a sweep that takes all of it, and a chore
+// that spends its whole grace once cancelled. Cancelling chores only after the
+// sweep would add that grace on top.
+func TestWindDownKeepsItsBudgetWhenTheSweepUsesAllOfIt(t *testing.T) {
+	ts := advisorServer(t, 0, keywordBody(t, "parser"))
+	mem := &hungForget{}
+	s, cancel, ran := stoppable(t, advisor(ts), mem)
+	p := s.pipe
+
+	s.post(t, "UserPromptSubmit", promptIn("s1", "fix the parser", t.TempDir()))
+	consulted(t, s)
+	if stored, _, _ := mem.snapshot(); len(notes(stored)) != 1 {
+		t.Fatalf("the session wrote no note for the sweep to remove: %+v", stored)
+	}
+	graced := make(chan struct{})
+	p.spawn(&p.chores, func(bg context.Context) {
+		<-bg.Done()
+		wctx, done := Decided(bg)
+		defer done()
+		<-wctx.Done()
+		close(graced)
+	})
+
+	began := time.Now()
+	cancel()
+	select {
+	case <-ran:
+	case <-time.After(ShutdownBudget + 5*time.Second):
+		t.Fatal("Run never returned")
+	}
+	if took := time.Since(began); took > ShutdownBudget+500*time.Millisecond {
+		t.Fatalf("Run took %v to return, past its %v budget", took, ShutdownBudget)
+	}
+	select {
+	case <-graced:
+	default:
+		t.Fatal("Run returned before the chore had used its grace")
+	}
+}
+
+// gatedTidy advises as the test server says and holds each tidying pass until
+// the test lets one through.
+type gatedTidy struct {
+	*llm.OpenAICompatible
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (g *gatedTidy) Complete(ctx context.Context, _, _ string) (string, error) {
+	g.entered <- struct{}{}
+	select {
+	case <-g.release:
+		return `{"drop":["mem_0"],"merge":[]}`, nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+// The last goodbye's tidying pass is a model call that stopping would cancel
+// a moment in. The daemon waits for it, and keeps advising while it does, so
+// an editor opened meanwhile keeps it up.
+func TestTheLastGoodbyeWaitsForItsTidyingPass(t *testing.T) {
+	ts := advisorServer(t, 0, decisionBody(t, ""))
+	prov := &gatedTidy{OpenAICompatible: advisor(ts), entered: make(chan struct{}, 1), release: make(chan struct{})}
+	mem := &fakeMemory{listed: map[scope.Scope][]memory.Record{scope.Global: held(10)}}
+	s, _, _ := stoppable(t, prov, mem)
+	idle := make(chan struct{}, 2)
+	s.pipe.OnIdle = func() { idle <- struct{}{} }
+	tidying := func() {
+		t.Helper()
+		select {
+		case <-prov.entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the goodbye never started a tidying pass")
+		}
+	}
+
+	s.post(t, "SessionEnd", `{"session_id":"a","hook_event_name":"SessionEnd"}`)
+	tidying()
+	select {
+	case <-idle:
+		t.Fatal("stopped with the tidying pass still running")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	s.post(t, "UserPromptSubmit", prompt("b", "working"))
+	select {
+	case <-s.consults:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a session arriving during the pass was not advised until it ended")
+	}
+	prov.release <- struct{}{}
+	select {
+	case <-idle:
+		t.Fatal("stopped under a session that arrived during the pass")
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	s.post(t, "SessionEnd", `{"session_id":"b","hook_event_name":"SessionEnd"}`)
+	tidying()
+	prov.release <- struct{}{}
+	select {
+	case <-idle:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the daemon outlived its last session")
+	}
+	if got := mem.forgets(); len(got) != 2 {
+		t.Fatalf("stopped before the tidying passes had written their plans; forgot %v", got)
+	}
+}
+
+// gatedPasses holds each tidying pass on a gate of its own, handed to the test
+// as the pass starts, so passes can be let through in any order.
+type gatedPasses struct {
+	*llm.OpenAICompatible
+	entered chan chan struct{}
+}
+
+func (g *gatedPasses) Complete(ctx context.Context, _, _ string) (string, error) {
+	gate := make(chan struct{})
+	g.entered <- gate
+	select {
+	case <-gate:
+		return `{"drop":["mem_0"],"merge":[]}`, nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+func gatedStack(t *testing.T) (*stack, *gatedPasses, *fakeMemory, <-chan struct{}) {
+	t.Helper()
+	ts := advisorServer(t, 0, decisionBody(t, ""))
+	prov := &gatedPasses{OpenAICompatible: advisor(ts), entered: make(chan chan struct{}, 2)}
+	mem := &fakeMemory{listed: map[scope.Scope][]memory.Record{scope.Global: held(10)}}
+	s, _, _ := stoppable(t, prov, mem)
+	idle := make(chan struct{}, 1)
+	s.pipe.OnIdle = func() { idle <- struct{}{} }
+	return s, prov, mem, idle
+}
+
+func (g *gatedPasses) pass(t *testing.T, what string) chan struct{} {
+	t.Helper()
+	select {
+	case gate := <-g.entered:
+		return gate
+	case <-time.After(5 * time.Second):
+		t.Fatalf("%s never started a tidying pass", what)
+		return nil
+	}
+}
+
+func consulted(t *testing.T, s *stack) {
+	t.Helper()
+	select {
+	case <-s.consults:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the consult never finished")
+	}
+}
+
+// stillUp fails if the daemon stops within a moment, and stopped fails if it
+// does not.
+func stillUp(t *testing.T, idle <-chan struct{}, why string) {
+	t.Helper()
+	select {
+	case <-idle:
+		t.Fatal(why)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+func stopped(t *testing.T, idle <-chan struct{}, mem *fakeMemory, passes int) {
+	t.Helper()
+	select {
+	case <-idle:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the daemon outlived its last session and its last tidying pass")
+	}
+	written := 0
+	for _, id := range mem.forgets() {
+		if id == "mem_0" {
+			written++
+		}
+	}
+	if written != passes {
+		t.Fatalf("stopped before every tidying pass had written its plan; %d of %d did", written, passes)
+	}
+}
+
+// Passes end in whatever order their model calls answer. The daemon stops only
+// once none is left, not when the newest goodbye's pass ends.
+func TestTheLastGoodbyeWaitsForAnEarlierGoodbyesTidyingPass(t *testing.T) {
+	s, prov, mem, idle := gatedStack(t)
+	s.post(t, "UserPromptSubmit", prompt("a", "working"))
+	consulted(t, s)
+	s.post(t, "UserPromptSubmit", prompt("b", "working"))
+	consulted(t, s)
+
+	s.post(t, "SessionEnd", `{"session_id":"a","hook_event_name":"SessionEnd"}`)
+	first := prov.pass(t, "the first goodbye")
+	s.post(t, "SessionEnd", `{"session_id":"b","hook_event_name":"SessionEnd"}`)
+	last := prov.pass(t, "the last goodbye")
+
+	close(last)
+	stillUp(t, idle, "stopped with the first goodbye's tidying pass still running")
+	close(first)
+	stopped(t, idle, mem, 2)
+}
+
+// A pass started every few turns is as much a paid model call as a goodbye's,
+// and the last goodbye waits for it too.
+func TestTheLastGoodbyeWaitsForAPeriodicTidyingPass(t *testing.T) {
+	s, prov, mem, idle := gatedStack(t)
+	for range consolidateEvery {
+		s.post(t, "Stop", stop("a", "done"))
+		consulted(t, s)
+	}
+	periodic := prov.pass(t, "the periodic turn")
+
+	s.post(t, "SessionEnd", `{"session_id":"a","hook_event_name":"SessionEnd"}`)
+	goodbye := prov.pass(t, "the goodbye")
+
+	close(goodbye)
+	stillUp(t, idle, "stopped with the periodic tidying pass still running")
+	close(periodic)
+	stopped(t, idle, mem, 2)
+}
+
+// janitorStack is gatedStack with a janitor that ticks fast enough to fire
+// while a tidying pass is held.
+func janitorStack(t *testing.T, idleExit time.Duration) (*stack, *gatedPasses, *fakeMemory, <-chan struct{}) {
+	t.Helper()
+	ts := advisorServer(t, 0, decisionBody(t, ""))
+	prov := &gatedPasses{OpenAICompatible: advisor(ts), entered: make(chan chan struct{}, 2)}
+	mem := &fakeMemory{listed: map[scope.Scope][]memory.Record{scope.Global: held(10)}}
+	idle := make(chan struct{}, 1)
+	s, _, _ := stoppableWith(t, prov, mem, func(p *Pipeline) {
+		p.JanitorEvery = 10 * time.Millisecond
+		p.IdleExit = idleExit
+		p.OnIdle = func() { idle <- struct{}{} }
+		// A registry nobody has touched is idle from birth; this keeps the
+		// idle exit from firing before the test has a session to end.
+		p.Registry.Observe(session.Event{SessionID: "a", TS: time.Now(), Kind: session.KindUserPrompt})
+	})
+	return s, prov, mem, idle
+}
+
+// The idle backstop fires on the janitor's tick, which can land while the
+// last goodbye's tidying pass is still a paid model call. It waits for it.
+func TestTheIdleExitWaitsForATidyingPass(t *testing.T) {
+	s, prov, mem, idle := janitorStack(t, time.Nanosecond)
+	s.post(t, "SessionEnd", `{"session_id":"a","hook_event_name":"SessionEnd"}`)
+	goodbye := prov.pass(t, "the goodbye")
+
+	stillUp(t, idle, "the idle exit stopped with the tidying pass still running")
+	close(goodbye)
+	stopped(t, idle, mem, 1)
+}
+
+// An editor that dies without a goodbye is evicted of old age by the janitor,
+// and if it was the last session the daemon stops, but not under a tidying
+// pass that session started.
+func TestTheLastEvictionWaitsForATidyingPass(t *testing.T) {
+	s, prov, mem, idle := janitorStack(t, 0)
+	for range consolidateEvery {
+		s.post(t, "Stop", stop("a", "done"))
+		consulted(t, s)
+	}
+	periodic := prov.pass(t, "the periodic turn")
+	s.pipe.Registry.Observe(session.Event{SessionID: "a", TS: time.Now().Add(-2 * IdleEviction), Kind: session.KindUserPrompt})
+	deadline := time.Now().Add(5 * time.Second)
+	for s.pipe.Registry.Len() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the janitor never evicted the silent session")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	stillUp(t, idle, "the last eviction stopped with the tidying pass still running")
+	close(periodic)
+	stopped(t, idle, mem, 1)
+}

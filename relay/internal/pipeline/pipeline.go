@@ -50,23 +50,40 @@ type Pipeline struct {
 	// Zero, the default, means the daemon waits to be told.
 	IdleExit time.Duration
 
+	// JanitorEvery is how often idle sessions are evicted and an idle daemon
+	// is stopped. Zero means every five minutes.
+	JanitorEvery time.Duration
+
 	// OnIdle is called once when the daemon has decided to stop.
 	OnIdle func()
 
 	// done is closed per consult in tests that need to await completion.
 	OnConsulted func(sessionID string)
+
+	// Everything handed off a goroutine is counted, because the store is
+	// closed the moment Run returns and a write still in flight then is cut
+	// off. closing refuses new work once Run has begun waiting, which is also
+	// what keeps an Add from racing the Wait.
+	mu       sync.Mutex
+	closing  bool
+	consults sync.WaitGroup
+	chores   sync.WaitGroup
+	bg       context.Context
+	stopBg   context.CancelFunc
 }
 
 const (
-	// shutdownSweep bounds the last thing the daemon does. It is short because
-	// a process asked to stop has already been asked once and will be killed
-	// if it dawdles.
-	shutdownSweep = 5 * time.Second
+	// ShutdownBudget bounds Run's return once its context ends, or once it
+	// decides to stop. It is short because a process asked to stop has already
+	// been asked once and will be killed if it dawdles.
+	ShutdownBudget = 5 * time.Second
 
 	// noteOrphanAge is how old a note must be before another session may
 	// remove it. It is well past IdleEviction so that a note still being
 	// written by a live session in the same project can never match.
 	noteOrphanAge = 6 * time.Hour
+
+	defaultJanitorEvery = 5 * time.Minute
 )
 
 // activeWithin is how recently a session must have said something to count as
@@ -80,29 +97,61 @@ const IdleEviction = time.Hour
 
 // Run drains the queue until the context is cancelled. A turn boundary triggers
 // an advisor call on its own goroutine so a slow advisor cannot back the queue
-// up behind itself.
+// up behind itself. It returns only once that work has finished or been
+// cancelled, because the store is closed right after.
 func (p *Pipeline) Run(ctx context.Context) {
-	janitor := time.NewTicker(5 * time.Minute)
+	ctx, cancel := context.WithCancel(ctx)
+	defer p.windDown(cancel)
+	janitor := time.NewTicker(p.janitorEvery())
 	defer janitor.Stop()
+	// Every tidying pass is a model call that can take minutes, and stopping
+	// while one runs cancels it and throws the call away. tidying counts the
+	// passes still running; leaving says the daemon has run out of sessions
+	// and stops as soon as the last pass ends. A pass reports its end on
+	// tidied until loopEnded says nobody is left to hear it.
+	tidying, leaving := 0, false
+	tidied := make(chan struct{})
+	loopEnded := make(chan struct{})
+	defer close(loopEnded)
+	tidy := func(at site) {
+		tidying++
+		p.spawn(&p.chores, func(bg context.Context) {
+			defer func() {
+				select {
+				case tidied <- struct{}{}:
+				case <-loopEnded:
+				}
+			}()
+			p.consolidateBoth(bg, at)
+		})
+	}
+	stopWhenTidy := func() bool {
+		if tidying > 0 {
+			leaving = true
+			return false
+		}
+		if p.OnIdle != nil {
+			p.OnIdle()
+		}
+		return true
+	}
 	for {
 		select {
 		case <-ctx.Done():
-			// The notes of sessions still live at shutdown have no other
-			// handle: the ids live in memory and die with this process. On a
-			// fresh context, because the one that just ended is the reason we
-			// are here and would cancel every delete before it left.
-			sctx, cancel := context.WithTimeout(context.Background(), shutdownSweep)
-			p.forgetNotes(sctx, p.Registry.Drain())
-			cancel()
 			return
+		case <-tidied:
+			tidying--
+			// A session that arrived while the passes ran keeps the daemon up.
+			if leaving && p.Registry.Len() == 0 && stopWhenTidy() {
+				return
+			}
 		case now := <-janitor.C:
 			if p.IdleExit > 0 {
 				if idle, empty := p.Registry.Idle(now); empty && idle > p.IdleExit {
 					p.Log.Info("no sessions and nothing to do; shutting down", "idle", idle.Round(time.Second))
-					if p.OnIdle != nil {
-						p.OnIdle()
+					if stopWhenTidy() {
+						return
 					}
-					return
 				}
 			}
 			evicted := p.Registry.Evict(IdleEviction, now)
@@ -112,17 +161,16 @@ func (p *Pipeline) Run(ctx context.Context) {
 			}
 			// Off the loop: this is one network write per dead session, and
 			// what is queued behind this tick is a turn waiting to be advised.
-			go p.forgetNotes(context.WithoutCancel(ctx), evicted)
+			p.spawn(&p.chores, func(bg context.Context) { p.forgetNotes(bg, evicted) })
 			// An editor that is killed, crashes, or loses the machine under it
 			// never sends its goodbye, so the daemon would otherwise sit here
 			// holding a session nobody is in. Eviction is that session dying of
 			// old age; if it was the last one there is nothing left to observe.
 			if len(evicted) > 0 && p.Registry.Len() == 0 {
 				p.Log.Info("last session evicted; shutting down", "evicted", len(evicted))
-				if p.OnIdle != nil {
-					p.OnIdle()
+				if stopWhenTidy() {
+					return
 				}
-				return
 			}
 		case ev := <-p.Queue:
 			if ev.Kind == session.KindSessionEnd {
@@ -134,14 +182,14 @@ func (p *Pipeline) Run(ctx context.Context) {
 				// httpapi gives for not clearing it either: `claude -p` fires
 				// SessionEnd at the end of every invocation, and a session
 				// resumed with --continue keeps its id. Dropping the advice
-				// here discarded it a fraction of a second before the next turn
-				// collected it, and only the race between this goroutine and
-				// the next hook decided whether anything was lost. Eviction is
+				// here would discard it a fraction of a second before the next
+				// turn collects it, and only the race between this goroutine and
+				// the next hook would decide whether anything was lost. Eviction is
 				// idle-time based and belongs to the janitor.
-				go p.forgetNotes(context.WithoutCancel(ctx), []session.Evicted{gone})
+				p.spawn(&p.chores, func(bg context.Context) { p.forgetNotes(bg, []session.Evicted{gone}) })
 				// The end of a session is the one moment the whole scope can be
 				// judged at once, and nothing is waiting on the answer.
-				go p.consolidateBoth(ctx, site{project: gone.Project, dir: gone.Dir})
+				tidy(site{project: gone.Project, dir: gone.Dir})
 
 				// A goodbye is the one moment worth asking whether anything is
 				// left, and the count alone does not answer it. A session that
@@ -158,15 +206,14 @@ func (p *Pipeline) Run(ctx context.Context) {
 					p.Metrics.Inc("shoulder_sessions_evicted_total")
 				}
 				if len(stale) > 0 {
-					go p.forgetNotes(context.WithoutCancel(ctx), stale)
+					p.spawn(&p.chores, func(bg context.Context) { p.forgetNotes(bg, stale) })
 				}
 				if p.Registry.Len() == 0 {
-					p.Log.Info("last session ended; shutting down",
+					// The loop keeps draining while the passes finish, so an
+					// editor opened in that time is advised rather than queued.
+					p.Log.Info("last session ended; shutting down once the tidying passes are done",
 						"session", ev.SessionID, "also_dropped", len(stale))
-					if p.OnIdle != nil {
-						p.OnIdle()
-					}
-					return
+					leaving = true
 				}
 				continue
 			}
@@ -188,14 +235,15 @@ func (p *Pipeline) Run(ctx context.Context) {
 			// until it closes.
 			if ev.Kind == session.KindTurnEnd {
 				if turn := p.Registry.Turn(ev.SessionID); turn > 0 && turn%consolidateEvery == 0 {
-					go p.consolidateBoth(ctx, p.sessionSite([]session.Event{ev}))
+					tidy(p.sessionSite([]session.Event{ev}))
 				}
 			}
 			// The claim is released before anyone is told the consult is
 			// over. Whoever waits on that signal posts the next event, and
 			// an event that lands while the claim is still held is skipped
 			// as in flight; with nothing else coming, that is a stall.
-			go func(sessionID string) {
+			sessionID := ev.SessionID
+			p.spawn(&p.consults, func(context.Context) {
 				func() {
 					defer p.Registry.ReleaseAdvisor(sessionID)
 					p.Consult(ctx, sessionID)
@@ -203,8 +251,79 @@ func (p *Pipeline) Run(ctx context.Context) {
 				if p.OnConsulted != nil {
 					p.OnConsulted(sessionID)
 				}
-			}(ev.SessionID)
+			})
 		}
+	}
+}
+
+func (p *Pipeline) janitorEvery() time.Duration {
+	if p.JanitorEvery > 0 {
+		return p.JanitorEvery
+	}
+	return defaultJanitorEvery
+}
+
+// spawn runs f on its own goroutine, counted in wg, and hands it a context
+// that no request owns: the work it is given outlives the event that caused
+// it. It refuses once Run is winding down, so nothing starts that the wait
+// could miss.
+func (p *Pipeline) spawn(wg *sync.WaitGroup, f func(bg context.Context)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closing {
+		return
+	}
+	if p.bg == nil {
+		p.bg, p.stopBg = context.WithCancel(context.Background())
+	}
+	wg.Add(1)
+	go func(bg context.Context) {
+		defer wg.Done()
+		f(bg)
+	}(p.bg)
+}
+
+// windDown is the last thing Run does, on every way out, and returns within
+// ShutdownBudget. Consults are cancelled at once and waited for first,
+// because one still running would write a note after the sweep has taken the
+// ids it knows about; their grace ends decidedGrace in. The notes of sessions
+// still live have no other handle: the ids live in memory and die with this
+// process. The sweep runs on a fresh context, because the one that just ended
+// is the reason we are here and would cancel every delete before it left, and
+// it ends with the budget. Chores are cancelled decidedGrace before the budget
+// ends, on a timer rather than after the sweep, so their grace ends with it
+// however long the sweep takes and a hung store or provider cannot hold exit
+// past it.
+func (p *Pipeline) windDown(cancel context.CancelFunc) {
+	cancel()
+	p.mu.Lock()
+	p.closing = true
+	stopBg := p.stopBg
+	p.mu.Unlock()
+	if stopBg != nil {
+		defer stopBg()
+		chores := time.AfterFunc(ShutdownBudget-decidedGrace, stopBg)
+		defer chores.Stop()
+	}
+
+	sctx, done := context.WithTimeout(context.Background(), ShutdownBudget)
+	defer done()
+	waitWithin(sctx, &p.consults)
+	p.forgetNotes(sctx, p.Registry.Drain())
+	p.consults.Wait()
+	p.chores.Wait()
+}
+
+// waitWithin waits for wg, or until ctx ends if that comes first.
+func waitWithin(ctx context.Context, wg *sync.WaitGroup) {
+	idle := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(idle)
+	}()
+	select {
+	case <-idle:
+	case <-ctx.Done():
 	}
 }
 
@@ -220,6 +339,11 @@ const (
 
 	recallTimeout = 10 * time.Second
 	writeTimeout  = 20 * time.Second
+
+	// decidedGrace is how long writing down a result already paid for may
+	// outlast the cancellation of whatever produced it. windDown gives a
+	// tidying pass the last decidedGrace of ShutdownBudget, so it must fit.
+	decidedGrace = 2 * time.Second
 
 	// decisionSteps caps the tool loop. Four is one look at the prompt, two
 	// lookups and an answer; a model still calling tools after that is not
@@ -249,6 +373,10 @@ const (
 	shortTurnKeywords = 8
 	longTurnKeywords  = 25
 )
+
+// windDown keeps its budget only if a cancelled result's grace fits inside it;
+// the conversion does not compile when the difference is negative.
+const _ = uint64(ShutdownBudget - decidedGrace)
 
 // sessionScopes is what a session reads. Its own project is the obvious half;
 // the global half is there because a preference the user stated in another
@@ -305,9 +433,25 @@ func (p *Pipeline) Consult(ctx context.Context, sessionID string) {
 		return
 	}
 
+	// The model has answered. Shutting down cancels a question still being
+	// asked, not the writing down of an answer already given.
+	wctx, done := Decided(ctx)
+	defer done()
 	p.queueInjection(sessionID, turn, decision.Inject, decision.Level)
-	p.persist(ctx, sessionID, at, decision.Facts, recalled)
-	p.rememberKeywords(ctx, sessionID, at, window+decision.Inject, decision.Keywords)
+	p.persist(wctx, sessionID, at, decision.Facts, recalled)
+	p.rememberKeywords(wctx, sessionID, at, window+decision.Inject, decision.Keywords)
+}
+
+// Decided is the context for storing a result that already exists. It is not
+// cancelled with ctx but decidedGrace after it, so an ending caller still
+// bounds the writes without throwing away what was paid for.
+func Decided(ctx context.Context) (context.Context, context.CancelFunc) {
+	wctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	stop := context.AfterFunc(ctx, func() { time.AfterFunc(decidedGrace, cancel) })
+	return wctx, func() {
+		stop()
+		cancel()
+	}
 }
 
 // countedSteps watches one tool loop go past. llm.Run returns the model's last
@@ -615,7 +759,7 @@ func (p *Pipeline) findNote(ctx context.Context, sessionID string, at site) stri
 	// can be recognised: old enough that no live session could still be writing
 	// one, and belonging to a session that is not this one.
 	if len(stale) > 0 {
-		go p.forgetStale(context.WithoutCancel(ctx), at, stale)
+		p.spawn(&p.chores, func(bg context.Context) { p.forgetStale(bg, at, stale) })
 	}
 	return mine
 }
@@ -1149,7 +1293,9 @@ func (p *Pipeline) learn(ctx context.Context, prov llm.Provider, req MessageRequ
 	// everywhere" is global however it was typed, and stamping the request's
 	// scope over it would file a statement about the user inside one project.
 	// The request supplies only the project a local fact is bound to.
-	kept, _ := p.store(ctx, "cli", site{project: req.Project, dir: req.Dir}, facts.Reconcile(nil, deduced), recalled, replaceCollision)
+	wctx, done := Decided(ctx)
+	defer done()
+	kept, _ := p.store(wctx, "cli", site{project: req.Project, dir: req.Dir}, facts.Reconcile(nil, deduced), recalled, replaceCollision)
 	return kept
 }
 

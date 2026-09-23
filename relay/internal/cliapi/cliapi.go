@@ -224,11 +224,15 @@ func (s *Server) writeFact(w http.ResponseWriter, r *http.Request) {
 	if sc == scope.Local {
 		rec.Project, rec.Dir = req.Project, req.Dir
 	}
+	// The fact is the caller's own words, so it is decided the moment it
+	// arrives; a daemon stopping mid-write finishes it rather than refusing it.
+	wctx, done := pipeline.Decided(r.Context())
+	defer done()
 	var id string
 	if r.Method == http.MethodPatch {
-		id, err = s.Pipe.Memory.Supersede(r.Context(), req.ID, rec)
+		id, err = s.Pipe.Memory.Supersede(wctx, req.ID, rec)
 	} else {
-		id, err = s.Pipe.Memory.Store(r.Context(), rec)
+		id, err = s.Pipe.Memory.Store(wctx, rec)
 	}
 	if err != nil {
 		s.refused(w, err)

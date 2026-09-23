@@ -11,6 +11,7 @@ import (
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/config"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/facts"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/memory"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/pipeline"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/scope"
 )
 
@@ -125,8 +126,18 @@ func (s *Server) handleMigrate(w http.ResponseWriter, r *http.Request) {
 	reply := MigrateResponse{From: from}
 	// Oldest first: List answers newest first, and a store that keeps facts in
 	// a file somebody reads should have them in the order they were learned.
-	for i := len(found) - 1; i >= 0; i-- {
+	i := len(found) - 1
+	for ; i >= 0 && r.Context().Err() == nil; i-- {
 		reply.add(s.migrate(r.Context(), found[i], sc, req, held))
+	}
+	// A record never started is not copied, and the caller has to hear so: a
+	// reply that counted only what was attempted would read as a finished
+	// migration.
+	for ; i >= 0; i-- {
+		reply.add(MigratedFact{
+			Content: found[i].Content, Category: found[i].Category,
+			Outcome: MigrateFailed, Error: "the daemon stopped before this record was copied",
+		})
 	}
 	s.Pipe.Log.Info("facts migrated", "origin", "cli", "from", from, "scope", sc,
 		"project", scope.Label(req.Project), "stored", reply.Stored,
@@ -158,7 +169,9 @@ func (s *Server) migrate(ctx context.Context, src memory.Record, sc scope.Scope,
 	}
 
 	out := MigratedFact{Content: src.Content, Category: src.Category}
-	id, err := s.Pipe.Memory.Store(ctx, rec)
+	wctx, done := pipeline.Decided(ctx)
+	defer done()
+	id, err := s.Pipe.Memory.Store(wctx, rec)
 	var semantic *memory.ErrDuplicateSemantic
 	switch {
 	case err == nil:

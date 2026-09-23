@@ -55,9 +55,10 @@ type LearnedFile struct {
 	Failed  int
 	Deleted bool
 
-	// Error is why this document was not read. It is separate from Failed,
-	// which counts facts the store would not take: one is a document nobody
-	// looked at, the other a document that was read and partly lost.
+	// Error is why this document was not read, or not read to the end. It is
+	// separate from Failed, which counts chunks the model could not answer and
+	// facts the store would not take: one is a document nobody finished
+	// looking at, the other a document that was read and partly lost.
 	Error string
 }
 
@@ -152,8 +153,21 @@ func (p *Pipeline) learnFile(ctx context.Context, prov llm.Provider, req LearnRe
 	chunks := chunkMarkdown(body, p.chunkChars())
 	out.Chunks = len(chunks)
 	for _, chunk := range chunks {
+		// A cancelled run reads no further. The error, not a failure per
+		// chunk, is what says so, and it keeps --replace from deleting a
+		// document only partly learned.
+		if ctx.Err() != nil {
+			out.Error = "stopped before the whole document was read"
+			break
+		}
 		found, err := p.extract(ctx, prov, src.name, chunk)
 		if err != nil {
+			// A call cut off by the stop is the run ending, not this chunk
+			// failing, and on the last chunk nothing after it would say so.
+			if ctx.Err() != nil {
+				out.Error = "stopped before the whole document was read"
+				break
+			}
 			p.Metrics.Inc("shoulder_cli_learn_chunk_error_total")
 			p.Log.Warn("a piece of a document was not read", "file", src.name, "err", err)
 			out.Failed++
@@ -169,7 +183,11 @@ func (p *Pipeline) learnFile(ctx context.Context, prov llm.Provider, req LearnRe
 		// A document is evidence about the codebase, not somebody correcting
 		// it: a sentence the store refuses as too close to a fact it holds
 		// leaves that fact alone.
-		_, wrote := p.store(ctx, "learn", at, facts.Reconcile(nil, found), nil, keepCollision)
+		// Read and paid for, so a cancellation from here on keeps what this
+		// chunk found; the loop then stops before the next chunk.
+		wctx, done := Decided(ctx)
+		_, wrote := p.store(wctx, "learn", at, facts.Reconcile(nil, found), nil, keepCollision)
+		done()
 		out.Stored += wrote.stored
 		out.Skipped += wrote.skipped
 		out.Failed += wrote.failed

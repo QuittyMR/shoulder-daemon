@@ -481,3 +481,116 @@ func TestLearnLooksForUntrackedFilesGitStatusWasToldToHide(t *testing.T) {
 		t.Fatalf("a refused run still wrote %+v", stored)
 	}
 }
+
+// cancellingModel answers its first chunk and cancels the run as it does, the
+// way a daemon told to stop mid-document looks from inside the loop.
+type cancellingModel struct {
+	docModel
+	cancel context.CancelFunc
+}
+
+func (m *cancellingModel) Complete(ctx context.Context, system, user string) (string, error) {
+	m.cancel()
+	return m.docModel.Complete(ctx, system, user)
+}
+
+// A run stopped partway through a document keeps what it already read, asks
+// the model nothing more, and does not delete a document it only partly
+// learned.
+func TestLearnStoppedMidDocumentKeepsItAndReadsNoFurther(t *testing.T) {
+	dir := t.TempDir()
+	doc := filepath.Join(dir, "docs", "RULES.md")
+	write(t, doc, "# One\n\nDeploys go to eu-west-2.\n\n# Two\n\nReleases are tagged.\n\n# Three\n\nTests run in CI.\n")
+	committed(t, dir)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	model := &cancellingModel{docModel: docModel{reply: oneFact}, cancel: cancel}
+	p, mem := learnPipe(t, model)
+	p.Cfg.WindowChars = 40
+	got, err := p.Learn(ctx, LearnRequest{Scope: scope.Global, Dir: dir, Replace: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(model.documents()); n != 1 {
+		t.Fatalf("the model was asked %d times; a stopped run must read no chunk after the one in flight", n)
+	}
+	if len(got.Files) != 1 {
+		t.Fatalf("files = %+v", got.Files)
+	}
+	f := got.Files[0]
+	if f.Chunks < 2 || f.Stored != 1 || f.Failed != 0 || f.Error == "" || f.Deleted {
+		t.Fatalf("%+v: want the first chunk's fact kept, no chunk failures, and an error that keeps the document", f)
+	}
+	if n := p.Metrics.Get("shoulder_cli_learn_chunk_error_total"); n != 0 {
+		t.Fatalf("%d chunk errors counted for chunks never read", n)
+	}
+	if stored, _, _ := mem.snapshot(); len(stored) != 1 {
+		t.Fatalf("stored %+v, want the fact read before the stop", stored)
+	}
+	if _, err := os.Stat(doc); err != nil {
+		t.Fatalf("a document only partly learned was deleted: %v", err)
+	}
+}
+
+// stopsOnChunk has the run stopped while the model is reading chunk at: the
+// call is cut off by the cancellation rather than answered.
+type stopsOnChunk struct {
+	docModel
+	at     int
+	calls  int
+	cancel context.CancelFunc
+}
+
+func (m *stopsOnChunk) Complete(ctx context.Context, system, user string) (string, error) {
+	m.calls++
+	if m.calls == m.at {
+		m.cancel()
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	return m.docModel.Complete(ctx, system, user)
+}
+
+// A model call cut off by the stop is not a chunk the model failed on. The
+// document says it was stopped, including when the cut-off chunk is its last
+// and no later chunk is left to notice.
+func TestLearnStoppedDuringAChunkIsNotAChunkFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		at   int
+	}{{"middle chunk", 2}, {"last chunk", 3}} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			doc := filepath.Join(dir, "docs", "RULES.md")
+			write(t, doc, "# One\n\nDeploys go to eu-west-2.\n\n# Two\n\nReleases are tagged.\n\n# Three\n\nTests run in CI.\n")
+			committed(t, dir)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			model := &stopsOnChunk{docModel: docModel{reply: oneFact}, at: tc.at, cancel: cancel}
+			p, _ := learnPipe(t, model)
+			p.Cfg.WindowChars = 40
+			got, err := p.Learn(ctx, LearnRequest{Scope: scope.Global, Dir: dir, Replace: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Files) != 1 {
+				t.Fatalf("files = %+v", got.Files)
+			}
+			f := got.Files[0]
+			if f.Chunks != 3 || model.calls != tc.at {
+				t.Fatalf("%+v after %d calls: want 3 chunks and no call after the stop", f, model.calls)
+			}
+			if f.Stored != tc.at-1 || f.Failed != 0 || f.Error == "" || f.Deleted {
+				t.Fatalf("%+v: want the earlier chunks kept, no chunk failures, and an error that keeps the document", f)
+			}
+			if n := p.Metrics.Get("shoulder_cli_learn_chunk_error_total"); n != 0 {
+				t.Fatalf("%d chunk errors counted for a stop", n)
+			}
+			if _, err := os.Stat(doc); err != nil {
+				t.Fatalf("a document only partly learned was deleted: %v", err)
+			}
+		})
+	}
+}

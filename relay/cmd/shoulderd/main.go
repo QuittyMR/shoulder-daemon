@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -173,7 +174,6 @@ func serve() error {
 		IdleExit: cfg.IdleExit, OnIdle: stop,
 		Outbox: box, Settings: live, Memory: mem, Queue: queue,
 	}
-	go pipe.Run(ctx)
 
 	// The CLI routes share the mux, the address and the token with the hooks,
 	// and live in another package only because this one may not import the
@@ -186,11 +186,16 @@ func serve() error {
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	// Bound before the pipeline starts, so a port that is taken fails the
+	// start before there is a sweep or a request to wait for.
+	ln, err := net.Listen("tcp", cfg.Addr)
+	if err != nil {
+		return err
+	}
+	ran := make(chan struct{})
 	go func() {
-		<-ctx.Done()
-		sctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		_ = hs.Shutdown(sctx)
+		defer close(ran)
+		pipe.Run(ctx)
 	}()
 
 	log.Info("shoulderd listening",
@@ -198,10 +203,58 @@ func serve() error {
 		"pickiness", cfg.Pickiness, "dry_run", cfg.Budget.DryRun, "auth", token != "",
 		"log", cfg.LogPath)
 
-	if err := hs.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return err
+	return serveUntil(ctx, stop, hs, ln, ran, httpGrace, runGrace, log)
+}
+
+// httpGrace is how long requests in flight get once the daemon is asked to
+// stop, and is longer than the two seconds a cancelled request keeps for
+// writing down what it had already decided. runGrace is how long the pipeline
+// gets: the budget Run keeps to once it is told to stop, and a second more.
+const (
+	httpGrace = 3 * time.Second
+	runGrace  = pipeline.ShutdownBudget + time.Second
+)
+
+// serveUntil serves until ctx ends or the listener fails, then cancels the
+// requests in flight and waits for them and for the pipeline to return. Both
+// write to the store, and the store is closed as soon as this returns: a save
+// cut off by exit leaves its temp file behind, and a sweep cut off leaves
+// session notes nobody will forget. A request is cancelled rather than waited
+// out because a learn or a tidying pass can run for minutes; cancelled, it
+// stops asking the model and keeps only the grace to write down what it had
+// already been told. Neither wait is open-ended, because a daemon that will
+// not stop is killed anyway, only later and with less said about why.
+func serveUntil(ctx context.Context, stop context.CancelFunc, hs *http.Server, ln net.Listener,
+	ran <-chan struct{}, reqWait, runWait time.Duration, log *slog.Logger,
+) error {
+	hs.BaseContext = func(net.Listener) context.Context { return ctx }
+	shut := make(chan struct{})
+	go func() {
+		defer close(shut)
+		<-ctx.Done()
+		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), reqWait)
+		defer cancel()
+		if err := hs.Shutdown(sctx); err != nil {
+			log.Warn("requests still running at exit were abandoned", "grace", reqWait, "error", err)
+			_ = hs.Close()
+		}
+	}()
+	// Serve returns the moment Shutdown begins, not when it ends, which is why
+	// the waits below exist at all.
+	err := hs.Serve(ln)
+	if errors.Is(err, http.ErrServerClosed) {
+		err = nil
 	}
-	return nil
+	// A listener that failed on its own leaves ctx live, and both the pipeline
+	// and the shutdown above are waiting on it.
+	stop()
+	<-shut
+	select {
+	case <-ran:
+	case <-time.After(runWait):
+		log.Warn("the pipeline did not finish in time; closing the store under it", "grace", runWait)
+	}
+	return err
 }
 
 // logRotateBytes is the size past which the log is moved aside at startup.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -167,5 +168,53 @@ func TestAMergeOfPublicFactsStaysPublic(t *testing.T) {
 	stored, _, _ := mem.snapshot()
 	if len(stored) != 1 || stored[0].Private {
 		t.Fatalf("the merged sentence was made private: %+v", stored)
+	}
+}
+
+// stallingMemory holds every supersede until its context ends, as a store
+// that has stopped answering does.
+type stallingMemory struct {
+	fakeMemory
+	entered chan struct{}
+	calls   atomic.Int32
+}
+
+func (s *stallingMemory) Supersede(ctx context.Context, _ string, _ memory.Record) (string, error) {
+	if s.calls.Add(1) == 1 {
+		close(s.entered)
+	}
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+
+// Once the grace for writing down a plan has run out, every write still to
+// come would fail. Attempting them anyway reports a healthy store as refusing,
+// once per record, on every exit that lands during a pass.
+func TestATidyingPassCutOffStopsInsteadOfFailingEveryWrite(t *testing.T) {
+	s, _ := consolidateStack(t, `{"drop":["mem_6","mem_7"],"merge":[
+		{"keep":"mem_0","replaces":["mem_1"],"content":"one"},
+		{"keep":"mem_2","replaces":["mem_3"],"content":"two"}]}`, held(10))
+	mem := &stallingMemory{fakeMemory: fakeMemory{listed: map[scope.Scope][]memory.Record{scope.Global: held(10)}}, entered: make(chan struct{})}
+	s.pipe.Memory = mem
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-mem.entered
+		cancel()
+	}()
+	if _, _, err := s.pipe.Consolidate(ctx, ConsolidateRequest{Scope: scope.Global}); err != nil {
+		t.Fatal(err)
+	}
+	if n := mem.calls.Load(); n != 1 {
+		t.Errorf("attempted %d merges; only the one in flight when the grace ran out", n)
+	}
+	if got := mem.forgets(); len(got) != 0 {
+		t.Errorf("forgot %v after the grace ran out", got)
+	}
+	if n := s.srv.Metrics.Get("shoulder_memory_write_error_total"); n != 1 {
+		t.Errorf("counted %d write errors; only the write that was cut off failed", n)
+	}
+	if n := s.srv.Metrics.Get("shoulder_memory_forget_error_total"); n != 0 {
+		t.Errorf("counted %d forget errors for forgets that were never due", n)
 	}
 }
