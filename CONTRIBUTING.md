@@ -66,7 +66,12 @@ turn is recalled for a later one worded differently, that facts survive the daem
 exiting between sessions, that a local fact never reaches another project's session,
 that an unreadable store costs the facts and nothing else, that two projects at once
 keep their own places, and that the generated token reaches the harness and is then
-enforced. It needs the editor on `PATH` and will not run in CI. The OpenCode half drives
+enforced. It needs the editor on `PATH`, logged in, and will not run in CI. Claude Code runs without
+your user settings, plugins, MCP servers, session persistence or auto-memory, so nothing
+installed in `~/.claude` can reach the test project or your own running daemon; the test
+daemon gets a `HOME` and XDG directories of its own. OpenCode still uses your real
+`XDG_DATA_HOME`, where its credentials live, so its test sessions appear in your
+OpenCode history. The OpenCode half drives
 a free model by default and skips itself when that endpoint is not answering, which it
 often is not; `SHOULDER_IT_MODEL` points it at one that is, and a run against a paid
 model costs a few one-word turns.
@@ -97,9 +102,11 @@ and secret detection. The live provider suite runs on a weekly schedule from `ma
 
 ## Cutting a release
 
-One number has to agree in three places: the tag, `adapters/claude-code/.claude-plugin/plugin.json`,
-and a `## [X.Y.Z]` section in `CHANGELOG.md`. `make release-check TAG=vX.Y.Z` proves it and
-prints the notes that will go on the release.
+One number has to agree in four places: the tag, `adapters/claude-code/.claude-plugin/plugin.json`,
+`adapters/opencode/package.json`, and a `## [X.Y.Z]` section in `CHANGELOG.md`.
+`make release-check TAG=vX.Y.Z` proves it and prints the notes that will go on the release.
+A minor version is for a change a user notices while working with an agent - what is stored,
+recalled or injected; CLI additions, logging and install fixes are patch releases.
 
 ```bash
 make release-check TAG=v0.2.0
@@ -115,6 +122,25 @@ recognises a nested module's tag when it carries the directory as a prefix. With
 Both pipelines then build the binaries, push the images, and create the release with the
 changelog section as its notes. The plugin picks the new binary up on the next editor start
 once the old daemon has exited.
+
+The OpenCode adapter's npm package is published by the `npm` job in
+`.github/workflows/release.yml`, from GitHub only: npm checks the package's provenance against
+the `repository` in `package.json`, which names the GitHub repository, so a publish from GitLab
+is refused. It authenticates with the `NPM_TOKEN` repository secret - a granular npm token with
+read and write on `shoulder-daemon` only and two-factor bypass enabled. npm's trusted publishing
+would need no token, but it can only be configured from an account with two-factor
+authentication, and this one has none. npm write tokens expire, so the job fails with
+`NPM_TOKEN is not set` or a 401/403 when the token is missing or stale. To replace it:
+generate a new granular token with the same settings on npmjs.com, revoke the old one, run
+`gh secret set NPM_TOKEN -R QuittyMR/shoulder-daemon`, and re-run the failed job. A version
+that never reached npm can also be published by hand from `adapters/opencode` with
+`npm publish --access public --//registry.npmjs.org/:_authToken=<token>`, which keeps the
+token out of `~/.npmrc`.
+
+The release scripts are bash. A shell that exports `SHELLOPTS` with `onecmd` set - some agent
+harnesses do - makes every bash script run its first command and exit 0, so
+`make release-check` reports nothing and passes. Run them from a normal terminal, or prefix
+`env -u SHELLOPTS`.
 
 New harness support means a new directory under `adapters/`, a matching entry in
 `scripts/install-plugins.sh`, and captured hook payload fixtures under
