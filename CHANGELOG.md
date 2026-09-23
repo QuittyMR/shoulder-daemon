@@ -8,6 +8,13 @@ Notable changes to shoulder-daemon. The format follows
 
 ### Added
 
+- The OpenCode adapter ships as the `shoulder-daemon` npm package, so
+  `opencode plugin shoulder-daemon` installs it and OpenCode lists it under
+  that name. OpenCode labels a plugin with the spec it was installed by, so a
+  file copied into the plugin directory appears as its path; the package is
+  what makes the name appear instead, and it carries the version the tag built.
+  Copying the file still works and runs identical code.
+
 - `SHOULDER_MEMORY=docs` keeps facts as markdown in the repository they are about:
   one bullet per fact under `docs/*.shoulder.md` in the worktree, committed and
   reviewed like any other file, with preferences in a `USER.shoulder.md` the daemon

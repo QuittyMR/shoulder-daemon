@@ -1,0 +1,34 @@
+{
+  "name": "shoulder-daemon",
+  "version": "0.4.0",
+  "description": "Context advisor for coding agents. Watches the session over HTTP hooks, keeps a store of facts, and injects the relevant ones back in when they matter. Starts the daemon itself; nothing else to install.",
+  "type": "module",
+  "exports": {
+    "./server": "./shoulder-daemon.js"
+  },
+  "files": [
+    "shoulder-daemon.js",
+    "README.md"
+  ],
+  "author": {
+    "name": "Thomas Raz",
+    "url": "https://gitlab.com/quittymr"
+  },
+  "homepage": "https://gitlab.com/quittymr/shoulder-daemon",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/QuittyMR/shoulder-daemon.git",
+    "directory": "adapters/opencode"
+  },
+  "bugs": "https://gitlab.com/quittymr/shoulder-daemon/-/issues",
+  "license": "MIT",
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "memory",
+    "context",
+    "hooks",
+    "advisor",
+    "facts"
+  ]
+}

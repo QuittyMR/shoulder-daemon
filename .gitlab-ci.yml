@@ -72,6 +72,28 @@ test:
       - advisor-echo/coverage.out
     expire_in: 1 week
 
+# The OpenCode adapter is JavaScript, so nothing above can see it, and it is
+# the piece that decides whether a session is observed at all. Its last repair
+# was for a relay that served happily with a dead store underneath it, which ran
+# for days because nobody was looking - a suite that nothing runs would have
+# found that exactly as late.
+adapter-test:
+  stage: test
+  image: node:22-alpine
+  # Nothing here is Go, and the shared cache holds the compiler's output.
+  cache: []
+  # The same rules the Go jobs carry: this is part of the same offline suite and
+  # there is no reason for it to run on a different set of pipelines.
+  rules:
+    - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/
+    - if: $CI_PIPELINE_SOURCE =~ /^(web|api)$/
+  # The file is named rather than the directory: the directory form of --test
+  # does not resolve it on node 22.
+  script:
+    - node --test adapters/opencode/shoulder-daemon.test.js
+
 # Zero dependencies still leaves the standard library, which is where the CVEs
 # that apply to a stdlib-only binary are filed.
 vulncheck:
@@ -205,6 +227,22 @@ mirror-image:
         skopeo copy --all --dest-creds "$CI_REGISTRY_USER:$CI_REGISTRY_PASSWORD" \
           "docker://ghcr.io/quittymr/shoulder-daemon:$t" "docker://$IMAGE:$t"
       done
+
+# The OpenCode adapter is one file, but OpenCode labels a plugin with the spec
+# it was installed by: a copied file shows as a path, an npm package shows as
+# its name. Publishing is what makes it read as "shoulder-daemon" in the
+# plugin list. NPM_TOKEN is a protected, masked variable; without it the job
+# fails rather than silently skipping a release artefact.
+npm-package:
+  extends: .tagged
+  stage: release
+  needs: [verify-version]
+  image: node:22-alpine
+  script:
+    - test -n "$NPM_TOKEN" || { echo "NPM_TOKEN is not set" >&2; exit 1; }
+    - npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
+    - cd adapters/opencode
+    - npm publish --access public
 
 release:
   extends: .tagged

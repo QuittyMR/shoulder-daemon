@@ -4,7 +4,7 @@ COMPOSE := docker compose -f deploy/docker-compose.yml
 
 GOLANGCI := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
 
-.PHONY: build test cover bench lint vulncheck release-check release docker-build up down logs memory doctor e2e clean install-plugins update
+.PHONY: build test adapter-test cover bench lint vulncheck release-check release docker-build up down logs memory doctor e2e clean install-plugins update
 
 build:
 	@mkdir -p $(BIN)
@@ -14,6 +14,12 @@ build:
 test:
 	cd relay && go test ./...
 	cd advisor-echo && go test ./...
+
+# The OpenCode adapter decides whether a session is observed at all, and it is
+# the one part of this repository `go test` cannot see. Kept out of `test` so
+# that node is not a requirement of the default suite; CI runs both.
+adapter-test:
+	node --test adapters/opencode/shoulder-daemon.test.js
 
 # The hook round trip is the number the whole design rests on. Anything that
 # puts network or synchronous disk I/O on the hook path shows up here first.

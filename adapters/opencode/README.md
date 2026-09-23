@@ -1,13 +1,27 @@
 # shoulder-daemon for OpenCode
 
-Copy one file into `~/.config/opencode/plugins/`, or into `.opencode/plugins/`
-for a single project. OpenCode loads both.
+Install it from npm, which is also what makes OpenCode list it under a name:
+
+```bash
+opencode plugin shoulder-daemon
+```
+
+That resolves the package, detects its `./server` entrypoint, and adds
+`"shoulder-daemon"` to the `plugin` array of your OpenCode config. Pass
+`--global` to write the user config instead of the project one.
+
+Or copy the one file into `~/.config/opencode/plugins/`, or into
+`.opencode/plugins/` for a single project. OpenCode loads both.
 
 ```bash
 mkdir -p ~/.config/opencode/plugins
 curl -o ~/.config/opencode/plugins/shoulder-daemon.js \
   https://gitlab.com/quittymr/shoulder-daemon/-/raw/main/adapters/opencode/shoulder-daemon.js
 ```
+
+The two routes run identical code. They differ in what `/status` shows and in
+who updates it: the npm package carries the version and upgrades with
+`opencode plugin shoulder-daemon`, while a copied file is yours to refresh.
 
 The plugin starts the daemon at load if nothing is answering, using an atomic
 lock so that several editors opening together start exactly one. Set
