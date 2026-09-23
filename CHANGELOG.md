@@ -60,6 +60,13 @@ Notable changes to shoulder-daemon. The format follows
   inherits the strictest of them, and a session working note is never private. Under
   `SHOULDER_MEMORY=docs`, marking a stored fact private moves its line out of the
   committed file and into the `USER.shoulder.md` git does not carry.
+
+- A scenario benchmark behind the `scenario` build tag measures the whole loop rather
+  than retrieval alone: a seeded fact, an agent turn whose own prose has to recall it
+  and get it injected, a later turn that contradicts it and has to supersede that exact
+  record, and the store's final contents - run against every backend the daemon can be
+  built with, with the per-backend numbers in `docs/PERFORMANCE.md`.
+
 ### Changed
 
 - A fact in the `preference` category is marked private wherever it is filed; the
