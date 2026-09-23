@@ -323,6 +323,7 @@ func (f *fake) Store(_ context.Context, r Record) (string, error) {
 	f.next++
 	r.ID = fmt.Sprintf("fake-%d", f.next)
 	r.Project = scope.Key(r.Project)
+	r.Dir = ""
 	f.recs[r.ID] = r
 	return r.ID, nil
 }
@@ -402,5 +403,87 @@ func TestARefusedSupersedeSaysWhetherTheTargetWasSeenElsewhere(t *testing.T) {
 	}
 	if got, _ := c.List(ctx, Query{Scope: scope.Global}); len(got) != 1 {
 		t.Errorf("the global record must be untouched, got %+v", got)
+	}
+}
+
+// A correction is written by whoever spotted the mistake, and on the write path
+// that is a model that was shown the record's content and not its placement.
+// If the replacement decided the question afresh, every correction of a private
+// fact would publish it.
+func TestSupersedeCannotPublishAPrivateRecord(t *testing.T) {
+	ctx := context.Background()
+	c := Checked(newFake())
+
+	id, err := c.Store(ctx, Record{
+		Content: "postgres listens on 5433 here", Category: "structure",
+		Private: true, Scope: scope.Local, Project: "/srv/app",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newID, err := c.Supersede(ctx, id, Record{
+		Content: "postgres listens on 5434 here", Category: "structure",
+		Scope: scope.Local, Project: "/srv/app",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.List(ctx, Query{Scope: scope.Local, Project: "/srv/app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != newID {
+		t.Fatalf("expected the replacement alone, got %+v", got)
+	}
+	if !got[0].Private {
+		t.Fatalf("a correction published the record it corrected: %+v", got[0])
+	}
+
+	// The flag only ever travels forward. A record that was public stays
+	// public unless the replacement says otherwise, so this is not a latch
+	// that any one private fact in a project closes over the rest.
+	pubID, err := c.Store(ctx, Record{
+		Content: "deploys go to eu-west-2", Category: "decision",
+		Scope: scope.Local, Project: "/srv/app",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, serr := c.Supersede(ctx, pubID, Record{
+		Content: "deploys go to eu-west-1", Category: "decision",
+		Scope: scope.Local, Project: "/srv/app",
+	}); serr != nil {
+		t.Fatal(serr)
+	}
+	got, err = c.List(ctx, Query{Scope: scope.Local, Project: "/srv/app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range got {
+		if r.Content == "deploys go to eu-west-1" && r.Private {
+			t.Fatalf("a team convention was made private by a correction: %+v", r)
+		}
+	}
+}
+
+// A working note is the last few turns' keywords, rewritten every turn and
+// dropped when the session goes quiet. A backend that files private records
+// separately - out of the repository, and out of what the person prunes - would
+// be handed that churn to keep, so the boundary refuses the combination rather
+// than leaving each connector to notice it.
+func TestAPrivateSessionNoteIsRefused(t *testing.T) {
+	ctx := context.Background()
+	c := Checked(newFake())
+
+	note := Record{
+		Content: "session keywords: parser, loader", Kind: KindSession,
+		Private: true, Scope: scope.Local, Project: "/srv/app",
+	}
+	if _, err := c.Store(ctx, note); err == nil {
+		t.Fatal("a private working note was stored")
+	}
+	note.Private = false
+	if _, err := c.Store(ctx, note); err != nil {
+		t.Fatalf("the same note without the flag must be storable: %v", err)
 	}
 }

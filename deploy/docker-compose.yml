@@ -36,8 +36,13 @@ services:
       # image has no HOME to derive one from.
       HOME: "/home/nonroot"
       SHOULDER_MEMORY_PATH: "/home/nonroot/.local/share/shoulder-daemon/facts.json"
+      SHOULDER_MODEL_DIR: "/home/nonroot/.cache/shoulder-daemon/models"
     volumes:
       - facts:/home/nonroot
+      # The embedding model, when SHOULDER_EMBEDDING=minilm asks for one, at
+      # the same place a bare binary keeps it: one 91 MB download per machine
+      # rather than one per container, and a daemon run either way finds it.
+      - ${HOME}/.cache/shoulder-daemon/models:/home/nonroot/.cache/shoulder-daemon/models
       # Claude Code's session transcripts, read-only and at the host path,
       # because a hook payload names the file by that path. The Stop hook
       # carries only the last text of a turn; the file has all of it.

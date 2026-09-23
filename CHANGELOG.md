@@ -8,6 +8,14 @@ Notable changes to shoulder-daemon. The format follows
 
 ### Added
 
+- `SHOULDER_EMBEDDING=minilm` ranks the built-in store by a transformer
+  (all-MiniLM-L6-v2, run in pure Go) instead of the compiled-in word vectors. The
+  model is fetched once into `SHOULDER_MODEL_DIR` in the background; until it is
+  there, and on any machine without it, the store works exactly as before. Facts
+  written before the model arrived are re-embedded behind the store. The default
+  stays `glove`: measured on the benchmark in `docs/INSTALL.md`, the transformer's
+  scores need a floor of their own before it can be the default.
+
 - Every CLI request and every session write carries the directory it came from
   beside the project identity, so a store that keeps facts with the checkout can
   find the checkout. It is informational: nothing stores or compares it.
@@ -22,6 +30,20 @@ Notable changes to shoulder-daemon. The format follows
   inherits the strictest of them, and a session working note is never private. Under
   `SHOULDER_MEMORY=docs`, marking a stored fact private moves its line out of the
   committed file and into the `USER.shoulder.md` git does not carry.
+
+### Fixed
+
+- The built-in store's re-embedding pass did not start on a store with no file yet,
+  so with `SHOULDER_EMBEDDING=minilm` every fact of the first session kept the
+  word-vector embedding until the next start.
+- Two facts differing only in a word the compiled-in word vectors have never seen
+  are no longer read as one fact restated. "the frontend is deployed to Cloudflare"
+  and "the backend is deployed to Cloudflare" embedded to the identical vector,
+  because none of the three words is in the table, so the second was refused as a
+  duplicate and superseded the first: a fact deleted on the default install. The
+  words a model could not look up now have to match before its similarity may
+  declare a restatement. `SHOULDER_EMBEDDING=minilm` is unaffected — a WordPiece
+  tokeniser has no word outside its vocabulary — and recall is unchanged for both.
 
 ## [0.3.0] - 2026-09-05
 

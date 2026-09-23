@@ -221,6 +221,25 @@ func (Embedder) Embed(_ context.Context, text string) ([]float32, error) {
 	return sum, nil
 }
 
+// Knows reports whether the table has a vector for word, which is what makes
+// this embedder answer memory.Vocabulary. The word is expected to be one of
+// the tokens tokenise produces — the store splits text the same way — and it
+// is lower cased again here because the table is lower case and a caller
+// spelling a word as it was written should not be told it is unknown.
+//
+// A table that failed to load claims to know everything rather than nothing.
+// Embed returns its error in that case, so no vector exists to be compared and
+// the answer is never read; claiming ignorance instead would let a broken file
+// manufacture a guard out of every word in the language.
+func (Embedder) Knows(word string) bool {
+	t := load()
+	if t.err != nil {
+		return true
+	}
+	_, ok := t.words[strings.ToLower(word)]
+	return ok
+}
+
 // Dims is the width of a vector from this table, and Words its vocabulary. They
 // are here for the daemon's startup line and for tests; nothing else asks.
 func Dims() (int, error) {

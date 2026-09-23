@@ -79,3 +79,35 @@ func TestLogPathDefaultsToAFileAndStderrMeansNone(t *testing.T) {
 		t.Errorf("explicit: got %q", got)
 	}
 }
+
+// The embedding is opt-in by name and forgiven like the other knobs; the
+// model directory follows the cache directory unless it is pointed elsewhere.
+func TestEmbeddingIsReadFromTheEnvironmentAndForgivesATypo(t *testing.T) {
+	cases := []struct{ set, want string }{
+		{"", EmbeddingGloVe},
+		{"glove", EmbeddingGloVe},
+		{"minilm", EmbeddingMiniLM},
+		{" MiniLM ", EmbeddingMiniLM},
+		{"bert", EmbeddingGloVe},
+	}
+	for _, c := range cases {
+		t.Run(c.set, func(t *testing.T) {
+			t.Setenv("SHOULDER_EMBEDDING", c.set)
+			if got := Load().Embedding; got != c.want {
+				t.Fatalf("SHOULDER_EMBEDDING=%q chose %q, want %q", c.set, got, c.want)
+			}
+		})
+	}
+}
+
+func TestModelDirFollowsTheCacheUnlessSet(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", "/cache")
+	t.Setenv("SHOULDER_MODEL_DIR", "")
+	if got := Load().ModelDir; got != filepath.Join("/cache", "shoulder-daemon", "models") {
+		t.Fatalf("ModelDir = %q", got)
+	}
+	t.Setenv("SHOULDER_MODEL_DIR", "/models")
+	if got := Load().ModelDir; got != "/models" {
+		t.Fatalf("ModelDir = %q, want the override", got)
+	}
+}

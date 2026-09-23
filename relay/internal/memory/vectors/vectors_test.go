@@ -115,3 +115,27 @@ func TestAVeryShortQueryIsNotConfidentlyPlaced(t *testing.T) {
 		t.Errorf("a three-word query scored %.3f, which the store would treat as a match", related)
 	}
 }
+
+// Knows is what makes this table answer memory.Vocabulary, and the store's
+// guard against deleting a fact is built on its answers being right about this
+// table rather than about English.
+func TestKnowsReportsWhatIsActuallyInTheTable(t *testing.T) {
+	var e Embedder
+	// Ordinary English, present in the inflections these facts use, which is
+	// why the store is free to fold a trailing s on the words that are not.
+	for _, w := range []string{"deploy", "deploys", "deployed", "service", "services", "branch", "branches"} {
+		if !e.Knows(w) {
+			t.Errorf("Knows(%q) = false, want true", w)
+		}
+	}
+	// The words the defect was measured on. All three are outside the table,
+	// which is why two sentences that differ only in them embed identically.
+	for _, w := range []string{"frontend", "backend", "cloudflare", "namespace", "deduplicate"} {
+		if e.Knows(w) {
+			t.Errorf("Knows(%q) = true, want false", w)
+		}
+	}
+	if e.Knows("Cloudflare") != e.Knows("cloudflare") {
+		t.Error("Knows disagrees with itself about case; the table is lower case and so is the tokeniser")
+	}
+}

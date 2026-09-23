@@ -48,6 +48,13 @@ type Config struct {
 	// when no memory service was named.
 	MemoryPath string
 
+	// Embedding names the model the built-in store ranks by: the word vectors
+	// compiled into the binary, or the transformer it downloads into ModelDir
+	// on first use. It is the one setting that decides whether the daemon
+	// ever touches the network for itself.
+	Embedding string
+	ModelDir  string
+
 	// IdleExit stops the daemon after this long with no session. What normally
 	// ends it is the last session ending; this is the backstop for the harness
 	// that dies without saying goodbye, which otherwise leaves a daemon sitting
@@ -82,6 +89,8 @@ func Load() Config {
 		MemoryURL:      Setting("SHOULDER_MEMORY_URL"),
 		MemoryKey:      Setting("SHOULDER_MEMORY_KEY"),
 		MemoryPath:     Env("SHOULDER_MEMORY_PATH", memory.DefaultLocalPath()),
+		Embedding:      embedding(Setting("SHOULDER_EMBEDDING")),
+		ModelDir:       Env("SHOULDER_MODEL_DIR", memory.DefaultModelDir()),
 		QueueSize:      envInt("QUEUE_SIZE", 1024),
 		IdleExit:       time.Duration(envInt("SHOULDER_IDLE_EXIT_MINUTES", 60)) * time.Minute,
 		LogPath:        logPath(Setting("SHOULDER_LOG")),
@@ -158,6 +167,23 @@ func pickiness(s string) prompts.Pickiness {
 		return prompts.Default
 	}
 	return p
+}
+
+// The values SHOULDER_EMBEDDING takes.
+const (
+	EmbeddingGloVe  = "glove"
+	EmbeddingMiniLM = "minilm"
+)
+
+// embedding reads the model by name. An unrecognised value is the one that
+// ships in the binary, for the same reason a bad log level is info: the daemon
+// is still useful with it, and the startup line says which was chosen.
+func embedding(s string) string {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case EmbeddingMiniLM:
+		return EmbeddingMiniLM
+	}
+	return EmbeddingGloVe
 }
 
 func envInt(k string, d int) int {
