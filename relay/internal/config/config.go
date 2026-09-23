@@ -36,6 +36,12 @@ type Config struct {
 	MessageTimeout time.Duration
 	DigestTimeout  time.Duration
 
+	// LearnTimeout bounds one `shoulderd learn` end to end. It is in minutes
+	// rather than seconds because that command is a model call per section of
+	// every document in a repository, and the person who typed it knows they
+	// are waiting; each individual call is still bounded by MessageTimeout.
+	LearnTimeout time.Duration
+
 	WindowEvents int
 	WindowChars  int
 
@@ -95,6 +101,7 @@ func Load() Config {
 		SystemPrompt:   Env("ADVISOR_SYSTEM_PROMPT", prompts.Advisor),
 		MessageTimeout: time.Duration(envInt("MESSAGE_TIMEOUT_SECONDS", 60)) * time.Second,
 		DigestTimeout:  time.Duration(envInt("DIGEST_TIMEOUT_SECONDS", 120)) * time.Second,
+		LearnTimeout:   time.Duration(envInt("LEARN_TIMEOUT_SECONDS", 1800)) * time.Second,
 		WindowEvents:   envInt("WINDOW_EVENTS", 40),
 		WindowChars:    envInt("WINDOW_CHARS", 12000),
 		MemoryURL:      Setting("SHOULDER_MEMORY_URL"),

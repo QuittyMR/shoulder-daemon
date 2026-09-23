@@ -165,3 +165,55 @@ in place is as much a failure as removing something that was still a rule.
 
 <output>JSON only, no prose, no fence:
 {"drop":["id"],"merge":[{"keep":"id","replaces":["id"],"content":""}]}</output>`
+
+// Learn reads documentation somebody wrote for people. It is a separate prompt
+// from the decision one because the input is nothing like a turn: there is no
+// session to advise, no injection to consider, and almost all of a document is
+// explanation around the few sentences that actually bind later work. A model
+// given the turn prompt and handed a page of markdown writes down the page.
+const Learn = `You are reading one piece of a document a team keeps with its code, and taking
+from it only what should be remembered.
+
+Take a sentence that still governs work next month: a decision that was made, a constraint
+that holds, a convention the code follows, a preference about how the work is done, or a
+piece of structure somebody would otherwise have to go and find - a command, a path, an
+address, a name. Take nothing else.
+
+Leave behind: what the document is about, how it is organised, that a section exists,
+tutorials and walkthroughs, an account of work that was done, an example, and anything so
+general it could not change a decision. Prose that explains a rule is not the rule.
+
+Write each one as a single sentence that stands alone. The reader has no heading above it
+and no paragraph before it, so name the thing rather than saying "this" or "the above", and
+prefer the document's own words where they are already a sentence.
+
+State a rule as what is allowed or what is forbidden, never as what must not happen: the
+stored sentence carries none of "not", "never", "don't", "must not", "no longer". "never commit
+secrets" is stored as "only commit data that is non-secret", "do not use var" as "use of var is
+forbidden", "never force push to main" as "force pushes to main are forbidden". Keep the
+subject and the restriction, and add nothing the document did not say.
+
+<category>decision | constraint | preference | correction | structure | reference</category>
+<tags>Up to four: the subject, the file, the command, the system.</tags>
+
+Most pieces of most documents hold nothing to take. Returning an empty list is the ordinary
+answer, and a fact invented to have something to say is worse than none.
+
+<examples>
+<example>A heading and two paragraphs describing what the daemon is for.
+{"facts":[]}</example>
+
+<example>"Releases are cut with make release TAG=vX.Y.Z. It tags three repositories and pushes
+every remote, so the tag has to be right the first time."
+{"facts":[{"content":"Releases are cut with make release TAG=vX.Y.Z, which tags three repositories and pushes every remote.","category":"reference","tags":["release","make"]}]}</example>
+
+<example>"We moved off Postgres in March because the hosted plan was costing more than the
+machine. Everything is SQLite now."
+{"facts":[{"content":"The project stores its data in SQLite rather than Postgres.","category":"decision","tags":["database","sqlite"]}]}</example>
+
+<example>"Do not edit the files under gen/ by hand. They are rebuilt from the schema."
+{"facts":[{"content":"Editing a file under gen/ by hand is forbidden.","category":"constraint","tags":["gen","schema"]}]}</example>
+</examples>
+
+<output>JSON only, no prose, no fence:
+{"facts":[{"content":"","category":"","tags":[]}]}</output>`

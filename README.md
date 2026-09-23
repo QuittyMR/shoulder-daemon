@@ -144,14 +144,21 @@ main branch is master
 
 $ shoulderd fact add --global "I prefer terse answers with no preamble"
 $ shoulderd fact add --local --category=structure "integration tests need a live Postgres"
+$ shoulderd fact add --local --private "postgres listens on 5433 on this machine"
 $ shoulderd fact list --local
 $ shoulderd digest                      # narrative summary; --local or --global to narrow
+$ shoulderd learn --local               # read the docs this repository already has
 ```
 
-`message` records what it learns by default. `--update` forces it, `--no-update`
-answers without writing. Writes demand `--local` or `--global`; reads default to
-this project, except `digest`, which covers both. `shoulderd help` spells out
-each one.
+`message` records what it learns by default. `--update` forces it,
+`--no-update` answers without writing. `learn` fills the store from the
+documentation a repository already carries instead of waiting to overhear it,
+and with `--replace` deletes each document once everything it said is stored.
+`--private` marks a fact about your machine, accounts, paths or habits rather
+than about the project, so a backend that files facts beside the checkout keeps
+it out of what the team commits. Writes demand `--local` or `--global`; reads
+default to this project, except `digest`, which covers both. `shoulderd help`
+spells out each one.
 ## Configuration and tweaking
 
 Every setting is a line in `~/.config/shoulder-daemon/env`, and the four that

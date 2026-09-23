@@ -383,7 +383,7 @@ func TestUnknownSubcommandPrintsEveryCommand(t *testing.T) {
 	if code != 2 {
 		t.Fatalf("exit %d, want 2", code)
 	}
-	for _, want := range []string{"remember", "doctor", "message", "fact add", "fact update", "fact list", "digest", "memory migrate"} {
+	for _, want := range []string{"remember", "doctor", "message", "fact add", "fact update", "fact list", "digest", "learn", "memory migrate"} {
 		if !strings.Contains(stderr, want) {
 			t.Fatalf("usage does not mention %q:\n%s", want, stderr)
 		}
@@ -473,6 +473,7 @@ func TestSubcommandHelpTeachesTheScopeContract(t *testing.T) {
 		{[]string{"fact", "list", "--help"}, []string{"(default)", "--global"}},
 		{[]string{"message", "--help"}, []string{"(default)", "--no-update"}},
 		{[]string{"digest", "--help"}, []string{"covers both"}},
+		{[]string{"learn", "--help"}, []string{"--local", "--global", "required", "--replace", "docs/"}},
 		{[]string{"memory", "--help"}, []string{"memory migrate", "--from"}},
 		{[]string{"memory", "migrate", "--help"}, []string{"--local", "--global", "required", "--from PATH"}},
 		{[]string{"doctor", "--help"}, []string{"--liveness"}},
@@ -804,7 +805,6 @@ func TestAConfigValueTheDaemonRefusesIsAUsageError(t *testing.T) {
 	}
 }
 
-
 // The flag is the only way a person can say that a fact about the project is
 // still theirs alone. Without it the field is absent from the request rather
 // than sent false, so a daemon that judges the category private on its own is
@@ -837,6 +837,122 @@ func TestFactWriteSendsPrivateOnlyWhenAsked(t *testing.T) {
 				t.Fatalf("a command that did not pass --private sent %v", d.req().body["private"])
 			}
 		})
+	}
+}
+
+func TestLearnRefusesToPickAScope(t *testing.T) {
+	d := newDaemon(t, `{"files":[]}`)
+	code, _, stderr := run(t, "learn", "--addr", d.URL)
+	if code != 2 {
+		t.Fatalf("exit %d, want 2: %s", code, stderr)
+	}
+	if !strings.Contains(stderr, "--local or --global") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+	if d.req().calls != 0 {
+		t.Fatal("an unscoped ingest reached the daemon")
+	}
+}
+
+func TestLearnRefusesToBothKeepAndReplace(t *testing.T) {
+	t.Chdir(t.TempDir())
+	d := newDaemon(t, `{"files":[]}`)
+	code, _, stderr := run(t, "learn", "--addr", d.URL, "--global", "--replace", "--keep-old")
+	if code != 2 {
+		t.Fatalf("exit %d, want 2: %s", code, stderr)
+	}
+	if !strings.Contains(stderr, "mutually exclusive") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+	if d.req().calls != 0 {
+		t.Fatal("a command line nobody could act on reached the daemon")
+	}
+}
+
+func TestLearnSendsWhereItRanAndTheDocumentsToRead(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	d := newDaemon(t, `{"files":[{"path":"docs/ARCHITECTURE.md","chunks":3,"stored":2,"skipped":1}],"chunks":3,"stored":2,"skipped":1}`)
+
+	code, stdout, stderr := run(t, "learn", "--addr", d.URL, "--local", "--replace", "docs/ARCHITECTURE.md")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	if got := d.req().path; got != "/v1/cli/learn" {
+		t.Fatalf("path = %q", got)
+	}
+	if got := d.field(t, "scope"); got != "local" {
+		t.Fatalf("scope = %q", got)
+	}
+	if replace, _ := d.req().body["replace"].(bool); !replace {
+		t.Fatalf("--replace did not reach the daemon: %+v", d.req().body)
+	}
+	// The daemon opens the files and is routinely somewhere else, so a path
+	// typed against this shell leaves it resolved.
+	paths, _ := d.req().body["paths"].([]any)
+	if len(paths) != 1 {
+		t.Fatalf("paths = %+v", d.req().body["paths"])
+	}
+	first, _ := paths[0].(string)
+	if !filepath.IsAbs(first) || filepath.Base(first) != "ARCHITECTURE.md" {
+		t.Fatalf("path = %q, want an absolute path to the document", first)
+	}
+	if !strings.Contains(stdout, "docs/ARCHITECTURE.md: 3 chunks, 2 stored, 1 skipped") {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	if !strings.Contains(stdout, "2 stored, 1 skipped, 0 failed from 1 document") {
+		t.Fatalf("stdout = %q does not total what happened", stdout)
+	}
+}
+
+func TestLearnWithNoPathsNamesNone(t *testing.T) {
+	t.Chdir(t.TempDir())
+	d := newDaemon(t, `{"files":[]}`)
+	code, stdout, stderr := run(t, "learn", "--addr", d.URL, "--global")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	if _, named := d.req().body["paths"]; named {
+		t.Fatalf("the default list was decided here: %+v", d.req().body)
+	}
+	if !strings.Contains(stdout, "no documents") {
+		t.Fatalf("stdout = %q", stdout)
+	}
+}
+
+// A document that was not read, or a fact the store refused, is the failure
+// this command exists to report: the repository still says something the
+// memory does not.
+func TestLearnExitsOneWhenSomethingWasNotLearned(t *testing.T) {
+	t.Chdir(t.TempDir())
+	d := newDaemon(t, `{"files":[{"path":"docs/BIG.md","error":"not read: 2000000 bytes is past the 1048576 a document is read up to"},{"path":"docs/OK.md","chunks":1,"stored":1}],"chunks":1,"stored":1}`)
+
+	code, stdout, stderr := run(t, "learn", "--addr", d.URL, "--global")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	if !strings.Contains(stderr, "docs/BIG.md") || !strings.Contains(stderr, "past the") {
+		t.Fatalf("stderr = %q does not say what was missed or why", stderr)
+	}
+	if !strings.Contains(stdout, "1 stored") {
+		t.Fatalf("stdout = %q", stdout)
+	}
+}
+
+func TestLearnJSONIsTheWireShape(t *testing.T) {
+	t.Chdir(t.TempDir())
+	d := newDaemon(t, `{"files":[{"path":"docs/A.md","chunks":2,"stored":1,"skipped":0,"failed":0,"deleted":true}],"chunks":2,"stored":1,"deleted":1}`)
+
+	code, stdout, stderr := run(t, "learn", "--addr", d.URL, "--json", "--global")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	var got cliapi.LearnResponse
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("stdout %q is not the reply shape: %v", stdout, err)
+	}
+	if got.Stored != 1 || len(got.Files) != 1 || !got.Files[0].Deleted {
+		t.Fatalf("got %+v", got)
 	}
 }
 

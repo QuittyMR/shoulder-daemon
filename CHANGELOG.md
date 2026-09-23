@@ -34,6 +34,18 @@ Notable changes to shoulder-daemon. The format follows
   exits 1 if anything was refused, and refuses to migrate the JSON store into
   itself.
 
+- `shoulderd learn --local|--global [--replace|--keep-old] [PATH...]` reads the
+  documentation a repository already carries into the store: the markdown at the top of
+  the worktree and everything under `docs/` or `doc/`, or the paths you name. Each
+  document goes to the decision model a section at a time and what comes back is stored
+  under the scope you passed, through the same write path a session uses. `README`,
+  `CHANGELOG`, `LICENSE`, `CONTRIBUTING`, the agent instruction files, dot directories,
+  `node_modules`, `vendor`, `dist`, `build` and the daemon's own `*.shoulder.md` files
+  are left alone. It prints per-document counts and exits 1 if anything was missed.
+  `--replace` deletes each document once everything it said is in the store, and only
+  from a worktree that was clean when the run started. `LEARN_TIMEOUT_SECONDS` (1800)
+  bounds one run.
+
 - Every CLI request and every session write carries the directory it came from
   beside the project identity, so a store that keeps facts with the checkout can
   find the checkout. It is informational: nothing stores or compares it.

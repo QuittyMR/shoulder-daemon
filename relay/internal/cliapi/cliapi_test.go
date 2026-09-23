@@ -113,15 +113,32 @@ func (f *fakeMemory) asked() []memory.Query {
 // fakeLLM answers by which job it was given: the two CLI prompts want prose,
 // the decision prompt wants the extraction JSON.
 type fakeLLM struct {
+	mu       sync.Mutex
+	seen     []string
 	prose    string
 	decision string
+	learn    string
 }
 
 func (f *fakeLLM) Name() string { return "fake" }
 
+// asked is every system prompt this model was sent, which is how a test says
+// a route refused before it spent anything.
+func (f *fakeLLM) asked() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.seen...)
+}
+
 func (f *fakeLLM) Complete(_ context.Context, system, _ string) (string, error) {
-	if system == prompts.Decision(prompts.Default) {
+	f.mu.Lock()
+	f.seen = append(f.seen, system)
+	f.mu.Unlock()
+	switch system {
+	case prompts.Decision(prompts.Default):
 		return f.decision, nil
+	case prompts.Learn:
+		return f.learn, nil
 	}
 	return f.prose, nil
 }
@@ -269,6 +286,7 @@ func TestUnscopedRequestsNameTheFlag(t *testing.T) {
 		{"fact update", http.MethodPatch, "/v1/cli/facts", `{"id":"x","content":"a fact"}`},
 		{"fact list", http.MethodGet, "/v1/cli/facts", ""},
 		{"memory migrate", http.MethodPost, "/v1/cli/migrate", `{}`},
+		{"learn", http.MethodPost, "/v1/cli/learn", `{}`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

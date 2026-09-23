@@ -28,6 +28,12 @@ import (
 // model is still thinking.
 const clientTimeout = 3 * time.Minute
 
+// learnTimeout is what `learn` waits instead. The daemon is making a model
+// call per section of every document in the repository, and this is longer
+// than the daemon's own LEARN_TIMEOUT_SECONDS so that the side which knows
+// whether anything is still happening is the one that gives up first.
+const learnTimeout = 35 * time.Minute
+
 // maxReplyBytes bounds what a reply may be. A digest is paragraphs of prose.
 const maxReplyBytes = 4 << 20
 
@@ -56,6 +62,8 @@ func (c *cli) dispatch(name string, args []string) int {
 		return c.digest(args)
 	case "consolidate":
 		return c.consolidate(args)
+	case "learn":
+		return c.learn(args)
 	case "memory":
 		return c.memory(args)
 	case "config":
@@ -84,11 +92,12 @@ const usage = `usage:
   shoulderd                                                    run the relay
   shoulderd doctor [--addr=URL] [--json] [--liveness]          check that it is running
   shoulderd message [--local|--global] [--update|--no-update] "text"
-  shoulderd fact add    --local|--global [--category=C] [--tag=T]... "content"
-  shoulderd fact update --local|--global --id=ID [--category=C] [--tag=T]... "content"
+  shoulderd fact add    --local|--global [--category=C] [--tag=T]... [--private] "content"
+  shoulderd fact update --local|--global --id=ID [--category=C] [--tag=T]... [--private] "content"
   shoulderd fact list   [--local|--global] [--limit=N]
   shoulderd digest      [--local|--global]
   shoulderd consolidate --local|--global
+  shoulderd learn --local|--global [--replace] [PATH...]       read the docs already written
   shoulderd memory migrate --local|--global [--from=PATH]      move a JSON store here
   shoulderd config [show]                                      what the daemon is doing now
   shoulderd config set [--log-level=L] [--pickiness=P] [--provider=N] [--model=M]
@@ -211,6 +220,33 @@ collapse several wordings of one rule into a single record.
 The daemon does this by itself when a session ends and every few turns. Running
 it by hand is for watching what it removes.
 ` + projectIs
+
+const learnUsage = `usage: shoulderd learn --local|--global [--replace|--keep-old] [--json] [--addr=URL] [PATH...]
+
+Read documentation that is already written into the store, so a memory that
+would take months to overhear starts from what the repository already says.
+
+  --local        this project only          } exactly one is required;
+  --global       you, in every project      } there is no default
+  --replace      delete each document once everything it said is in the store.
+                 Refused unless the worktree is clean and git tracks every
+                 document, so git can always give the file back; a document
+                 that produced nothing is kept.
+  --keep-old     keep every document, which is what happens anyway
+  --json         machine-readable: every document and what it yielded
+  --addr URL     relay base URL (default http://127.0.0.1:8787)
+
+With no PATH this reads the markdown at the top of the worktree and everything
+under docs/ or doc/, skipping README, CHANGELOG, LICENSE, CONTRIBUTING, the
+agent instruction files, dot directories, node_modules, vendor, dist and build.
+Naming a PATH - a file or a directory - reads that instead; the daemon's own
+*.shoulder.md files and the agent instruction files are still never read.
+
+Every fact extracted is filed in the scope you passed, whatever the document
+says. It is one model call per section, so a repository takes minutes.
+` + projectIs + `
+Flags come before the paths: shoulderd learn --local --replace docs/OLD.md
+`
 
 const configShowUsage = `usage: shoulderd config [show] [--addr=URL] [--json]
 
@@ -564,6 +600,12 @@ func (c *cli) digest(args []string) int {
 // and a broken one are both exit 1; a request the daemon rejected is the
 // command line's fault, so it is exit 2.
 func (c *cli) call(base, method, path string, body, out any) int {
+	return c.callWithin(clientTimeout, base, method, path, body, out)
+}
+
+// callWithin is call with a deadline of its own, for a route that runs longer
+// than anything a person waits at a prompt for.
+func (c *cli) callWithin(timeout time.Duration, base, method, path string, body, out any) int {
 	var payload io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -582,7 +624,7 @@ func (c *cli) call(base, method, path string, body, out any) int {
 		req.Header.Set("X-Shoulder-Token", token)
 	}
 
-	resp, err := (&http.Client{Timeout: clientTimeout}).Do(req)
+	resp, err := (&http.Client{Timeout: timeout}).Do(req)
 	if err != nil {
 		fmt.Fprintf(c.err, "shoulderd: no daemon answering at %s (%v); start one with `shoulderd`\n", base, err)
 		return 1
@@ -812,6 +854,102 @@ func (c *cli) consolidate(args []string) int {
 	return 0
 }
 
+// learn reads what the repository already documents. The daemon does the
+// reading: the paths are the person's, but a containerised daemon is the one
+// that has to be able to open them, and it is the only side that can say a
+// document was fully stored before deleting it.
+func (c *cli) learn(args []string) int {
+	fs := c.flags("learn", learnUsage)
+	addr := bindAddr(fs)
+	var sf scopeFlags
+	sf.bind(fs)
+	replace := fs.Bool("replace", false, "delete each document once everything it said is in the store")
+	keepOld := fs.Bool("keep-old", false, "keep every document, which is the default")
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	if code := c.parse(fs, args); code >= 0 {
+		return code
+	}
+	if err := trailingFlag(fs.Args()); err != nil {
+		return c.reject(err)
+	}
+	if *replace && *keepOld {
+		return c.reject(errors.New("--replace and --keep-old are mutually exclusive: --keep-old is the default"))
+	}
+	// Extracted facts are stamped with this scope, so it is chosen the way
+	// every other write is: never for the user.
+	sc, project, err := sf.forWriting()
+	if err != nil {
+		return c.reject(err)
+	}
+	// Made absolute here, where the shell is. The daemon opens the files and
+	// is routinely in another directory, or another container.
+	var paths []string
+	for _, raw := range fs.Args() {
+		abs, err := filepath.Abs(raw)
+		if err != nil {
+			return c.reject(err)
+		}
+		paths = append(paths, abs)
+	}
+
+	var reply cliapi.LearnResponse
+	if code := c.callWithin(learnTimeout, *addr, http.MethodPost, "/v1/cli/learn", cliapi.LearnRequest{
+		Scope: string(sc), Project: project, Dir: cwd(), Paths: paths, Replace: *replace,
+	}, &reply); code != 0 {
+		return code
+	}
+	if *asJSON {
+		enc := json.NewEncoder(c.out)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(reply); err != nil {
+			fmt.Fprintln(c.err, "shoulderd:", err)
+			return 1
+		}
+	} else {
+		c.printLearned(reply)
+	}
+	// Exit 1 on a document that was not read or a fact the store would not
+	// take. The counts are on stdout either way; this is for the script.
+	if !reply.Learned() {
+		return 1
+	}
+	return 0
+}
+
+// plural is the difference between "1 chunks" and "1 chunk".
+func plural(n int, word string) string {
+	if n == 1 {
+		return "1 " + word
+	}
+	return fmt.Sprintf("%d %ss", n, word)
+}
+
+func (c *cli) printLearned(reply cliapi.LearnResponse) {
+	if len(reply.Files) == 0 {
+		fmt.Fprintln(c.out, "no documents to read here")
+		return
+	}
+	for _, f := range reply.Files {
+		if f.Error != "" {
+			fmt.Fprintf(c.err, "not read: %s: %s\n", f.Path, f.Error)
+			continue
+		}
+		line := fmt.Sprintf("%s: %s, %d stored, %d skipped", f.Path, plural(f.Chunks, "chunk"), f.Stored, f.Skipped)
+		if f.Failed > 0 {
+			line += fmt.Sprintf(", %d failed", f.Failed)
+		}
+		if f.Deleted {
+			line += ", deleted"
+		}
+		fmt.Fprintln(c.out, line)
+	}
+	fmt.Fprintf(c.out, "%d stored, %d skipped, %d failed from %s",
+		reply.Stored, reply.Skipped, reply.Failed, plural(len(reply.Files), "document"))
+	if reply.Deleted > 0 {
+		fmt.Fprintf(c.out, ", %d deleted", reply.Deleted)
+	}
+	fmt.Fprintln(c.out)
+}
 
 const memoryUsage = `usage: shoulderd memory migrate --local|--global [--from=PATH] [--json] [--addr=URL]
 
