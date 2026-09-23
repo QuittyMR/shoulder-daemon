@@ -6,6 +6,8 @@ Notable changes to shoulder-daemon. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-06
+
 ### Added
 
 - The OpenCode adapter ships as the `shoulder-daemon` npm package, so
@@ -24,7 +26,6 @@ Notable changes to shoulder-daemon. The format follows
   does. `SHOULDER_MEMORY_URL` still wins when set; `shoulderd doctor` says so, and
   for the docs store names the global directory and whether the checkout it was
   typed in holds any shoulder files yet.
-
 - `SHOULDER_EMBEDDING=minilm` ranks the built-in store by a transformer
   (all-MiniLM-L6-v2, run in pure Go) instead of the compiled-in word vectors. The
   model is fetched once into `SHOULDER_MODEL_DIR` in the background; until it is
@@ -32,7 +33,6 @@ Notable changes to shoulder-daemon. The format follows
   written before the model arrived are re-embedded behind the store. The default
   stays `glove`: measured on the benchmark in `docs/INSTALL.md`, the transformer's
   scores need a floor of their own before it can be the default.
-
 - `shoulderd memory migrate --local|--global [--from=PATH]` copies a scope of the
   built-in JSON store into whatever backend the daemon is running now, keeping each
   fact's category, tags, timestamp and privacy. The source file is only read;
@@ -40,7 +40,6 @@ Notable changes to shoulder-daemon. The format follows
   so a second run changes nothing. It prints stored, skipped and failed counts,
   exits 1 if anything was refused, and refuses to migrate the JSON store into
   itself.
-
 - `shoulderd learn --local|--global [--replace|--keep-old] [PATH...]` reads the
   documentation a repository already carries into the store: the markdown at the top of
   the worktree and everything under `docs/` or `doc/`, or the paths you name. Each
@@ -52,11 +51,9 @@ Notable changes to shoulder-daemon. The format follows
   `--replace` deletes each document once everything it said is in the store, and only
   from a worktree that was clean when the run started. `LEARN_TIMEOUT_SECONDS` (1800)
   bounds one run.
-
 - Every CLI request and every session write carries the directory it came from
   beside the project identity, so a store that keeps facts with the checkout can
   find the checkout. It is informational: nothing stores or compares it.
-
 - Privacy is an axis of its own, beside the scope. A fact can be local to a project
   and still be about this machine, an account, a path or a habit of yours - "Postgres
   listens on 5433 here" - and a backend that files facts beside a checkout keeps those
@@ -67,13 +64,11 @@ Notable changes to shoulder-daemon. The format follows
   inherits the strictest of them, and a session working note is never private. Under
   `SHOULDER_MEMORY=docs`, marking a stored fact private moves its line out of the
   committed file and into the `USER.shoulder.md` git does not carry.
-
 - A scenario benchmark behind the `scenario` build tag measures the whole loop rather
   than retrieval alone: a seeded fact, an agent turn whose own prose has to recall it
   and get it injected, a later turn that contradicts it and has to supersede that exact
   record, and the store's final contents - run against every backend the daemon can be
   built with, with the per-backend numbers in `docs/PERFORMANCE.md`.
-
 - A `/readyz` endpoint reports whether the daemon can actually do its job right
   now, where `/healthz` only says something is listening: a relay whose store
   has died keeps answering `/healthz` with an untroubled ok while every recall
@@ -323,7 +318,8 @@ The first tagged release.
   results are unwrapped properly.
 - Session notes are remembered as the store accepted them, not as they were offered.
 
-[Unreleased]: https://github.com/QuittyMR/shoulder-daemon/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/QuittyMR/shoulder-daemon/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/QuittyMR/shoulder-daemon/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/QuittyMR/shoulder-daemon/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/QuittyMR/shoulder-daemon/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/QuittyMR/shoulder-daemon/compare/v0.1.0...v0.1.1
