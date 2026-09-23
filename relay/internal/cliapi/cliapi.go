@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/config"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/facts"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/llm"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/memory"
@@ -518,6 +519,16 @@ type MemoryStatus struct {
 	Configured bool   `json:"configured"`
 	OK         bool   `json:"ok"`
 	Error      string `json:"error,omitempty"`
+
+	// GlobalDocs and DocsDir describe the docs store and are empty for any
+	// other: where the facts that follow the person are, and the name of the
+	// directory the rest are kept in under each checkout.
+	GlobalDocs string `json:"global_docs,omitempty"`
+	DocsDir    string `json:"docs_dir,omitempty"`
+
+	// Overridden names a setting that lost to another one, so a person who
+	// set SHOULDER_MEMORY and still sees a service is told why.
+	Overridden string `json:"overridden,omitempty"`
 }
 
 // handleMemory probes the store and reports what happened. It lives on the
@@ -535,6 +546,12 @@ func (s *Server) handleMemory(w http.ResponseWriter, r *http.Request) {
 
 	st := MemoryStatus{Name: s.Pipe.Memory.Name()}
 	st.Configured = st.Name != memory.Nop{}.Name()
+	if s.Pipe.Cfg.MemoryURL != "" && s.Pipe.Cfg.Memory != config.MemoryLocal {
+		st.Overridden = "SHOULDER_MEMORY=" + s.Pipe.Cfg.Memory + " is ignored while SHOULDER_MEMORY_URL is set"
+	}
+	if st.Name == "docs" {
+		st.GlobalDocs, st.DocsDir = s.Pipe.Cfg.GlobalDocs, s.Pipe.Cfg.DocsDir
+	}
 	if !st.Configured {
 		writeJSON(w, http.StatusOK, st)
 		return

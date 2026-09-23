@@ -44,9 +44,20 @@ type Config struct {
 	MemoryURL string
 	MemoryKey string
 
+	// Memory names the store the daemon keeps itself when no memory service
+	// was named: the JSON file, or markdown files kept with each checkout.
+	// A memory service, when named, wins over either.
+	Memory string
+
 	// MemoryPath is the file the built-in store writes to, and is used only
 	// when no memory service was named.
 	MemoryPath string
+
+	// GlobalDocs is where the docs store keeps facts that follow the person
+	// rather than the code; DocsDir is the subdirectory of a checkout it keeps
+	// the rest in.
+	GlobalDocs string
+	DocsDir    string
 
 	// Embedding names the model the built-in store ranks by: the word vectors
 	// compiled into the binary, or the transformer it downloads into ModelDir
@@ -88,7 +99,10 @@ func Load() Config {
 		WindowChars:    envInt("WINDOW_CHARS", 12000),
 		MemoryURL:      Setting("SHOULDER_MEMORY_URL"),
 		MemoryKey:      Setting("SHOULDER_MEMORY_KEY"),
+		Memory:         memoryBackend(Setting("SHOULDER_MEMORY")),
 		MemoryPath:     Env("SHOULDER_MEMORY_PATH", memory.DefaultLocalPath()),
+		GlobalDocs:     Env("SHOULDER_GLOBAL_DOCS", memory.DefaultGlobalDocsDir()),
+		DocsDir:        Env("SHOULDER_DOCS_DIR", memory.DefaultDocsDirName),
 		Embedding:      embedding(Setting("SHOULDER_EMBEDDING")),
 		ModelDir:       Env("SHOULDER_MODEL_DIR", memory.DefaultModelDir()),
 		QueueSize:      envInt("QUEUE_SIZE", 1024),
@@ -167,6 +181,23 @@ func pickiness(s string) prompts.Pickiness {
 		return prompts.Default
 	}
 	return p
+}
+
+// The values SHOULDER_MEMORY takes.
+const (
+	MemoryLocal = "local"
+	MemoryDocs  = "docs"
+)
+
+// memoryBackend reads the store by name. An unrecognised value is the JSON
+// file, for the reason a bad log level is info: the daemon is still useful
+// with it, and the startup line says which was chosen.
+func memoryBackend(s string) string {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case MemoryDocs:
+		return MemoryDocs
+	}
+	return MemoryLocal
 }
 
 // The values SHOULDER_EMBEDDING takes.

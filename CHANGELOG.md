@@ -8,6 +8,16 @@ Notable changes to shoulder-daemon. The format follows
 
 ### Added
 
+- `SHOULDER_MEMORY=docs` keeps facts as markdown in the repository they are about:
+  one bullet per fact under `docs/*.shoulder.md` in the worktree, committed and
+  reviewed like any other file, with preferences in a `USER.shoulder.md` the daemon
+  keeps out of git. Facts that follow the person go under `SHOULDER_GLOBAL_DOCS`
+  (default `~/.local/share/shoulder-daemon/docs`); `SHOULDER_DOCS_DIR` renames the
+  subdirectory. Hand edits are honoured, and recall ranks exactly as the JSON store
+  does. `SHOULDER_MEMORY_URL` still wins when set; `shoulderd doctor` says so, and
+  for the docs store names the global directory and whether the checkout it was
+  typed in holds any shoulder files yet.
+
 - `SHOULDER_EMBEDDING=minilm` ranks the built-in store by a transformer
   (all-MiniLM-L6-v2, run in pure Go) instead of the compiled-in word vectors. The
   model is fetched once into `SHOULDER_MODEL_DIR` in the background; until it is

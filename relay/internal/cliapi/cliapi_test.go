@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -872,6 +873,41 @@ func TestTheCommandsDirectoryTravelsWithEveryRequest(t *testing.T) {
 	}
 	if local < 4 {
 		t.Fatalf("expected a local read from list, digest, consolidate and message, saw %d: %+v", local, asked)
+	}
+}
+
+// named is a connector under another name, for a probe whose answer depends
+// on which store the daemon holds.
+type named struct {
+	memory.Connector
+	name string
+}
+
+func (n named) Name() string { return n.name }
+
+// The probe describes the docs store by where it writes, and says when the
+// setting that asked for it lost to a memory service.
+func TestMemoryProbeDescribesTheDocsStore(t *testing.T) {
+	// The env file on this machine may name a service; the test is about the
+	// process environment alone.
+	t.Setenv("SHOULDER_ENV_FILE", filepath.Join(t.TempDir(), "absent"))
+	config.ResetEnvFile()
+	t.Cleanup(config.ResetEnvFile)
+	t.Setenv("SHOULDER_MEMORY", "docs")
+	t.Setenv("SHOULDER_GLOBAL_DOCS", "/srv/facts")
+	t.Setenv("SHOULDER_DOCS_DIR", "notes")
+	t.Setenv("SHOULDER_MEMORY_URL", "")
+	h, _ := newTestServerWith(t, "", nil, named{newFakeMemory(), "docs"})
+	st := decode[MemoryStatus](t, do(t, h, http.MethodGet, "/v1/cli/memory", ""))
+	if !st.OK || st.Name != "docs" || st.GlobalDocs != "/srv/facts" || st.DocsDir != "notes" || st.Overridden != "" {
+		t.Fatalf("status = %+v", st)
+	}
+
+	t.Setenv("SHOULDER_MEMORY_URL", "http://127.0.0.1:8100")
+	h, _ = newTestServerWith(t, "", nil, named{newFakeMemory(), "mcp-memory-service"})
+	st = decode[MemoryStatus](t, do(t, h, http.MethodGet, "/v1/cli/memory", ""))
+	if st.GlobalDocs != "" || !strings.Contains(st.Overridden, "SHOULDER_MEMORY=docs") || !strings.Contains(st.Overridden, "SHOULDER_MEMORY_URL") {
+		t.Fatalf("status = %+v", st)
 	}
 }
 

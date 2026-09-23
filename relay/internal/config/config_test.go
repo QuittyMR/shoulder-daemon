@@ -111,3 +111,31 @@ func TestModelDirFollowsTheCacheUnlessSet(t *testing.T) {
 		t.Fatalf("ModelDir = %q, want the override", got)
 	}
 }
+
+// The store the daemon keeps itself is chosen by name, forgivingly, and the
+// docs store's two places are settings with defaults under the data dir.
+func TestMemoryBackendIsReadByNameAndForgiven(t *testing.T) {
+	t.Setenv("SHOULDER_ENV_FILE", filepath.Join(t.TempDir(), "absent"))
+	ResetEnvFile()
+	t.Cleanup(ResetEnvFile)
+	for _, c := range []struct{ raw, want string }{
+		{"", MemoryLocal}, {"local", MemoryLocal}, {" Docs ", MemoryDocs}, {"dcos", MemoryLocal},
+	} {
+		t.Setenv("SHOULDER_MEMORY", c.raw)
+		if got := Load().Memory; got != c.want {
+			t.Errorf("SHOULDER_MEMORY=%q gives %q, want %q", c.raw, got, c.want)
+		}
+	}
+	t.Setenv("SHOULDER_GLOBAL_DOCS", "")
+	t.Setenv("SHOULDER_DOCS_DIR", "")
+	c := Load()
+	if c.GlobalDocs == "" || filepath.Base(c.GlobalDocs) != "docs" || c.DocsDir != "docs" {
+		t.Fatalf("defaults: global %q, dir %q", c.GlobalDocs, c.DocsDir)
+	}
+	t.Setenv("SHOULDER_GLOBAL_DOCS", "/srv/facts")
+	t.Setenv("SHOULDER_DOCS_DIR", "notes")
+	c = Load()
+	if c.GlobalDocs != "/srv/facts" || c.DocsDir != "notes" {
+		t.Fatalf("overrides: global %q, dir %q", c.GlobalDocs, c.DocsDir)
+	}
+}

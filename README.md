@@ -22,7 +22,9 @@ Injects relevant information when needed. Records facts and keeps them up to dat
 A local Go daemon watches your session, maintains a bucket of facts and injects information
 into the agent's session when that context is relevant.
 Your agent doesn't need to do anything - so it can't forget to store a fact or consult a knowledgebase.
-Storage and reasoning are both modular, and local-only is supported.
+Storage and reasoning are both modular, and local-only is supported: facts live in a JSON
+file under your home directory, or as markdown bullets committed with the repository they
+describe.
 
 - **The working agent never manages memory.** It doesn't need to know how the memory is structured,
   doesn't check whether a fact is already stored, and can't skip the docs or ingest all
@@ -220,7 +222,12 @@ Facts are kept by the daemon itself, in
 `~/.local/share/shoulder-daemon/facts.json`, with nothing to install or
 configure; `SHOULDER_MEMORY_PATH` moves the file. Recall ranks by meaning with
 an embedding table compiled into the binary, so a question worded differently
-from the fact that answers it still finds it.
+from the fact that answers it still finds it. `SHOULDER_MEMORY=docs` keeps the
+same facts as markdown under `docs/` in each checkout instead, where they are
+committed and read by the whole team; section 6 of
+[docs/INSTALL.md](docs/INSTALL.md) has the layout. `shoulderd memory migrate`
+carries what a daemon already learned across to whichever backend it is pointed
+at next.
 
 [mcp-memory-service](https://github.com/doobidoo/mcp-memory-service) recalls
 better and can be shared between machines. It is one container to start and one

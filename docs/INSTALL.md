@@ -135,7 +135,8 @@ Nothing in the plugin ever stops the relay. Section 5 covers how it stops itself
 
 ## 5. Run the relay
 
-The relay is one static binary with no third-party dependencies. Build it and start it:
+The relay is one static binary that builds and runs offline; the only thing it ever fetches
+for itself is the optional embedding model, and only when asked. Build it and start it:
 
 ```bash
 make build
@@ -242,26 +243,119 @@ four words are too short to place well; a turn's worth of text is not.
 `shoulderd doctor` reports which store is in use on its `memory:` line, and the daemon names the
 table and its vocabulary size at startup.
 
-**How much you give up.** Measured, not asserted:
-`relay/internal/memory/compare_test.go` loads both stores with the same twenty facts and asks the
-same fifteen questions - plain recall, families of facts that differ by one identifier, direction,
-paths and identifiers, long facts, negation, synonymy - and reports where each put the record that
-answers each question:
+### Facts as markdown in the repository
 
-```bash
-podman run -d --rm --name mem --network host -e MCP_MODE=http -e MCP_HTTP_HOST=127.0.0.1 \
-  -e MCP_HTTP_PORT=8101 -e MCP_ALLOW_ANONYMOUS_ACCESS=true \
-  docker.io/doobidoo/mcp-memory-service:11-slim
-SHOULDER_MEMORY_URL=http://127.0.0.1:8101 go test -tags compare ./internal/memory/ -run TestCompare -v
+`SHOULDER_MEMORY=docs` keeps the same facts as bullets in markdown files instead of the JSON file,
+and puts the ones about a repository inside that repository, where they are committed, reviewed
+and read by everybody who checks it out. Nothing else changes: the same categories, the same
+scopes, the same recall, ranked by the same measure as the JSON store.
+
+**Layout.** Local facts go under the worktree's `docs/` directory (an existing `doc/` is reused;
+`SHOULDER_DOCS_DIR` names another subdirectory), one file per kind of fact:
+
+| File | Categories |
+|---|---|
+| `ARCHITECTURE.shoulder.md` | structure |
+| `DECISIONS.shoulder.md` | decision |
+| `CONVENTIONS.shoulder.md` | constraint, correction |
+| `REFERENCES.shoulder.md` | reference |
+| `NOTES.shoulder.md` | a fact with no category |
+| `USER.shoulder.md` | preference, and anything else marked private |
+
+Global facts - the ones that follow you rather than the code - use the same file names under
+`SHOULDER_GLOBAL_DOCS`, default `~/.local/share/shoulder-daemon/docs`, mode 600 like the JSON
+file. Working notes for live sessions never touch a docs file; they go to `session.json` beside
+the global directory, because they are noise a day later and would otherwise be committed forever.
+
+**What is and is not a record.** One fact is one line:
+
+```markdown
+- the integration tests need a live Postgres <!-- sd id=3f9c… category=constraint tags=ci at=2026-09-06T10:41:07.512Z -->
 ```
 
-At the time of writing the built-in store answers 11 of 15 with the right fact first and 14 of 15
-within the top three; mcp-memory-service answers 14 of 15 first. The four it puts second or lower
-are questions whose only link to the stored fact is that two words are related in meaning, which a
-mean of word vectors barely represents and a transformer does. It wins one the service loses. Run it
-yourself before believing either number, and run `TestCompareIdentifierFamily` too: that one is the
-scenario a store like this fails worst, eight facts that differ only in a port number, and it is
-what the numeric guard in the store exists for.
+The `sd` comment is what makes it a record: the id in it is the fact's identity, the rest is what
+the daemon knew when it wrote the line. Every other line in the file - the heading, prose, a bullet
+without the comment - is yours, and the daemon puts it back exactly as it found it on every write.
+Only files ending in `.shoulder.md` are ever opened for writing.
+
+**Hand edits.** Reword a bullet and the daemon sees the new wording on its next read and re-embeds
+it, keeping the id, so a correction typed in your editor is the same fact as before. Delete a line
+and the fact is gone; move it to another file and it is still found. Files are re-read whenever
+their modification time changes, so nothing has to be restarted. A supersede rewrites the fact's
+own line in place, whatever file it is in, so the map you have of the file survives corrections.
+The vectors used for ranking are cached outside the repository, under
+`~/.cache/shoulder-daemon/vectors/`, and are rebuilt from the files whenever they are stale.
+
+**The private file and `.gitignore`.** Private is a second axis, not a scope. A fact can be local to
+this project and still be about your machine, your accounts, your paths or your habits - "Postgres
+listens on 5433 here" - and a teammate who clones the repository must not receive it; a team
+convention is not private however personal it sounds. The decision model is asked the question on
+every fact, `--private` answers it by hand, and everything in the `preference` category is private
+whether or not anybody said so. Those facts go to `USER.shoulder.md`, and the first time one is
+written the daemon adds `docs/USER.shoulder.md` to the worktree's `.gitignore` - only when the line
+is absent and `.gitignore` has no uncommitted changes of your own that a commit would then sweep up
+with the daemon's. Otherwise it logs that it could not, the fact is stored anyway, and the next
+private fact tries again once you have added the line or committed. Everything in the other five
+files is written to be committed: the next `git status` shows it, and so does the next person who
+clones the repository. Privacy only ever travels forward: a correction of a private fact stays
+private even when whoever wrote the correction said nothing about it, and marking a stored fact
+private moves its line into `USER.shoulder.md`, so the way to publish one again is to move the line
+back yourself.
+
+**Where the daemon has to run.** The docs store writes into the checkout at the path the session
+reports, so the daemon must be on the machine that holds the checkout, at the same path. A
+containerised daemon has to mount each worktree at its host path; one that cannot see the directory
+refuses the write and says so, rather than growing a docs tree inside the container that nobody
+will ever commit. Two checkouts of one repository each get their own files.
+
+**Moving what you already have.** Switching an established daemon leaves every fact it learned in
+the JSON file, where nothing reads it any more. `shoulderd memory migrate` copies one scope of that
+file into whichever store the daemon is running now, keeping each fact's category, tags, timestamp
+and privacy:
+
+```bash
+shoulderd memory migrate --global
+cd ~/src/your-project && shoulderd memory migrate --local
+```
+
+Run it once per project, from inside the project, the way `fact add --local` is run. `--from=PATH`
+reads a JSON store somewhere other than `SHOULDER_MEMORY_PATH`; the daemon opens it, so it has to be
+a path the daemon can read. The file is only ever read, working notes are left behind, and a fact
+the running store already holds is skipped, so a second run changes nothing the first did. The
+command prints `stored, skipped, failed` counts, names anything that was refused, and exits 1 if
+anything was: `--json` gives the full list. A daemon still running the JSON store refuses the
+command rather than migrating a file into itself.
+
+**Settings.** `SHOULDER_MEMORY` (`local` by default, `docs` for this), `SHOULDER_GLOBAL_DOCS` and
+`SHOULDER_DOCS_DIR`; `SHOULDER_EMBEDDING` applies to either store. `SHOULDER_MEMORY_URL` wins over
+all of them when set, and `shoulderd doctor` says so on its `memory:` line, where for the docs store
+it also names the global directory and whether the checkout you typed the command in has any
+shoulder files yet.
+
+**How much you give up.** Measured, not asserted: `relay/internal/memory/compare_test.go` asks
+each store the same questions over the same facts - plain recall, families of facts that differ by
+one identifier, direction, paths and identifiers, long facts, negation, synonymy - and reports
+where each put the record that answers. At the time of writing the built-in store puts the right
+fact first about 65% of the time and in the top three about 85%; the transformer below and
+mcp-memory-service both put it first about 95% of the time. What the table misses is a question
+whose only link to the fact is a word it has never seen, or two words merely related in meaning,
+which a mean of word vectors barely represents and a transformer does. The numbers, the latency
+and memory each ranker costs, and how to run the benchmark yourself are in
+[docs/PERFORMANCE.md](PERFORMANCE.md).
+
+**Ranking with a transformer instead.** `SHOULDER_EMBEDDING=minilm` replaces the word table with
+all-MiniLM-L6-v2, run in pure Go inside the daemon. The model is fetched once, about 91 MB into
+`SHOULDER_MODEL_DIR` (default `~/.cache/shoulder-daemon/models`), in the background: until it has
+arrived, and on any machine that never gets it, the store ranks with the table exactly as before,
+and every fact written meanwhile is re-embedded behind the store once the model is there. It
+recalls as well as mcp-memory-service does, in process and with no container. The price is
+resident memory: about 18 MB for the daemon with the table against about 227 MB with the model
+loaded, and a query goes from under a millisecond to about 12. Thresholds are per model - the
+score floor, the restatement threshold and a lower one for a claim and its negation - each chosen
+by a sweep against the real model, so switching the embedder does not change what the store
+refuses. The default stays `glove` for this release; set the variable in
+`~/.config/shoulder-daemon/env` and restart to opt in. In a container, mount the model directory
+as a volume as `deploy/docker-compose.yml` does, or every start downloads it again.
 
 **Using mcp-memory-service instead.** Set `SHOULDER_MEMORY_URL` and the daemon uses
 [mcp-memory-service](https://github.com/doobidoo/mcp-memory-service) for everything instead of its
@@ -323,6 +417,7 @@ shoulderd message --update "we cut the v2 migration from this release"
 shoulderd message --no-update "remind me what the deploy target is"
 
 shoulderd fact add  --local  --category=structure "the integration tests need a live Postgres on 5544"
+shoulderd fact add  --local  --private --category=structure "postgres listens on 5433 on this machine"
 shoulderd fact add  --global --category=preference --tag=style "prefers terse answers"
 shoulderd fact update --local  --id=<id> "the integration tests need a live Postgres on 5544"
 shoulderd fact list  --local  --limit=20
@@ -332,8 +427,37 @@ shoulderd digest --local
 shoulderd digest --global
 ```
 
-`fact add` and `fact update` require `--local` or `--global`; omitting it is an error that names
-both. `message` and `fact list` default to the project you are standing in, and a bare `digest`
+**Starting from what is already written.** A repository that has been worked in for years already
+says most of what the daemon would spend months overhearing: the decisions are in an architecture
+document, the conventions in a style guide, the commands in a runbook. `shoulderd learn` reads them
+into the store:
+
+```bash
+cd ~/src/your-project
+shoulderd learn --local                       # the docs already in this checkout
+shoulderd learn --local docs/RUNBOOK.md       # or just this one
+shoulderd learn --local --replace docs/OLD.md # and delete it once it is stored
+```
+
+With no path it reads the markdown at the top of the worktree and everything under `docs/` (or
+`doc/`), skipping `README`, `CHANGELOG`, `LICENSE`, `CONTRIBUTING`, the agent instruction files
+(`CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`), dot directories, `node_modules`, `vendor`, `dist`,
+`build`, and the daemon's own `*.shoulder.md` files. Naming a path reads that instead; the last two
+of those exclusions still hold. Each document is sent to the model a section at a time and what
+comes back is stored exactly as a fact learned in a session is, under the scope you passed - the
+model is not asked to choose between a project and you, because a page of a style guide is evidence
+about the codebase it sits in. It needs a decision model, prints per-document counts, and exits 1
+if any document could not be read or any fact was refused.
+
+`--replace` deletes each document once everything it said is in the store. It refuses to delete
+anything unless the worktree is clean when the run starts and git already tracks every document it
+is about to read, so `git checkout` can always give a file back; an ignored or never-added document
+is refused by name. It never deletes a document that produced nothing, one the model choked on, or
+the daemon's own files. `--keep-old` is the default spelled out. Expect minutes, not seconds: it is one model
+call per section of every document, bounded by `LEARN_TIMEOUT_SECONDS` (1800).
+
+`fact add`, `fact update` and `learn` require `--local` or `--global`; omitting it is an error that
+names both. `message` and `fact list` default to the project you are standing in, and a bare `digest`
 covers both scopes. The project is the root of the git worktree, or the working directory itself
 when that is not a checkout.
 
@@ -497,13 +621,18 @@ Everything is environment driven. The only two you need:
 | Variable | Purpose |
 |---|---|
 | `SHOULDER_LLM` | `gemini`, `glm`, `glm-coding`, `openrouter`, `openai`, `opencode-go`, `local`. Comma-separate for a failover chain. |
-| `SHOULDER_MEMORY_URL` | Base URL of a memory service. Unset means the store built into the daemon. |
-| `SHOULDER_MEMORY_PATH` | Where that built-in store writes. Defaults to `~/.local/share/shoulder-daemon/facts.json`. |
+| `SHOULDER_MEMORY_URL` | Base URL of a memory service. Unset means the store built into the daemon, and set it wins over `SHOULDER_MEMORY`. |
+| `SHOULDER_MEMORY` | Which built-in store: `local` (default; one JSON file) or `docs` (markdown bullets committed with each repository, see section 6). |
+| `SHOULDER_MEMORY_PATH` | Where the `local` store writes. Defaults to `~/.local/share/shoulder-daemon/facts.json`. |
+| `SHOULDER_GLOBAL_DOCS` | Where the `docs` store keeps the facts that follow you rather than the code. Defaults to `~/.local/share/shoulder-daemon/docs`. |
+| `SHOULDER_DOCS_DIR` | The subdirectory of a checkout the `docs` store writes local facts in. Defaults to `docs`; an existing `doc/` is reused under the default. |
+| `SHOULDER_EMBEDDING` | How the built-in store ranks by meaning: `glove` (default; compiled in, no download) or `minilm` (a 91 MB transformer fetched once into `SHOULDER_MODEL_DIR`, default `~/.cache/shoulder-daemon/models`; the store uses `glove` until it has arrived). |
 
 Then `SHOULDER_TOKEN` (generated for you; set it only to override),
 `SHOULDER_ADDR`, `SHOULDER_MEMORY_KEY`, `SHOULDER_PICKINESS`, `SHOULDER_LOG` (the log file;
 `~/.local/share/shoulder-daemon/shoulderd.log`, or `stderr` for none), `LOG_LEVEL`,
-`SHOULDER_DRY_RUN`, `SHOULDER_IDLE_EXIT_MINUTES` (60; zero turns it off) and the `WINDOW_*`,
+`SHOULDER_DRY_RUN`, `SHOULDER_IDLE_EXIT_MINUTES` (60; zero turns it off),
+`LEARN_TIMEOUT_SECONDS` (1800, what one `shoulderd learn` may take end to end) and the `WINDOW_*`,
 `BUDGET_*` and `ADVISOR_*` tuning knobs, all of which belong in the env file
 described under "Where configuration lives".
 
@@ -511,9 +640,10 @@ described under "Where configuration lives".
 OpenAI, and any OpenAI-compatible endpoint including a local Ollama. Comma-
 separate `SHOULDER_LLM` for a failover chain. More coming.
 
-**Memory.** The store built into the daemon by default, and
+**Memory.** The store built into the daemon by default, markdown files committed
+with each repository under `SHOULDER_MEMORY=docs`, and
 [mcp-memory-service](https://github.com/doobidoo/mcp-memory-service) when
-`SHOULDER_MEMORY_URL` is set; section 6 covers both. Backends sit behind a
+`SHOULDER_MEMORY_URL` is set; section 6 covers all three. Backends sit behind a
 five-method `Connector` interface that names nothing specific to any product;
 `memory.TestConnector` is an exported conformance suite a new one can run
 against itself. More coming - ask for the one you want.
