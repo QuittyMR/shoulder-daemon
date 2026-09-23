@@ -352,3 +352,40 @@ func TestProviderNameOfNothingIsNone(t *testing.T) {
 		t.Fatalf("providerName(nil) = %q", got)
 	}
 }
+
+// For the docs store doctor says where the global facts are and, from the
+// directory it was typed in, whether this checkout holds any yet; and it
+// says when the setting lost to a memory service.
+func TestDoctorDescribesTheDocsStoreFromWhereItWasTyped(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	noRelease(t)
+	checkout := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(checkout, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(checkout, "docs", "DECISIONS.shoulder.md"), []byte("# Decisions\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(checkout)
+	srv := relayWithMemory(t, true, httpapi.RoutineEvents(), 0,
+		&cliapi.MemoryStatus{Name: "docs", Configured: true, OK: true, GlobalDocs: "/srv/facts", DocsDir: "docs"})
+	c := &cli{out: io.Discard, err: io.Discard}
+	var code int
+	out := stdout(t, func() { code = c.dispatch("doctor", []string{"--addr=" + srv.URL}) })
+	if code != 0 {
+		t.Fatalf("exit %d, want 0:\n%s", code, out)
+	}
+	if !strings.Contains(out, "memory:  ok (docs)") || !strings.Contains(out, "global facts: /srv/facts") ||
+		!strings.Contains(out, "holds 1 shoulder file") {
+		t.Fatalf("output must name the global directory and this checkout's files:\n%s", out)
+	}
+
+	srv = relayWithMemory(t, true, httpapi.RoutineEvents(), 0, &cliapi.MemoryStatus{
+		Name: "mcp-memory-service", Configured: true, OK: true,
+		Overridden: "SHOULDER_MEMORY=docs is ignored while SHOULDER_MEMORY_URL is set",
+	})
+	out = stdout(t, func() { code = c.dispatch("doctor", []string{"--addr=" + srv.URL, "--json"}) })
+	if code != 0 || !strings.Contains(out, `"memory_overridden": "SHOULDER_MEMORY=docs is ignored`) {
+		t.Fatalf("exit %d; the JSON must carry the precedence note:\n%s", code, out)
+	}
+}

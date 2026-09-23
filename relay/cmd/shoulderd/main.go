@@ -1,6 +1,7 @@
 // Command shoulderd is the shoulder-daemon relay: it absorbs hook traffic from a
 // coding harness in microseconds and talks to a swappable advisor off the hot
-// path. It has no third-party dependencies, so it builds and runs offline.
+// path. It is one static binary that builds and runs offline; the only thing it
+// ever fetches for itself is the optional embedding model, and only when asked.
 package main
 
 import (
@@ -25,9 +26,11 @@ import (
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/httpapi"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/llm"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/memory"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/memory/minilm"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/memory/vectors"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/outbox"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/pipeline"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/scope"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/session"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/settings"
 )
@@ -78,10 +81,10 @@ func serve() error {
 			"hint", "set SHOULDER_LLM to one of: "+strings.Join(llm.Presets(), ", "))
 	}
 
-	// A memory service if one was named, and otherwise the store that ships
-	// inside this binary. Nothing is the last resort rather than the default,
-	// because a daemon that cannot write is a daemon that watched a whole
-	// session and kept none of it.
+	// A memory service if one was named, and otherwise one of the two stores
+	// that ship inside this binary. Nothing is the last resort rather than the
+	// default, because a daemon that cannot write is a daemon that watched a
+	// whole session and kept none of it.
 	var mem memory.Connector
 	switch {
 	case cfg.MemoryURL != "":
@@ -92,17 +95,16 @@ func serve() error {
 		// an empty store.
 		store.Metrics = srv.Metrics
 		mem = store
+		if cfg.Memory != config.MemoryLocal {
+			log.Warn("SHOULDER_MEMORY is ignored while SHOULDER_MEMORY_URL is set", "memory", cfg.Memory, "url", cfg.MemoryURL)
+		}
 	default:
-		local, lerr := memory.NewLocal(cfg.MemoryPath, vectors.Embedder{})
-		if lerr != nil {
-			// Refusing to start would take the session's advice down with the
-			// store, and the two are not the same loss. This is loud instead:
-			// an unreadable file is somebody's facts, and overwriting them is
-			// the one outcome that cannot be undone.
-			log.Error("the local store could not be opened; nothing will be recalled or stored",
-				"path", cfg.MemoryPath, "error", lerr)
-			mem = memory.Nop{}
-			break
+		// The vectors compiled into the binary always answer. The transformer
+		// is opt-in and arrives when it arrives: the store writes through
+		// whichever is ready and brings the rest up to it afterwards.
+		var emb memory.Embedder = vectors.Embedder{}
+		if cfg.Embedding == config.EmbeddingMiniLM {
+			emb = memory.NewFallback(minilm.New(cfg.ModelDir, log), vectors.Embedder{})
 		}
 		words, verr := vectors.Words()
 		if verr != nil {
@@ -111,9 +113,44 @@ func serve() error {
 			// works on words in common; it is simply worse than it should be.
 			log.Warn("the embedding table did not load; recall will be lexical", "error", verr)
 		}
+		// Either store may fail to open, and refusing to start would take the
+		// session's advice down with it; the two are not the same loss. This
+		// is loud instead: an unreadable file is somebody's facts, and
+		// overwriting them is the one outcome that cannot be undone.
+		if cfg.Memory == config.MemoryDocs {
+			docs, derr := memory.NewDocs(memory.DocsOptions{
+				GlobalDir: cfg.GlobalDocs, DirName: cfg.DocsDir, Embedder: emb, Log: log,
+			})
+			if derr != nil {
+				log.Error("the docs store could not be opened; nothing will be recalled or stored",
+					"global", cfg.GlobalDocs, "error", derr)
+				mem = memory.Nop{}
+				break
+			}
+			// Only the global files can be counted here: the local ones are
+			// one directory per checkout, found as sessions arrive.
+			global, gerr := docs.List(context.Background(), memory.Query{Scope: scope.Global})
+			if gerr != nil {
+				log.Warn("the global docs files could not be read", "dir", cfg.GlobalDocs, "error", gerr)
+			}
+			log.Info("remembering in docs files", "global", docs.GlobalDir(), "global_facts", len(global),
+				"docs_dir", cfg.DocsDir, "session_notes", docs.SessionPath(),
+				"embedding", cfg.Embedding, "vocabulary", words, "model_dir", cfg.ModelDir,
+				"hint", "local facts go in <worktree>/"+cfg.DocsDir+"/*.shoulder.md and are committed with the code")
+			mem = docs
+			break
+		}
+		local, lerr := memory.NewLocal(cfg.MemoryPath, emb)
+		if lerr != nil {
+			log.Error("the local store could not be opened; nothing will be recalled or stored",
+				"path", cfg.MemoryPath, "error", lerr)
+			mem = memory.Nop{}
+			break
+		}
+		local.SetLog(log)
 		log.Info("remembering locally", "path", local.Path(), "facts", local.Len(),
-			"embedding", vectors.Model, "vocabulary", words,
-			"hint", "set SHOULDER_MEMORY_URL to use a memory service instead")
+			"embedding", cfg.Embedding, "vocabulary", words, "model_dir", cfg.ModelDir,
+			"hint", "set SHOULDER_MEMORY=docs to keep facts with each checkout, or SHOULDER_MEMORY_URL to use a memory service")
 		mem = local
 	}
 	// Wrapping here is what makes local-or-global a property of the system: no
@@ -269,6 +306,19 @@ func (c *cli) doctor(args []string) int {
 			out["memory_error"] = st.Error
 			code = 1
 		}
+		if st.Overridden != "" {
+			out["memory_overridden"] = st.Overridden
+		}
+		// The docs store keeps local facts with the checkout, so whether this
+		// directory has any is a question doctor can answer from where it was
+		// typed, and the daemon cannot.
+		if st.GlobalDocs != "" {
+			out["memory_global_docs"] = st.GlobalDocs
+			if dir, files, ok := docsHere(st.DocsDir); ok {
+				out["memory_docs_here"] = dir
+				out["memory_docs_files"] = files
+			}
+		}
 	}
 
 	// A newer release is worth one line, not an exit code: a daemon behind by a
@@ -336,6 +386,17 @@ func (c *cli) doctor(args []string) int {
 	switch out["memory"] {
 	case "ok":
 		fmt.Printf("memory:  ok (%v)\n", out["memory_name"])
+		if dir, ok := out["memory_global_docs"].(string); ok {
+			fmt.Printf("         global facts: %s\n", dir)
+			switch here, files := out["memory_docs_here"], out["memory_docs_files"]; {
+			case here == nil:
+				fmt.Println("         this checkout: not resolvable from this directory")
+			case files == 0:
+				fmt.Printf("         this checkout: %s has no shoulder files yet; the first local fact creates one\n", here)
+			default:
+				fmt.Printf("         this checkout: %s holds %d shoulder file(s)\n", here, files)
+			}
+		}
 	case "none":
 		fmt.Println("memory:  NONE: nothing is stored and nothing is recalled")
 		fmt.Println("         Start a store and give the daemon SHOULDER_MEMORY_URL; the two-line")
@@ -347,6 +408,9 @@ func (c *cli) doctor(args []string) int {
 	default:
 		fmt.Printf("memory:  %v\n", out["memory"])
 	}
+	if why, ok := out["memory_overridden"].(string); ok {
+		fmt.Printf("         %s\n", why)
+	}
 	if missing, ok := out["events_never_seen"].([]string); ok {
 		if len(missing) == 0 {
 			fmt.Println("hooks:   all expected events have fired at least once")
@@ -357,6 +421,19 @@ func (c *cli) doctor(args []string) int {
 		}
 	}
 	return code
+}
+
+// docsHere is where the docs store would keep this directory's facts and how
+// many of its files are already there. It is answered from the directory the
+// command ran in, which is the one thing the daemon does not know.
+func docsHere(name string) (dir string, files int, ok bool) {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", 0, false
+	}
+	dir, _ = memory.DocsDirFor(wd, name)
+	found, _ := filepath.Glob(filepath.Join(dir, "*.shoulder.md"))
+	return dir, len(found), true
 }
 
 // memoryStatus asks the daemon whether anything is being remembered. Only the
