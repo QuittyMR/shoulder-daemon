@@ -147,6 +147,14 @@ func startDaemon(t *testing.T, extra ...string) *daemon {
 	// daemon keeps itself defaults to one under HOME, which is the same leak by
 	// another route. Both are pointed at a directory of this test's own.
 	//
+	// Naming an empty env file is part of that and not a belt-and-braces extra.
+	// HOME has to be passed through, and the daemon reads its own env file from
+	// under it for every setting the process does not carry - so without this
+	// line the developer's SHOULDER_MEMORY_URL arrives by that route instead,
+	// outranks the SHOULDER_MEMORY_PATH set below, and the test daemon comes up
+	// on their real store with their real key. It did, for as long as this
+	// comment has claimed otherwise.
+	//
 	// Not t.TempDir(): the daemon writes its store while it shuts down, and the
 	// framework removes that directory the moment the test ends, so the two
 	// race and the loser is reported as a failure of whatever test happened to
@@ -163,6 +171,7 @@ func startDaemon(t *testing.T, extra ...string) *daemon {
 		"SHOULDER_ADDR=" + d.addr,
 		"SHOULDER_TOKEN=" + d.token,
 		"SHOULDER_MEMORY_PATH=" + d.facts,
+		"SHOULDER_ENV_FILE=/dev/null",
 		"LOG_LEVEL=DEBUG",
 	}, extra...)
 	d.cmd.Stdout = d.log
@@ -463,7 +472,8 @@ func runOnce(t *testing.T, dir, prompt string, flags []string, env ...string) er
 	return nil
 }
 
-// clean drops every SHOULDER_ variable from an environment.
+// clean takes every SHOULDER_ variable out of an environment and puts one
+// inert setting back.
 func clean(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
@@ -471,7 +481,14 @@ func clean(env []string) []string {
 			out = append(out, kv)
 		}
 	}
-	return out
+	// Dropping SHOULDER_ENV_FILE is not the same as isolating it. The opencode
+	// adapter reads one setting at a time and falls back to the daemon's own env
+	// file for anything the process does not carry, so a test that merely unsets
+	// the variable is handed the developer's real config - their address and
+	// their token - and posts a run's worth of invented sessions into whatever
+	// store that names. Naming a file with nothing in it is what actually cuts
+	// the test off from the machine it runs on.
+	return append(out, "SHOULDER_ENV_FILE=/dev/null")
 }
 
 // TestOpenCodeSessionIsObserved is the whole point of the adapter: a real

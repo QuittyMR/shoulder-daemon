@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Make sure the relay is answering, exactly once, however many editors launch.
+# Make sure the relay is answering and can reach its store, exactly once,
+# however many editors launch.
 #
 # It runs at session start and again before every prompt. The second is the
 # whole recovery story: the daemon stops when the last session it knows about
@@ -28,10 +29,92 @@ FETCH=0
 [ "${1:-}" = "--fetch" ] && FETCH=1
 TMP=""
 
-answering() { curl -sf --max-time 1 -o /dev/null "http://${ADDR}/healthz" 2>/dev/null; }
+# The relay answers /healthz with an untroubled ok whether or not it can still
+# reach the memory store behind it, so a relay whose store has gone away serves
+# on happily while every recall and every write behind it fails; real sessions
+# have run for days in that state with nothing to show for themselves. /readyz
+# is the question this hook is actually asking. The status code is read rather
+# than left to curl's exit status because up-but-unwell and not-there-at-all
+# want different things here, and -f reports both as the same failure. The body
+# comes back in the same breath because 503 itself covers two faults that want
+# opposite things, and asking a second time to tell them apart would put another
+# second in front of every prompt somebody types.
+probe() { curl -s -w '\n%{http_code}' --max-time 1 "http://${ADDR}/readyz" 2>/dev/null; }
 say() { echo "shoulder-daemon: $*" >&2; }
 
-answering && exit 0
+# recently answers whether a stamp names a moment inside the last n seconds. The
+# moment is the file's contents and not its mtime, because reading an mtime
+# portably needs a stat whose flags differ between GNU and BSD, and a floor that
+# cannot be read is no floor at all. Anything that is not a number reads as long
+# ago, as does a stamp dated in the future: that is a clock that moved rather
+# than something that just happened, and waiting one of those out could take
+# hours. Both are overwritten by the next attempt, so neither wedges anything.
+recently() {
+  local last since
+  last="$(cat "$1" 2>/dev/null)"
+  case "${last:-none}" in
+    *[!0-9]*) last=0 ;;
+  esac
+  since=$(( $(date +%s) - last ))
+  [ "$since" -ge 0 ] && [ "$since" -lt "$2" ]
+}
+
+mark() { date +%s >"$1" 2>/dev/null || true; }
+
+ANSWER="$(probe)"
+STATE="$(printf '%s' "$ANSWER" | tail -n 1)"
+
+# A 404 is a relay built before /readyz existed. It may be in perfect health and
+# nothing out here can tell, so guessing that it is not would hand everybody who
+# has not upgraded yet a start command before every prompt they type. An unknown
+# readiness is left alone exactly as a known-good one is, which is what this
+# hook did back when all it ever asked about was /healthz.
+case "$STATE" in
+  200|404) exit 0 ;;
+esac
+
+# 503 is two faults wearing one status code. A store that is unreachable is
+# something that died and the start command below puts it back. A relay with no
+# memory backend configured has nothing to put back: it is a machine that was
+# never finished being set up, and starting the stack on it every thirty seconds
+# for the rest of the session is the same storm the floor exists to prevent,
+# only slower and with no chance of ever ending. So this one is said and left
+# alone - no lock, no start, no stamp. The body is matched as a string because a
+# hook with a five second budget has no business loading a JSON parser to read a
+# one-word answer; the relay writes it through encoding/json and so puts no
+# space after the colon, but a body is somebody else's output and the spaced
+# form costs one more pattern to accept.
+#
+# Saying it before every prompt would be its own kind of noise, so the same
+# stamp mechanism holds it to once every five minutes: often enough that it is
+# still on screen when somebody goes looking for why nothing is being
+# remembered, rare enough to be ignorable while they finish what they are doing.
+case "$ANSWER" in
+  *'"memory":"none"'*|*'"memory": "none"'*)
+    NAG="${XDG_RUNTIME_DIR:-/tmp}/shoulder-daemon.unconfigured.stamp"
+    if ! recently "$NAG" 300; then
+      say "${ADDR} has no memory backend configured, so nothing this session does is kept; set SHOULDER_MEMORY_URL or SHOULDER_MEMORY_PATH and restart it - 'shoulderd doctor' says which"
+      mark "$NAG"
+    fi
+    exit 0
+    ;;
+esac
+
+# Any other answer is a relay that is up and unwell, and the start command is
+# still the fix, since it brings the whole stack back up, store included. But a
+# store that is never coming back answers 503 forever, and this runs before
+# every single prompt, so recovering unconditionally here would mean a start
+# command per prompt for the rest of the session - a storm that outlives the
+# thing it was meant to repair. One attempt every thirty seconds at most, and
+# the stamp is written before the attempt rather than after it, so that a start
+# which dies on its way up still counts as the try it was. Nothing listening at
+# all is deliberately exempt: a relay that is genuinely down has to be back by
+# the very next prompt, not half a minute into the work.
+STAMP="${XDG_RUNTIME_DIR:-/tmp}/shoulder-daemon.recover.stamp"
+if [ -n "$STATE" ] && [ "$STATE" != "000" ]; then
+  recently "$STAMP" 30 && exit 0
+  mark "$STAMP"
+fi
 
 # Two editors launched together would otherwise both see nothing listening and
 # both start one. mkdir is atomic on every filesystem this runs on; whoever
@@ -56,7 +139,7 @@ take() {
 if ! take; then
   for _ in 1 2 3 4 5 6 7 8 9 10; do
     sleep 0.3
-    answering && exit 0
+    case "$(probe | tail -n 1)" in 200|404) exit 0 ;; esac
   done
   exit 0
 fi
@@ -134,7 +217,7 @@ if [ -z "$exe" ] && [ "$FETCH" = 1 ]; then
   fetch && exe="$BIN" && link
 fi
 if [ -z "$exe" ]; then
-  [ "$FETCH" = 1 ] || say "nothing answering at ${ADDR}, and no 'shoulderd' on PATH."
+  [ "$FETCH" = 1 ] || say "no relay ready at ${ADDR}, and no 'shoulderd' on PATH."
   exit 0
 fi
 ( nohup "$exe" >/dev/null 2>&1 & ) >/dev/null 2>&1

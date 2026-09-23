@@ -46,6 +46,12 @@ const DefaultListLimit = 50
 type Server struct {
 	Pipe  *pipeline.Pipeline
 	Token string
+
+	// Now is the clock the readiness cache ages against. Nil means time.Now;
+	// tests set it so that the TTL can be crossed without spending it.
+	Now func() time.Time
+
+	readyz readyCache
 }
 
 func New(pipe *pipeline.Pipeline, token string) *Server {
@@ -63,6 +69,10 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/cli/learn", s.handleLearn)
 	mux.HandleFunc("/v1/cli/config", s.handleConfig)
 	mux.HandleFunc("/v1/cli/memory", s.handleMemory)
+	// /readyz is not a route a person talks to, but it is served from here
+	// because it has to read the store and httpapi is forbidden from importing
+	// one. It sits on the same mux either way, so the adapters see one address.
+	mux.HandleFunc("/readyz", s.handleReady)
 }
 
 // The request and reply types below are the wire contract. They are exported
@@ -559,18 +569,29 @@ func (s *Server) handleMemory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A read, not a write. The probe must be able to run on a healthy daemon as
-	// often as somebody types the command without leaving anything in the store
-	// to explain later, and a backend that refuses reads is already broken for
-	// every purpose this daemon has.
 	ctx, cancel := context.WithTimeout(r.Context(), memoryProbeTimeout)
 	defer cancel()
-	if _, err := s.Pipe.Memory.Search(ctx, memory.Query{Text: "reachability probe", Limit: 1, Scope: scope.Global}); err != nil {
+	if err := s.probeStore(ctx); err != nil {
 		st.Error = err.Error()
 	} else {
 		st.OK = true
 	}
 	writeJSON(w, http.StatusOK, st)
+}
+
+// probeStore is the one read that answers whether the store is really there,
+// shared by this route and by /readyz so that the two can never come to
+// different conclusions about the same daemon.
+//
+// A read, not a write. The probe must be able to run on a healthy daemon as
+// often as somebody types the command — and, through /readyz, far more often
+// than that — without leaving anything in the store to explain later, and a
+// backend that refuses reads is already broken for every purpose this daemon
+// has. The deadline belongs to the caller, because how long an answer is worth
+// waiting for is the one thing the two callers disagree about.
+func (s *Server) probeStore(ctx context.Context) error {
+	_, err := s.Pipe.Memory.Search(ctx, memory.Query{Text: "reachability probe", Limit: 1, Scope: scope.Global})
+	return err
 }
 
 // ConfigResponse is what the daemon is doing now. It is the same shape whether

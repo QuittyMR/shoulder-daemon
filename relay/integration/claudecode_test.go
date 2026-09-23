@@ -4,6 +4,8 @@ package integration
 
 import (
 	"encoding/json"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -208,8 +210,28 @@ func TestClaudeCodeRevivesADeadDaemon(t *testing.T) {
 // every prompt pays for a container that is already running.
 func TestTheBootScriptIsQuietWhenTheDaemonIsUp(t *testing.T) {
 	claudeOrSkip(t)
-	d := startDaemon(t)
+	// Without this the daemon reads the developer's own env file - HOME is
+	// inherited, and that is where SHOULDER_MEMORY_URL lives - so the daemon
+	// under test comes up pointed at the machine's real memory store. Readiness
+	// then reports on somebody's actual store rather than on this test's, and
+	// passes or fails according to whether their store happens to be up.
+	d := startDaemon(t, "SHOULDER_ENV_FILE=/dev/null")
 	script := filepath.Join("..", "..", "adapters", "claude-code", "scripts", "ensure-daemon.sh")
+
+	// The script asks /readyz and treats a 404 as a relay too old to have the
+	// route, which is a branch that exits 0 for its own reasons. Without this,
+	// a daemon that stopped serving readiness at all would still pass here, and
+	// the case this test is named for - a ready relay, left alone - would never
+	// be the case it actually ran.
+	res, err := http.Get("http://" + d.addr + "/readyz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK || !strings.Contains(string(body), `"memory":"ok"`) {
+		t.Fatalf("the daemon under test is not serving readiness: %d %s", res.StatusCode, body)
+	}
 
 	started := filepath.Join(t.TempDir(), "started")
 	cmd := exec.Command(script)

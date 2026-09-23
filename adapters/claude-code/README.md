@@ -32,11 +32,19 @@ characters. The model is free to ignore it, and the user's own turn is never tou
 
 `SessionStart` is the one hook here that runs a command rather than posting HTTP, because Claude
 Code refuses HTTP hooks for `SessionStart` and `Setup`. The command is `scripts/ensure-daemon.sh`,
-and it does one thing: if nothing answers `http://$SHOULDER_ADDR/healthz` within a second, it starts
-the daemon in the background. Two editors launching together would both see nothing listening, so it
-takes an atomic `mkdir` lock under `$XDG_RUNTIME_DIR` (or `/tmp`) and whoever loses waits for the
-winner rather than racing to bind. That lock clears itself after 30 seconds, so a killed launch
-can't wedge every later one.
+and it does one thing: if `http://$SHOULDER_ADDR/readyz` does not answer within a second, or answers
+that the relay cannot reach its memory store, it starts the daemon in the background. A relay too old
+to serve `/readyz` answers 404, which is left alone: its readiness is unknown, not bad. A store that
+never comes back would otherwise mean a start command before every prompt, so a recovery of something
+that is answering happens at most once every 30 seconds; nothing answering at all is exempt, and comes
+back on the next prompt. The one 503 it will not act on is `"memory":"none"`, a relay with no memory
+backend configured: no start command can supply a setting, so it says so on stderr once every five
+minutes and leaves the relay alone. Two editors launching together would both see nothing listening,
+so it takes an atomic `mkdir` lock under `$XDG_RUNTIME_DIR` (or `/tmp`) and whoever loses waits for
+the winner rather than racing to bind. A lock older than a minute is taken to belong to a launch that
+died and is broken by the next hook to find it, so a killed launch can't wedge every later one. That
+minute is a different window from the thirty-second recovery floor above and answers a different
+question: one is how long a start is given to finish, the other is how often a start may be tried.
 
 It runs `shoulderd` off `PATH`, or whatever `SHOULDER_START_CMD` names when you set it, which is the
 way in for a relay that runs under a container or a service manager. With neither of those available

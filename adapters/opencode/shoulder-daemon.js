@@ -111,23 +111,102 @@ function reviveDaemon() {
   return reviving;
 }
 
+/**
+ * watchReadiness re-asks whether the relay can still do its job, and replaces it
+ * if it cannot, without the turn waiting on either.
+ *
+ * Probing when the plugin loads is not enough on its own. A store that dies
+ * under a running editor leaves a relay that goes on answering /v1/events with
+ * a 200 and no advice, so nothing on the request path ever fails and nothing
+ * ever asks again - which is how an editor left open for days stayed pointed at
+ * a relay that had been useless since the first morning. The relay caches its
+ * own answer for ten seconds precisely so that a hook may ask this often.
+ *
+ * Deliberately not awaited and deliberately not returned: a prompt must not
+ * wait a second on a probe, and a rejection that escaped here would reach a
+ * hook body and take the user's turn with it.
+ */
+function watchReadiness() {
+  answering()
+    .then((state) => (state === "ready" || state === "unknown" ? null : reviveDaemon()))
+    .catch(() => {});
+}
+
 /** send fires an event we do not need an answer to, without making the turn wait. */
 function send(event) {
   post(event).catch(() => {});
 }
 
-/** answering resolves true if something is already listening. */
+/**
+ * answering reports what is at the other end, as one of five verdicts: "ready",
+ * "unknown" for a relay whose readiness cannot be established, "unreachable"
+ * for one whose store should be there and is not, "none" for one with no store
+ * configured at all, and "down" for nothing answering.
+ *
+ * Asking about readiness rather than liveness is the whole point. A relay whose
+ * store is unreachable still answers /healthz with ok and still accepts every
+ * request it is given, so a probe that only asked whether something was
+ * listening stayed satisfied while every recall and every write failed - real
+ * sessions ran for days in that state with nothing on either side to show for
+ * it.
+ *
+ * The status alone is not enough to act on, which is why the body is read. The
+ * relay answers 503 for two faults that want opposite handling: a store that
+ * died, which a new relay may well fix, and a relay configured with no store,
+ * which no relay ever started from here can fix.
+ */
 async function answering() {
   try {
-    const res = await fetch(`${BASE}/healthz`, { signal: AbortSignal.timeout(1000) });
-    return res.ok;
+    const res = await fetch(`${BASE}/readyz`, { signal: AbortSignal.timeout(1000) });
+    // A relay from before /readyz existed has no such route and 404s on it.
+    // That relay is plainly serving and its readiness is simply not knowable,
+    // so it is left alone: reading the missing route as a failure would put
+    // everybody who has not upgraded into a start attempt on every probe, for
+    // the life of the editor, against a relay that was never unwell.
+    if (res.status === 404) return "unknown";
+    if (res.ok) return "ready";
+    try {
+      const body = await res.json();
+      // Only the one value is singled out, and every other unready body is
+      // taken as a store to be replaced: a verdict this adapter has not been
+      // taught is far more likely to be a newer relay describing a fault than
+      // a reason to do nothing, and the floor below bounds what that costs.
+      return body && body.memory === "none" ? "none" : "unreachable";
+    } catch {
+      // A 503 whose body will not parse says only that something is wrong, and
+      // the one thing worse than not recovering is recovering blindly: this is
+      // also the shape a body truncated by the deadline arrives in, from a
+      // relay that may be perfectly well.
+      return "unknown";
+    }
   } catch {
-    return false;
+    return "down";
   }
 }
 
+// warnedNoMemory keeps the one fault nothing here can repair from being
+// reported on every prompt for the rest of the day. Once per process is enough
+// to tell somebody their sessions are not being kept; it is a line about
+// configuration, and the configuration will not change under them.
+let warnedNoMemory = false;
+
+// lastStart is when a start was last handed off, and restartFloorMs is the
+// shortest gap allowed between an unreachable store and the start it is
+// permitted to cause.
+//
+// A store that is broken for good answers 503 to every probe it will ever be
+// given, and post() reaches for reviveDaemon whenever a request fails - so with
+// no floor an unreachable store means spawning the start command once per hook
+// for as long as the editor is open, every spawn as useless as the one before
+// it and each one a process. The floor is consulted only for a relay that
+// answered: one that is down is observing nobody, and holding its replacement
+// back for half a minute would cost a live session its advice to prevent a
+// storm that cannot happen, because a relay that comes back stops failing.
+let lastStart = 0;
+const restartFloorMs = 30_000;
+
 /**
- * ensureDaemon starts the relay if nothing is serving.
+ * ensureDaemon starts the relay unless one is already serving and ready.
  *
  * This runs once when the plugin loads, which is the only moment OpenCode gives
  * that is equivalent to a session-start hook. Several editors opening together
@@ -137,7 +216,31 @@ async function answering() {
  * It is never awaited by anything that matters and never throws.
  */
 async function ensureDaemon() {
-  if (await answering()) return;
+  const state = await answering();
+  if (state === "ready" || state === "unknown") return;
+
+  // A relay with no store configured is the one unready answer that is not a
+  // fault of the process: it is doing exactly what it was told to do, and
+  // starting another one from the same configuration would produce another
+  // relay that keeps nothing. Left in the general case it would mean a start
+  // every thirty seconds for as long as the editor is open, and post() asks
+  // again after every failed hook, so in practice rather more than that.
+  if (state === "none") {
+    if (!warnedNoMemory) {
+      warnedNoMemory = true;
+      console.error(
+        `shoulder-daemon: the relay at ${ADDR} has no memory backend configured, so nothing this session does is being kept.\n` +
+          "shoulder-daemon: set SHOULDER_MEMORY and restart it yourself - run 'shoulderd doctor' for which backends it can see.",
+      );
+    }
+    return;
+  }
+
+  if (state === "unreachable" && Date.now() - lastStart < restartFloorMs) return;
+  // Taken before the lock rather than after the spawn, because a hook that
+  // lost the race to another process still found a start in flight and must
+  // not come back for another one the moment the next request fails.
+  lastStart = Date.now();
 
   const lock = join(process.env.XDG_RUNTIME_DIR || tmpdir(), "shoulder-daemon.start.lock");
   // A lock left behind by a launch that died wedges every start that follows,
@@ -166,7 +269,10 @@ async function ensureDaemon() {
     // daemon that never arrives costs this session its advice and nothing else.
     for (let i = 0; i < 10; i++) {
       await new Promise((r) => setTimeout(r, 300));
-      if (await answering()) return;
+      // Anything that answers ends the wait, well or not: this loop is about
+      // the winner's relay binding, and a relay that came up with a sick store
+      // is the next probe's business rather than something more waiting fixes.
+      if ((await answering()) !== "down") return;
     }
     return;
   }
@@ -269,6 +375,7 @@ export const ShoulderDaemon = async ({ directory, worktree }) => {
   return {
     "chat.message": async ({ sessionID }, output) => {
       try {
+        watchReadiness();
         const parts = (output && output.parts) || [];
         const prompt = parts
           .filter((p) => p && p.type === "text" && typeof p.text === "string")

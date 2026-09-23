@@ -67,6 +67,22 @@ Notable changes to shoulder-daemon. The format follows
   record, and the store's final contents - run against every backend the daemon can be
   built with, with the per-backend numbers in `docs/PERFORMANCE.md`.
 
+- A `/readyz` endpoint reports whether the daemon can actually do its job right
+  now, where `/healthz` only says something is listening: a relay whose store
+  has died keeps answering `/healthz` with an untroubled ok while every recall
+  and write behind it fails, and an adapter had no way to tell. It probes the
+  store under a two second budget and caches the verdict for ten seconds, so a
+  hook asking before every prompt costs at most one store read across however
+  many fire inside that window. It answers 200 with `memory: ok` once the store
+  answered, and 503 otherwise: `memory: none` when no backend is configured, so
+  nothing the session does will be kept, and `memory: unreachable` with the
+  store's own error when one is configured and did not answer in time. Both
+  adapters now probe it instead of `/healthz` and start a fresh daemon only when
+  the store itself is unreachable, leaving a relay with no store configured
+  alone rather than restarting it before every prompt for the rest of the
+  session; a relay built before the route existed 404s on it and is treated as
+  unknown rather than unwell.
+
 ### Changed
 
 - A fact in the `preference` category is marked private wherever it is filed; the
