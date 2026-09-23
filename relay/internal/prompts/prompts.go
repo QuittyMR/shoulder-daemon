@@ -69,19 +69,27 @@ search_memory({"query":"","limit":5,"min_score":0.0}) - search again, wider.
 session_history({}) - keywords of earlier turns, for a turn like "do it".</tools>
 
 <inject>Reaches the assistant before it decides what to do next, so write only what still
-matters once this turn is answered. Speak in two cases: a stored fact contradicts what it is
-about to do, or a stored fact says how this codebase does the thing just asked for - the
-command, the procedure, the place - which it would otherwise go and search for. Open with the
-fact, one or two sentences. Otherwise empty. Where the store is wrong, fix it in "facts" and
-say nothing.
+matters once this turn is answered. Speak in two cases. One: a stored fact bears on the
+operation this turn is about to perform - it forbids it, permits it, or says where or how this
+codebase does it. A permission counts as much as a prohibition; the assistant cannot know the
+question was already settled. Two: the assistant's own output in this turn has just broken a
+stored preference or convention. Open with the fact, one or two sentences. Otherwise empty.
+Where the store is wrong, fix it in "facts" and say nothing.
 "level": "action" when the note is about an operation the assistant is about to perform - a
 push, a delete, a deploy - so it lands at that operation. Leave it out otherwise; context
 belongs at the prompt, before anything has been chosen.</inject>
 
 <facts>%s
+State a rule as what is allowed or what is forbidden, never as what must not happen: the
+stored sentence carries none of "not", "never", "don't", "must not", "no longer". "never commit
+secrets" is stored as "only commit data that is non-secret", "do not use var" as "use of var is
+forbidden", "never force push to main" as "force pushes to main are forbidden". Keep the
+subject and the restriction, and add nothing the turn did not say.
 "supersedes": id of the fact this replaces, same scope only.
 "category": decision | constraint | preference | correction | structure | reference
-"scope": local for this codebase, global for the person. Required, no default.</facts>
+"scope": local for this codebase, global for the person. Required, no default.
+"private": true only for a fact about this person's machine, accounts, paths or habits that a
+teammate cloning the repository must not receive; team conventions are not private.</facts>
 
 <keywords>Paths, names, commands, the subject. Up to 8 for a short turn, 25 for a long one.</keywords>
 
@@ -92,21 +100,30 @@ belongs at the prompt, before anything has been chosen.</inject>
 <example>About to push to main; a stored fact says the branch is master.
 {"inject":"Stored: the main branch is master, not main.","level":"action","facts":[],"keywords":["git push","main"]}</example>
 
+<example>User: "drop the staging database and reseed it." Fact mem_2f1 says dropping and reseeding staging is permitted without asking.
+{"inject":"Stored: dropping and reseeding the staging database is permitted without asking.","level":"action","facts":[],"keywords":["staging","database","drop","reseed"]}</example>
+
+<example>Assistant wrote a test using testify; fact mem_63b says tests here use the standard library alone.
+{"inject":"Stored: tests in this repository use the standard library alone, rather than testify.","facts":[],"keywords":["test","testify"]}</example>
+
 <example>User: "release a new tag." Fact mem_4a7 says releases are cut with make release TAG=vX.Y.Z, which creates three tags and pushes every remote.
 {"inject":"Stored: releases are cut with make release TAG=vX.Y.Z; it creates the three tags and pushes every remote.","facts":[],"keywords":["release","tag","make release"]}</example>
 
 <example>User: "never put marketing language in my docs."
-{"inject":"","facts":[{"content":"The user wants no marketing language in documentation.","category":"preference","scope":"global","tags":["docs"],"supersedes":""}],"keywords":["docs","tone"]}</example>
+{"inject":"","facts":[{"content":"Marketing language is forbidden in the user's documentation.","category":"preference","scope":"global","private":true,"tags":["docs"],"supersedes":""}],"keywords":["docs","tone"]}</example>
 
 <example>User: "we push to origin and origingh, and origingh is behind right now."
-{"inject":"","facts":[{"content":"Pushes go to two remotes, origin and origingh.","category":"structure","scope":"local","tags":["git"],"supersedes":""}],"keywords":["origin","origingh","push"]}</example>
+{"inject":"","facts":[{"content":"Pushes go to two remotes, origin and origingh.","category":"structure","scope":"local","private":false,"tags":["git"],"supersedes":""}],"keywords":["origin","origingh","push"]}</example>
+
+<example>User: "on my box Postgres listens on 5433, the compose file says 5432."
+{"inject":"","facts":[{"content":"On this machine Postgres listens on 5433 rather than the 5432 the compose file names.","category":"structure","scope":"local","private":true,"tags":["postgres","port"],"supersedes":""}],"keywords":["postgres","5433","compose"]}</example>
 
 <example>User: "deploys go to eu-west-2 now." Fact mem_91c2 says us-east-1.
-{"inject":"","facts":[{"content":"Deploys go to eu-west-2.","category":"decision","scope":"local","tags":["deploy"],"supersedes":"mem_91c2"}],"keywords":["deploy","eu-west-2"]}</example>
+{"inject":"","facts":[{"content":"Deploys go to eu-west-2.","category":"decision","scope":"local","private":false,"tags":["deploy"],"supersedes":"mem_91c2"}],"keywords":["deploy","eu-west-2"]}</example>
 </examples>
 
 <output>JSON only, no prose, no fence:
-{"inject":"","level":"","facts":[{"content":"","category":"","scope":"local","tags":[],"supersedes":""}],"keywords":[]}</output>`
+{"inject":"","level":"","facts":[{"content":"","category":"","scope":"local","private":false,"tags":[],"supersedes":""}],"keywords":[]}</output>`
 
 // Consolidate is the tidying pass. The write path judges one turn at a time and
 // cannot see that it is producing the fourth wording of a rule already stored,

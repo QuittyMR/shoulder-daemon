@@ -40,6 +40,29 @@ Notable changes to shoulder-daemon. The format follows
   inherits the strictest of them, and a session working note is never private. Under
   `SHOULDER_MEMORY=docs`, marking a stored fact private moves its line out of the
   committed file and into the `USER.shoulder.md` git does not carry.
+### Changed
+
+- A fact in the `preference` category is marked private wherever it is filed; the
+  JSON store and a memory service keep the flag and ignore it.
+- The decision and learn prompts ask for a rule to be stored as what is allowed or what is
+  forbidden, with none of "not", "never", "don't", "must not" or "no longer" in the stored
+  sentence: "never commit secrets" becomes "only commit data that is non-secret", "do not
+  use var" becomes "use of var is forbidden", "never force push to main" becomes "force
+  pushes to main are forbidden". Measured over six pairs of rules written both ways, a
+  reversal worded as a denial of the rule collides with the affirmative form in four pairs
+  of six under the word table and five of six under the transformer, and with the
+  prohibition in none - and a collision is the only way the pipeline is told which record
+  to supersede. It costs the word table two questions of eighteen at rank one and two in
+  the top three, the transformer one and none, and no unrelated rule about the same
+  subject is wrongly refused under either.
+- The decision prompt speaks about a stored fact that bears on the operation a turn is
+  about to perform whether that fact forbids it, permits it, or says where or how, and
+  about a stored preference the assistant's own reply has just broken. It named only
+  contradictions and procedures before, and stayed silent on both of those. Measured on
+  the loop benchmark, advice reaches the outbox where one is due in 64-79% of the turns
+  that call for it under the built-in stores, against 50-57% before, and in 57% against
+  mcp-memory-service, against 50%: a permission recalled before a force push is surfaced
+  under every backend, where it was surfaced under none.
 
 ### Fixed
 

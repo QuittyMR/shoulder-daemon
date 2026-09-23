@@ -129,15 +129,18 @@ func TestEachLevelRendersADifferentPrompt(t *testing.T) {
 // would leave a level that quietly produces unusable output.
 func TestEveryRenderingKeepsWhatTheParserNeeds(t *testing.T) {
 	// The output contract, the field that lets a fact replace another, the
-	// categories the writer normalises against, and the scope that has no
-	// default. Each of these is read back out of the model's reply.
+	// categories the writer normalises against, the scope that has no default,
+	// and the flag that keeps a fact out of what the team commits. Each of
+	// these is read back out of the model's reply.
 	wants := []string{
-		`{"inject":"","level":"","facts":[{"content":"","category":"","scope":"local","tags":[],"supersedes":""}],"keywords":[]}`,
+		`{"inject":"","level":"","facts":[{"content":"","category":"","scope":"local","private":false,"tags":[],"supersedes":""}],"keywords":[]}`,
 		"JSON only, no prose, no fence",
 		`"supersedes"`,
 		`"scope"`,
+		`"private"`,
 		"decision | constraint | preference | correction | structure | reference",
 		"local for this codebase, global for the person",
+		"teammate cloning the repository must not receive",
 	}
 	for i := range PickinessNames() {
 		p := Pickiness(i)
@@ -202,6 +205,34 @@ func TestALevelRendersItsOwnParagraph(t *testing.T) {
 		t.Run(c.level.String(), func(t *testing.T) {
 			if !strings.Contains(Decision(c.level), c.want) {
 				t.Fatalf("the %v prompt does not contain %q", c.level, c.want)
+			}
+		})
+	}
+}
+
+// The schema is taught by example as much as by the field list: a model shown
+// six facts without the flag learns that omitting it is normal, and an omitted
+// flag is a fact published. Every rendering is checked because pickiness
+// rewrites the paragraph above the examples and could be made to swallow them.
+func TestEveryWorkedFactCarriesThePrivacyFlag(t *testing.T) {
+	for i := range PickinessNames() {
+		p := Pickiness(i)
+		t.Run(p.String(), func(t *testing.T) {
+			out := Decision(p)
+			// Every fact shape in the prompt, worked example or output
+			// contract, has exactly one category in it.
+			shapes := strings.Count(out, `"category":"`)
+			if shapes < 2 {
+				t.Fatalf("the prompt shows %d fact shapes, so there are no worked examples", shapes)
+			}
+			flags := strings.Count(out, `"private":true`) + strings.Count(out, `"private":false`)
+			if flags != shapes {
+				t.Fatalf("%d fact shapes carry %d privacy flags", shapes, flags)
+			}
+			// Both values are demonstrated. Shown only true, a model reads the
+			// field as a marker to attach rather than a question to answer.
+			if !strings.Contains(out, `"private":true`) || !strings.Contains(out, `"private":false`) {
+				t.Fatal("the examples do not show the flag both ways")
 			}
 		})
 	}
