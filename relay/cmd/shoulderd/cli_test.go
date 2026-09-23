@@ -259,6 +259,27 @@ func TestFactAddLocalCarriesTheProject(t *testing.T) {
 	if got := d.field(t, "project"); got != want && got != dir {
 		t.Fatalf("project = %q, want the directory the command ran in (%s)", got, dir)
 	}
+	// The project is an identity; the directory goes with it so a store that
+	// keeps facts in the checkout can find the checkout.
+	if got := d.field(t, "dir"); got != want && got != dir {
+		t.Fatalf("dir = %q, want the directory the command ran in (%s)", got, dir)
+	}
+}
+
+func TestFactListSendsTheDirectoryItRanIn(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	d := newDaemon(t, `{"facts":[]}`)
+	if code, _, stderr := run(t, "fact", "list", "--addr", d.URL, "--local"); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	want, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := d.req().query.Get("dir"); got != want && got != dir {
+		t.Fatalf("dir = %q, want the directory the command ran in (%s)", got, dir)
+	}
 }
 
 func TestFactUpdateNeedsAnID(t *testing.T) {
@@ -777,5 +798,41 @@ func TestAConfigValueTheDaemonRefusesIsAUsageError(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "dbeug") {
 		t.Fatalf("the daemon's own reason was lost: %q", stderr)
+	}
+}
+
+
+// The flag is the only way a person can say that a fact about the project is
+// still theirs alone. Without it the field is absent from the request rather
+// than sent false, so a daemon that judges the category private on its own is
+// not contradicted by every command that did not pass it.
+func TestFactWriteSendsPrivateOnlyWhenAsked(t *testing.T) {
+	for _, verb := range []string{"add", "update"} {
+		t.Run(verb, func(t *testing.T) {
+			args := []string{"fact", verb, "--global", "--category", "structure"}
+			if verb == "update" {
+				args = append(args, "--id", "mem_3")
+			}
+
+			d := newDaemon(t, `{"id":"mem_7"}`)
+			code, _, stderr := run(t, append(append([]string{}, args...),
+				"--addr", d.URL, "--private", "postgres listens on 5433 here")...)
+			if code != 0 {
+				t.Fatalf("exit %d: %s", code, stderr)
+			}
+			if got, ok := d.req().body["private"].(bool); !ok || !got {
+				t.Fatalf("private = %v, want true", d.req().body["private"])
+			}
+
+			d = newDaemon(t, `{"id":"mem_8"}`)
+			code, _, stderr = run(t, append(append([]string{}, args...),
+				"--addr", d.URL, "deploys go to eu-west-2")...)
+			if code != 0 {
+				t.Fatalf("exit %d: %s", code, stderr)
+			}
+			if _, sent := d.req().body["private"]; sent {
+				t.Fatalf("a command that did not pass --private sent %v", d.req().body["private"])
+			}
+		})
 	}
 }

@@ -36,6 +36,14 @@ type Fact struct {
 	// than losing it.
 	Scope scope.Scope `json:"scope"`
 
+	// Private marks a fact about this person's machine, accounts, paths or
+	// habits rather than about the code, so a backend that files records
+	// beside a checkout keeps it out of what the team commits. It is an axis
+	// of its own because scope cannot carry it: "Postgres listens on 5433
+	// here" is local to this project and still must not reach a teammate who
+	// clones it.
+	Private bool `json:"private,omitempty"`
+
 	Source     Source `json:"source,omitempty"`
 	Supersedes string `json:"supersedes,omitempty"`
 }
@@ -49,6 +57,12 @@ const SimilarityThreshold = 0.6
 // Reconcile merges explicit and deduced facts, dropping deduced restatements of
 // something already recorded explicitly. Explicit facts always survive intact,
 // including their tags and category.
+//
+// Privacy is the one thing a dropped duplicate leaves behind. Two wordings of
+// one rule reach the writer as a single record, so a restatement that judged
+// the rule private and lost is a record committed to a repository against the
+// only judgement anybody made about it. An explicit fact still overrides that:
+// the agent was told the rule in those words and chose the flag deliberately.
 func Reconcile(explicit, deduced []Fact) []Fact {
 	out := make([]Fact, 0, len(explicit)+len(deduced))
 	kept := make([][]string, 0, len(explicit)+len(deduced))
@@ -68,6 +82,10 @@ func Reconcile(explicit, deduced []Fact) []Fact {
 					(f.Scope.Valid() || !out[i].Scope.Valid()) {
 					out[i] = f
 					kept[i] = t
+					return
+				}
+				if f.Private && !out[i].Private && out[i].Source != Explicit {
+					out[i].Private = true
 				}
 				return
 			}
@@ -160,6 +178,11 @@ var Categories = map[string]bool{
 	"structure":  true,
 	"reference":  true,
 }
+
+// Private reports whether a category describes the person rather than the
+// code. A preference is theirs: it belongs in the file a backend keeps out of
+// the repository, not in the conventions the team commits.
+func Private(category string) bool { return category == "preference" }
 
 // NormaliseCategory returns the category if it is valid, and false otherwise.
 // An invalid category is dropped rather than passed through, so the backend

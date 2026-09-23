@@ -39,8 +39,15 @@ type State struct {
 	OpenedAt  time.Time `json:"opened_at"`
 	LastSeen  time.Time `json:"last_seen"`
 
-	// Project is the scope this session's note is filed under.
-	Project string `json:"project,omitempty"`
+	// Project is the scope this session's note is filed under, and ProjectDir
+	// the directory it was resolved from. The directory is kept beside it
+	// rather than read from CWD when it is needed, because CWD follows every
+	// event: a session that has moved would otherwise hand a cleanup the
+	// project of one checkout with the path of another, and a backend that
+	// files local facts with the code takes that pair as the truth about where
+	// the project is.
+	Project    string `json:"project,omitempty"`
+	ProjectDir string `json:"-"`
 
 	Seq  uint64 `json:"seq"`
 	Turn uint64 `json:"turn"`
@@ -204,8 +211,12 @@ type Evicted struct {
 	ID string
 	// Project is carried out with the eviction because deleting the note needs
 	// to name the scope it is deleting from, and the state that knew it is
-	// gone by the time the caller acts.
+	// gone by the time the caller acts. Dir is the directory that project was
+	// resolved from, for a backend that has to find the checkout to delete
+	// from it; the two travel together and are never taken from different
+	// turns.
 	Project       string
+	Dir           string
 	KeywordRecord string
 }
 
@@ -219,7 +230,7 @@ func (r *Registry) CloseSession(sessionID string) (Evicted, int) {
 	if !ok {
 		return Evicted{}, len(r.sessions)
 	}
-	gone := Evicted{ID: sessionID, Project: st.Project, KeywordRecord: st.KeywordRecord}
+	gone := Evicted{ID: sessionID, Project: st.Project, Dir: st.ProjectDir, KeywordRecord: st.KeywordRecord}
 	delete(r.sessions, sessionID)
 	return gone, len(r.sessions)
 }
@@ -232,7 +243,7 @@ func (r *Registry) Drain() []Evicted {
 	defer r.mu.Unlock()
 	gone := make([]Evicted, 0, len(r.sessions))
 	for id, st := range r.sessions {
-		gone = append(gone, Evicted{ID: id, Project: st.Project, KeywordRecord: st.KeywordRecord})
+		gone = append(gone, Evicted{ID: id, Project: st.Project, Dir: st.ProjectDir, KeywordRecord: st.KeywordRecord})
 		delete(r.sessions, id)
 	}
 	return gone
@@ -248,7 +259,7 @@ func (r *Registry) Evict(idleFor time.Duration, now time.Time) []Evicted {
 	var gone []Evicted
 	for id, st := range r.sessions {
 		if now.Sub(st.LastSeen) > idleFor {
-			gone = append(gone, Evicted{ID: id, Project: st.Project, KeywordRecord: st.KeywordRecord})
+			gone = append(gone, Evicted{ID: id, Project: st.Project, Dir: st.ProjectDir, KeywordRecord: st.KeywordRecord})
 			delete(r.sessions, id)
 		}
 	}
@@ -343,16 +354,19 @@ func (r *Registry) AddKeywords(sessionID string, words []string) (recordID, note
 // SetKeywordRecord points the session at where its note now lives. Superseding
 // returns a new id, so the value from the previous turn is dead the moment the
 // write lands.
-// SetKeywordRecord records the note and the project it was filed under. The
-// project is kept because deleting the note later has to name the scope it is
-// deleting from, and by then the caller has only an eviction to go on.
-func (r *Registry) SetKeywordRecord(sessionID, project, recordID, note string) {
+// SetKeywordRecord records the note, the project it was filed under and the
+// directory that project was resolved from. The project is kept because
+// deleting the note later has to name the scope it is deleting from, and by
+// then the caller has only an eviction to go on; the directory is kept with it
+// so the two cannot come from different turns.
+func (r *Registry) SetKeywordRecord(sessionID, project, dir, recordID, note string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if st, ok := r.sessions[sessionID]; ok {
 		st.KeywordRecord = recordID
 		st.KeywordsWritten = note
 		st.Project = project
+		st.ProjectDir = dir
 	}
 }
 

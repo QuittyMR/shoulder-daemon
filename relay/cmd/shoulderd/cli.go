@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -125,7 +126,7 @@ With neither --local nor --global this reads the project you are standing in.
 Flags come before the text: shoulderd message --no-update "your question"
 `
 
-const factAddUsage = `usage: shoulderd fact add --local|--global [--category=C] [--tag=T]... [--addr=URL] "content"
+const factAddUsage = `usage: shoulderd fact add --local|--global [--category=C] [--tag=T]... [--private] [--addr=URL] "content"
 
 Store a fact exactly as typed, without asking a model about it.
 
@@ -134,6 +135,9 @@ Store a fact exactly as typed, without asking a model about it.
   --category C   one of: constraint, correction, decision, preference,
                  reference, structure
   --tag T        a tag to attach; repeatable
+  --private      about this machine, an account, a path or a habit of yours,
+                 so a backend that files facts with the checkout keeps it out
+                 of what the team commits; a preference is private anyway
   --addr URL     relay base URL (default http://127.0.0.1:8787)
 
 The content is required and comes last. A fact filed in the wrong half is not
@@ -143,7 +147,7 @@ project that did not, so the scope is never guessed for you.
 Flags come before the content: shoulderd fact add --global "prefers terse answers"
 `
 
-const factUpdateUsage = `usage: shoulderd fact update --local|--global --id=ID [--category=C] [--tag=T]... [--addr=URL] "content"
+const factUpdateUsage = `usage: shoulderd fact update --local|--global --id=ID [--category=C] [--tag=T]... [--private] [--addr=URL] "content"
 
 Replace a stored fact with a corrected one.
 
@@ -153,6 +157,9 @@ Replace a stored fact with a corrected one.
   --category C   one of: constraint, correction, decision, preference,
                  reference, structure
   --tag T        a tag to attach; repeatable
+  --private      keep this out of what the team commits; the flag only ever
+                 adds, so a correction of an already private fact stays
+                 private whether or not you pass it
   --addr URL     relay base URL (default http://127.0.0.1:8787)
 
 The content is required and comes last. The named fact must already be in the
@@ -371,7 +378,7 @@ func (c *cli) message(args []string) int {
 
 	var reply cliapi.MessageResponse
 	if code := c.call(*addr, http.MethodPost, "/v1/cli/message", cliapi.MessageRequest{
-		Text: text, Scope: string(sc), Project: project, Update: mode,
+		Text: text, Scope: string(sc), Project: project, Dir: cwd(), Update: mode,
 	}, &reply); code != 0 {
 		return code
 	}
@@ -415,6 +422,7 @@ func (c *cli) factWrite(verb, method string, args []string) int {
 	category := fs.String("category", "", "one of: decision, constraint, preference, correction, structure, reference")
 	var tags stringList
 	fs.Var(&tags, "tag", "tag to attach; repeatable")
+	private := fs.Bool("private", false, "about this machine, an account, a path or a habit of yours")
 	id := ""
 	if method == http.MethodPatch {
 		fs.StringVar(&id, "id", "", "id of the fact this replaces")
@@ -441,7 +449,7 @@ func (c *cli) factWrite(verb, method string, args []string) int {
 	var reply cliapi.FactResponse
 	if code := c.call(*addr, method, "/v1/cli/facts", cliapi.FactRequest{
 		ID: id, Content: content, Category: *category, Tags: tags,
-		Scope: string(sc), Project: project,
+		Private: *private, Scope: string(sc), Project: project, Dir: cwd(),
 	}, &reply); code != 0 {
 		return code
 	}
@@ -485,6 +493,9 @@ func (c *cli) factList(args []string) int {
 	q := url.Values{"scope": {string(sc)}, "limit": {strconv.Itoa(*limit)}}
 	if project != "" {
 		q.Set("project", project)
+	}
+	if dir := cwd(); dir != "" {
+		q.Set("dir", dir)
 	}
 	var reply cliapi.FactsResponse
 	if code := c.call(*addr, http.MethodGet, "/v1/cli/facts?"+q.Encode(), nil, &reply); code != 0 {
@@ -537,7 +548,7 @@ func (c *cli) digest(args []string) int {
 
 	var reply cliapi.DigestResponse
 	if code := c.call(*addr, http.MethodPost, "/v1/cli/digest", cliapi.DigestRequest{
-		Scope: string(sc), Project: project,
+		Scope: string(sc), Project: project, Dir: cwd(),
 	}, &reply); code != 0 {
 		return code
 	}
@@ -726,6 +737,19 @@ func (s *scopeFlags) forReading() (scope.Scope, string, error) {
 	return withProject(sc)
 }
 
+// cwd is the directory the command ran in, sent with every request beside the
+// project. The project is an identity the daemon cannot turn back into a
+// path, and a backend that keeps facts with the checkout needs the path. An
+// unreadable one is sent as nothing: the daemon says what it cannot do
+// without it.
+func cwd() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return dir
+}
+
 // withProject attaches the project a local scope is meaningless without. The
 // daemon may be running in another directory, so the resolution happens here,
 // where the user's shell is. A directory outside a repository is a project in
@@ -776,7 +800,7 @@ func (c *cli) consolidate(args []string) int {
 
 	var reply cliapi.ConsolidateResponse
 	if code := c.call(*addr, http.MethodPost, "/v1/cli/consolidate", cliapi.ConsolidateRequest{
-		Scope: string(sc), Project: project,
+		Scope: string(sc), Project: project, Dir: cwd(),
 	}, &reply); code != 0 {
 		return code
 	}

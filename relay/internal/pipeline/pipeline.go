@@ -141,7 +141,7 @@ func (p *Pipeline) Run(ctx context.Context) {
 				go p.forgetNotes(context.WithoutCancel(ctx), []session.Evicted{gone})
 				// The end of a session is the one moment the whole scope can be
 				// judged at once, and nothing is waiting on the answer.
-				go p.consolidateBoth(ctx, gone.Project)
+				go p.consolidateBoth(ctx, site{project: gone.Project, dir: gone.Dir})
 
 				// A goodbye is the one moment worth asking whether anything is
 				// left, and the count alone does not answer it. A session that
@@ -188,7 +188,7 @@ func (p *Pipeline) Run(ctx context.Context) {
 			// until it closes.
 			if ev.Kind == session.KindTurnEnd {
 				if turn := p.Registry.Turn(ev.SessionID); turn > 0 && turn%consolidateEvery == 0 {
-					go p.consolidateBoth(ctx, p.sessionProject([]session.Event{ev}))
+					go p.consolidateBoth(ctx, p.sessionSite([]session.Event{ev}))
 				}
 			}
 			// The claim is released before anyone is told the consult is
@@ -275,8 +275,8 @@ func (p *Pipeline) Consult(ctx context.Context, sessionID string) {
 	}
 	pick := p.Settings.Pickiness()
 
-	project := p.sessionProject(events)
-	recalled := p.recall(ctx, render.RecallQuery(events), project, sessionScopes, RecallLimit, 0)
+	at := p.sessionSite(events)
+	recalled := p.recall(ctx, render.RecallQuery(events), at, sessionScopes, RecallLimit, 0)
 
 	cctx, cancel := context.WithTimeout(ctx, p.Cfg.AdvisorTimeout)
 	defer cancel()
@@ -287,7 +287,7 @@ func (p *Pipeline) Consult(ctx context.Context, sessionID string) {
 	counted := &countedSteps{Provider: prov, Log: p.Log, Session: sessionID, Slow: slowCall}
 	start := time.Now()
 	raw, err := llm.Run(cctx, counted, prompts.Decision(pick), decisionPrompt(window, recalled),
-		p.decisionTools(sessionID, project), decisionSteps)
+		p.decisionTools(sessionID, at), decisionSteps)
 	p.Metrics.ObserveAdvisor(time.Since(start))
 	if err != nil {
 		p.Metrics.Inc("shoulder_advisor_error_total")
@@ -306,8 +306,8 @@ func (p *Pipeline) Consult(ctx context.Context, sessionID string) {
 	}
 
 	p.queueInjection(sessionID, turn, decision.Inject, decision.Level)
-	p.persist(ctx, sessionID, project, decision.Facts, recalled)
-	p.rememberKeywords(ctx, sessionID, project, window+decision.Inject, decision.Keywords)
+	p.persist(ctx, sessionID, at, decision.Facts, recalled)
+	p.rememberKeywords(ctx, sessionID, at, window+decision.Inject, decision.Keywords)
 }
 
 // countedSteps watches one tool loop go past. llm.Run returns the model's last
@@ -386,7 +386,7 @@ func writeRecalled(b *strings.Builder, recs []memory.Record) {
 // decisionTools are the two the decision model gets. Both answer about this
 // session only: search_memory reads the scopes this session may read, and
 // session_history reads the note this session has been keeping.
-func (p *Pipeline) decisionTools(sessionID, project string) []llm.Binding {
+func (p *Pipeline) decisionTools(sessionID string, at site) []llm.Binding {
 	return []llm.Binding{{
 		Tool: llm.Tool{
 			Name:        "search_memory",
@@ -414,7 +414,7 @@ func (p *Pipeline) decisionTools(sessionID, project string) []llm.Binding {
 			if a.Limit <= 0 || a.Limit > searchToolLimit {
 				a.Limit = searchToolLimit
 			}
-			found := p.recall(ctx, a.Query, project, sessionScopes, a.Limit, a.MinScore)
+			found := p.recall(ctx, a.Query, at, sessionScopes, a.Limit, a.MinScore)
 			if len(found) == 0 {
 				return "(nothing matched)", nil
 			}
@@ -445,12 +445,12 @@ func (p *Pipeline) decisionTools(sessionID, project string) []llm.Binding {
 // It is a session record rather than a fact: it is worth having on the next
 // turn and noise a week later, and nothing that reads knowledge — recall, a
 // digest, the fact list — asks for a kind, which is what keeps it out of them.
-func (p *Pipeline) rememberKeywords(ctx context.Context, sessionID, project, turn string, words []string) {
+func (p *Pipeline) rememberKeywords(ctx context.Context, sessionID string, at site, turn string, words []string) {
 	words = capKeywords(turn, words)
 	if len(words) == 0 || p.Memory == nil {
 		return
 	}
-	if project == "" {
+	if at.project == "" {
 		// The note is local by definition: it is about what this session is
 		// doing in this checkout, and there is nowhere else to put it.
 		p.Metrics.Inc("shoulder_session_keywords_no_project_total")
@@ -475,7 +475,7 @@ func (p *Pipeline) rememberKeywords(ctx context.Context, sessionID, project, tur
 		// out.
 		p.Metrics.Inc("shoulder_session_keywords_dry_run_total")
 		p.Log.Info("dry run: would record what this session is about",
-			"session", sessionID, "project", scope.Label(project), "keywords", note)
+			"session", sessionID, "project", scope.Label(at.project), "keywords", note)
 		return
 	}
 
@@ -487,7 +487,8 @@ func (p *Pipeline) rememberKeywords(ctx context.Context, sessionID, project, tur
 		Kind:    memory.KindSession,
 		Session: sessionID,
 		Scope:   scope.Local,
-		Project: project,
+		Project: at.project,
+		Dir:     at.dir,
 	}
 	if prevID == "" {
 		// The id held in memory is a shortcut, not the truth. It is dropped an
@@ -496,15 +497,15 @@ func (p *Pipeline) rememberKeywords(ctx context.Context, sessionID, project, tur
 		// life of an ordinary session. Believing it means writing a second note
 		// for a session that already has one, and then a third, with nothing
 		// able to tell those apart from three real sessions.
-		prevID = p.findNote(wctx, sessionID, project)
+		prevID = p.findNote(wctx, sessionID, at)
 	}
-	id, counter, err := p.writeNote(wctx, sessionID, project, prevID, rec)
+	id, counter, err := p.writeNote(wctx, sessionID, at, prevID, rec)
 	if err != nil {
 		if errors.Is(err, memory.ErrDuplicateExact) {
 			// The store already holds this note, so the session has what it
 			// needs and the id it is holding is still good.
 			p.Metrics.Inc("shoulder_session_keywords_unchanged_total")
-			p.Registry.SetKeywordRecord(sessionID, project, prevID, note)
+			p.Registry.SetKeywordRecord(sessionID, at.project, at.dir, prevID, note)
 			return
 		}
 		if !errors.Is(err, memory.ErrNoBackend) {
@@ -514,7 +515,7 @@ func (p *Pipeline) rememberKeywords(ctx context.Context, sessionID, project, tur
 		}
 		return
 	}
-	p.Registry.SetKeywordRecord(sessionID, project, id, note)
+	p.Registry.SetKeywordRecord(sessionID, at.project, at.dir, id, note)
 	p.Metrics.Inc(counter)
 }
 
@@ -553,7 +554,7 @@ func capKeywords(turn string, words []string) []string {
 // at the turn it broke on, while the log blamed a scope violation that never
 // happened. The mark on the record is what makes the recovery exact: the
 // replacement that did commit still carries it.
-func (p *Pipeline) writeNote(ctx context.Context, sessionID, project, prevID string, rec memory.Record) (id, counter string, err error) {
+func (p *Pipeline) writeNote(ctx context.Context, sessionID string, at site, prevID string, rec memory.Record) (id, counter string, err error) {
 	const (
 		stored     = "shoulder_session_keywords_stored_total"
 		superseded = "shoulder_session_keywords_superseded_total"
@@ -571,7 +572,7 @@ func (p *Pipeline) writeNote(ctx context.Context, sessionID, project, prevID str
 	p.Metrics.Inc("shoulder_session_note_relocated_total")
 	p.Log.Info("this session's note is no longer where it was left; finding it again",
 		"session", sessionID, "was", prevID)
-	if again := p.findNote(ctx, sessionID, project); again != "" && again != prevID {
+	if again := p.findNote(ctx, sessionID, at); again != "" && again != prevID {
 		id, err = p.Memory.Supersede(ctx, again, rec)
 		return id, superseded, err
 	}
@@ -582,12 +583,12 @@ func (p *Pipeline) writeNote(ctx context.Context, sessionID, project, prevID str
 // findNote looks up the record already holding this session's note, by the mark
 // the record carries rather than by any memory of having written it. The store
 // is what survives an eviction and a restart; this process is not.
-func (p *Pipeline) findNote(ctx context.Context, sessionID, project string) string {
+func (p *Pipeline) findNote(ctx context.Context, sessionID string, at site) string {
 	// No limit, for the reason checked.holds gives: a note past a cap reads as
 	// absent, and here a false absent writes a second note for the same session
 	// rather than merely refusing something.
 	found, err := p.Memory.List(ctx, memory.Query{
-		Scope: scope.Local, Project: project, Kind: memory.KindSession,
+		Scope: scope.Local, Project: at.project, Dir: at.dir, Kind: memory.KindSession,
 	})
 	if err != nil {
 		if !errors.Is(err, memory.ErrNoBackend) {
@@ -614,17 +615,17 @@ func (p *Pipeline) findNote(ctx context.Context, sessionID, project string) stri
 	// can be recognised: old enough that no live session could still be writing
 	// one, and belonging to a session that is not this one.
 	if len(stale) > 0 {
-		go p.forgetStale(context.WithoutCancel(ctx), project, stale)
+		go p.forgetStale(context.WithoutCancel(ctx), at, stale)
 	}
 	return mine
 }
 
 // forgetStale removes notes left behind by a process that did not get to clean
 // up after itself.
-func (p *Pipeline) forgetStale(ctx context.Context, project string, stale []memory.Record) {
+func (p *Pipeline) forgetStale(ctx context.Context, at site, stale []memory.Record) {
 	evicted := make([]session.Evicted, 0, len(stale))
 	for _, r := range stale {
-		evicted = append(evicted, session.Evicted{ID: r.Session, Project: project, KeywordRecord: r.ID})
+		evicted = append(evicted, session.Evicted{ID: r.Session, Project: at.project, Dir: at.dir, KeywordRecord: r.ID})
 	}
 	p.Metrics.IncBy("shoulder_session_notes_orphaned_total", uint64(len(evicted)))
 	p.forgetNotes(ctx, evicted)
@@ -646,7 +647,7 @@ func (p *Pipeline) forgetNotes(ctx context.Context, evicted []session.Evicted) {
 		}
 		wctx, cancel := context.WithTimeout(ctx, writeTimeout)
 		err := p.Memory.Forget(wctx, ev.KeywordRecord, memory.Query{
-			Scope: scope.Local, Project: ev.Project, Kind: memory.KindSession,
+			Scope: scope.Local, Project: ev.Project, Dir: ev.Dir, Kind: memory.KindSession,
 		})
 		cancel()
 		if err != nil {
@@ -661,11 +662,20 @@ func (p *Pipeline) forgetNotes(ctx context.Context, evicted []session.Evicted) {
 	}
 }
 
-// sessionProject resolves the directory the session is working in to the
-// project its local knowledge belongs to. An unresolvable directory leaves the
-// session with global memory only, which is counted: silently filing its facts
+// site is where a session works: the project its local knowledge is filed
+// under, and the directory it was seen in. The two travel together because
+// the project is an identity nothing can turn back into a path, and a backend
+// that keeps local knowledge with the checkout needs the path.
+type site struct {
+	project string
+	dir     string
+}
+
+// sessionSite resolves the directory the session is working in to the project
+// its local knowledge belongs to. An unresolvable directory leaves the session
+// with global memory only, which is counted: silently filing its facts
 // somewhere else would be the worse failure.
-func (p *Pipeline) sessionProject(events []session.Event) string {
+func (p *Pipeline) sessionSite(events []session.Event) site {
 	for i := len(events) - 1; i >= 0; i-- {
 		if events[i].CWD == "" {
 			continue
@@ -675,12 +685,12 @@ func (p *Pipeline) sessionProject(events []session.Event) string {
 			p.Metrics.Inc("shoulder_session_project_unresolved_total")
 			p.Log.Warn("session directory does not resolve to a project; local memory is unreachable",
 				"cwd", events[i].CWD, "err", err)
-			return ""
+			return site{}
 		}
-		return project
+		return site{project: project, dir: events[i].CWD}
 	}
 	p.Metrics.Inc("shoulder_session_project_unresolved_total")
-	return ""
+	return site{}
 }
 
 // recall searches each scope separately and merges the results. Separately,
@@ -690,7 +700,7 @@ func (p *Pipeline) sessionProject(events []session.Event) string {
 // The search text is the session's most recent prose. The whole rendered window
 // is a poor query: it is mostly tool noise, which drags a semantic search
 // towards whatever files were touched rather than what was said.
-func (p *Pipeline) recall(ctx context.Context, text, project string, scopes []scope.Scope, limit int, minScore float64) []memory.Record {
+func (p *Pipeline) recall(ctx context.Context, text string, at site, scopes []scope.Scope, limit int, minScore float64) []memory.Record {
 	if p.Memory == nil || strings.TrimSpace(text) == "" {
 		return nil
 	}
@@ -702,10 +712,10 @@ func (p *Pipeline) recall(ctx context.Context, text, project string, scopes []sc
 	for _, s := range scopes {
 		q := memory.Query{Text: text, Limit: limit, Scope: s, MinScore: minScore}
 		if s == scope.Local {
-			if project == "" {
+			if at.project == "" {
 				continue
 			}
-			q.Project = project
+			q.Project, q.Dir = at.project, at.dir
 		}
 		found, err := p.Memory.Search(rctx, q)
 		if err != nil {
@@ -779,12 +789,12 @@ func (p *Pipeline) queueInjection(sessionID string, turn uint64, raw, level stri
 
 // persist reconciles the model's deduced facts against any the agent recorded
 // explicitly this turn, then writes what survives.
-func (p *Pipeline) persist(ctx context.Context, sessionID, project string, deduced []facts.Fact, recalled []memory.Record) {
+func (p *Pipeline) persist(ctx context.Context, sessionID string, at site, deduced []facts.Fact, recalled []memory.Record) {
 	if p.Memory == nil {
 		return
 	}
 	explicit := p.Registry.TakeFacts(sessionID)
-	p.store(ctx, sessionID, project, facts.Reconcile(explicit, deduced), recalled)
+	p.store(ctx, sessionID, at, facts.Reconcile(explicit, deduced), recalled, replaceCollision)
 }
 
 // store applies the scope rule and writes what survives it, returning the facts
@@ -793,9 +803,53 @@ func (p *Pipeline) persist(ctx context.Context, sessionID, project string, deduc
 // A fact whose scope was never decided dies here rather than being defaulted.
 // Guessing is what puts a project's branch layout in front of every other
 // repository the user opens, and the guess is invisible once it is stored.
-func (p *Pipeline) store(ctx context.Context, origin, project string, merged []facts.Fact, recalled []memory.Record) []facts.Fact {
+// factOutcome is what became of one write. The three are exhaustive, so a
+// caller counting them accounts for every fact it handed over.
+type factOutcome int
+
+const (
+	factStored factOutcome = iota
+	factSkipped
+	factFailed
+)
+
+// collision says what a backend's refusal of a near-duplicate means to the
+// caller that asked for the write.
+//
+// A session is watching somebody work, so a fact refused as too close to a
+// stored one is almost always a correction of it and replacing that record is
+// the recovery. A document is not. It says what it said when it was written,
+// which can be years before anything a session learned, and superseding on its
+// behalf lets a page nobody has reread quietly undo a correction made last
+// week.
+type collision int
+
+const (
+	// replaceCollision supersedes the record that blocked the write.
+	replaceCollision collision = iota
+	// keepCollision leaves it alone and counts the write as skipped.
+	keepCollision
+)
+
+// factCounts totals a batch of writes. It exists for `learn`, which reports
+// per document what the store did with it; the session path counts the same
+// events as metrics and has no use for the numbers.
+type factCounts struct{ stored, skipped, failed int }
+
+func (c *factCounts) count(o factOutcome) {
+	switch o {
+	case factStored:
+		c.stored++
+	case factSkipped:
+		c.skipped++
+	default:
+		c.failed++
+	}
+}
+
+func (p *Pipeline) store(ctx context.Context, origin string, at site, merged []facts.Fact, recalled []memory.Record, refused collision) ([]facts.Fact, factCounts) {
 	if p.Memory == nil || len(merged) == 0 {
-		return nil
+		return nil, factCounts{}
 	}
 
 	// Link restatements of already-stored facts so they supersede rather than
@@ -804,7 +858,7 @@ func (p *Pipeline) store(ctx context.Context, origin, project string, merged []f
 	// Placement travels with each record, and by key on both sides: a read is
 	// entitled to hand back either form of a project, and a comparison that
 	// mistook one for the other would decide two projects are the same one.
-	key := scope.Key(project)
+	key := scope.Key(at.project)
 	seen := make([]facts.Recalled, 0, len(recalled))
 	for _, r := range recalled {
 		seen = append(seen, facts.Recalled{ID: r.ID, Content: r.Content, Scope: r.Scope, Project: r.ProjectKey()})
@@ -817,7 +871,7 @@ func (p *Pipeline) store(ctx context.Context, origin, project string, merged []f
 		case !f.Scope.Valid():
 			p.Metrics.Inc("shoulder_facts_missing_scope_total")
 			p.Log.Warn("fact dropped: no scope was decided", "origin", origin, "content", f.Content)
-		case f.Scope == scope.Local && project == "":
+		case f.Scope == scope.Local && at.project == "":
 			p.Metrics.Inc("shoulder_facts_no_project_total")
 			p.Log.Warn("local fact dropped: no project to file it under", "origin", origin, "content", f.Content)
 		default:
@@ -825,7 +879,7 @@ func (p *Pipeline) store(ctx context.Context, origin, project string, merged []f
 		}
 	}
 	if len(kept) == 0 {
-		return nil
+		return nil, factCounts{}
 	}
 	if p.Cfg.Budget.DryRun {
 		for _, f := range kept {
@@ -833,36 +887,44 @@ func (p *Pipeline) store(ctx context.Context, origin, project string, merged []f
 				"category", f.Category, "scope", f.Scope, "supersedes", f.Supersedes)
 		}
 		p.Metrics.Inc("shoulder_facts_dry_run_total")
-		return kept
+		return kept, factCounts{}
 	}
 
 	wctx, cancel := context.WithTimeout(ctx, writeTimeout)
 	defer cancel()
 
+	var wrote factCounts
 	for _, f := range kept {
-		p.writeFact(wctx, origin, project, f)
+		wrote.count(p.writeFact(wctx, origin, at, f, refused))
 	}
-	return kept
+	return kept, wrote
 }
 
-// writeFact persists one fact, converting a refused write into a supersede.
+// writeFact persists one fact, converting a refused write into a supersede
+// where the caller says that is what a refusal means.
 //
 // A store that deduplicates refuses whatever it finds too close to something it
 // already holds, and a correction is almost identical to what it corrects, so
 // that refusal lands hardest on exactly the writes worth keeping while the
 // stale fact goes on being recalled. Replacing the memory that blocked it is
-// the correct recovery: if the new text really was redundant the supersede is
-// near enough a no-op, and if it was a correction it now lands.
-func (p *Pipeline) writeFact(ctx context.Context, origin, project string, f facts.Fact) {
+// the correct recovery for a fact learned from somebody working: if the new
+// text really was redundant the supersede is near enough a no-op, and if it was
+// a correction it now lands.
+func (p *Pipeline) writeFact(ctx context.Context, origin string, at site, f facts.Fact, refused collision) factOutcome {
 	category, ok := facts.NormaliseCategory(f.Category)
 	if !ok {
 		// Send no category rather than one nothing downstream agrees on.
 		p.Metrics.Inc("shoulder_facts_bad_category_total")
 		p.Log.Warn("decision model used an unknown category", "category", f.Category, "origin", origin)
 	}
-	rec := memory.Record{Content: f.Content, Category: category, Tags: f.Tags, Scope: f.Scope}
+	// Either judgement makes it private: the model marked this one as the
+	// person's own, or the category says every fact of that kind is.
+	rec := memory.Record{
+		Content: f.Content, Category: category, Tags: f.Tags, Scope: f.Scope,
+		Private: f.Private || facts.Private(category),
+	}
 	if f.Scope == scope.Local {
-		rec.Project = project
+		rec.Project, rec.Dir = at.project, at.dir
 	}
 
 	if f.Supersedes != "" {
@@ -875,30 +937,34 @@ func (p *Pipeline) writeFact(ctx context.Context, origin, project string, f fact
 		case err == nil:
 			p.Metrics.Inc("shoulder_facts_superseded_total")
 			p.Log.Info("fact superseded", "origin", origin, "scope", f.Scope,
-				"project", scope.Label(project), "supersedes", f.Supersedes,
+				"project", scope.Label(at.project), "supersedes", f.Supersedes,
 				"category", category, "content", f.Content)
+			return factStored
 		case errors.As(err, &cross):
 			p.Metrics.Inc("shoulder_facts_refused_cross_scope_total")
 			p.Log.Warn("supersede refused: the named fact is in another scope; the write is dropped rather than moving it here",
 				"origin", origin, "supersedes", f.Supersedes, "scope", f.Scope,
-				"project", scope.Label(project), "content", f.Content)
+				"project", scope.Label(at.project), "content", f.Content)
+			return factFailed
 		case errors.Is(err, memory.ErrDuplicateExact):
 			p.Metrics.Inc("shoulder_facts_duplicate_total")
+			return factSkipped
 		case errors.Is(err, memory.ErrNoBackend):
 			p.Metrics.Inc("shoulder_facts_nowhere_total")
+			return factFailed
 		default:
 			p.Metrics.Inc("shoulder_memory_write_error_total")
 			p.Log.Warn("supersede failed", "origin", origin, "supersedes", f.Supersedes, "err", err)
+			return factFailed
 		}
-		return
 	}
 
 	id, err := p.Memory.Store(ctx, rec)
 	if err == nil {
 		p.Metrics.Inc("shoulder_facts_stored_total")
 		p.Log.Info("fact stored", "id", id, "origin", origin, "scope", f.Scope,
-			"project", scope.Label(project), "category", category, "content", f.Content)
-		return
+			"project", scope.Label(at.project), "category", category, "content", f.Content)
+		return factStored
 	}
 
 	var semantic *memory.ErrDuplicateSemantic
@@ -908,14 +974,20 @@ func (p *Pipeline) writeFact(ctx context.Context, origin, project string, f fact
 		// nowhere to write. Counting it as a failure would make the store-broken
 		// alarm fire steadily in the default configuration.
 		p.Metrics.Inc("shoulder_facts_nowhere_total")
+		return factFailed
 	case errors.Is(err, memory.ErrDuplicateExact):
 		p.Metrics.Inc("shoulder_facts_duplicate_total")
+		return factSkipped
 	case errors.As(err, &semantic):
+		if refused == keepCollision {
+			p.Metrics.Inc("shoulder_facts_near_duplicate_total")
+			return factSkipped
+		}
 		if semantic.Collided == "" {
 			p.Metrics.Inc("shoulder_facts_refused_unattributed_total")
 			p.Log.Warn("fact refused as a near-duplicate but the collision was not named; the write is lost",
 				"origin", origin, "content", f.Content)
-			return
+			return factFailed
 		}
 		// The supersede is attempted whether or not this turn happened to recall
 		// the colliding record. Whether that record is in this scope is a
@@ -932,26 +1004,28 @@ func (p *Pipeline) writeFact(ctx context.Context, origin, project string, f fact
 		case errors.As(serr, &cross):
 			p.Metrics.Inc("shoulder_facts_refused_cross_scope_total")
 			p.Log.Warn("fact refused by a memory outside this scope; the write is dropped rather than moving that memory here",
-				"origin", origin, "scope", f.Scope, "project", scope.Label(project),
+				"origin", origin, "scope", f.Scope, "project", scope.Label(at.project),
 				"collided", semantic.Collided, "content", f.Content)
-			return
+			return factFailed
 		case errors.Is(serr, memory.ErrDuplicateExact):
 			p.Metrics.Inc("shoulder_facts_duplicate_total")
-			return
+			return factSkipped
 		case serr != nil:
 			p.Metrics.Inc("shoulder_memory_write_error_total")
 			p.Log.Warn("fact refused as a near-duplicate and superseding the collision also failed",
 				"origin", origin, "collided", semantic.Collided, "err", serr)
-			return
+			return factFailed
 		}
 		p.Metrics.Inc("shoulder_facts_auto_superseded_total")
 		p.Log.Info("fact superseded", "origin", origin, "scope", f.Scope,
-			"project", scope.Label(project), "supersedes", semantic.Collided,
+			"project", scope.Label(at.project), "supersedes", semantic.Collided,
 			"category", category, "content", f.Content,
 			"why", "the backend refused it as a near-duplicate of that record")
+		return factStored
 	default:
 		p.Metrics.Inc("shoulder_memory_write_error_total")
 		p.Log.Warn("fact write failed", "origin", origin, "err", err)
+		return factFailed
 	}
 }
 
@@ -976,6 +1050,7 @@ type MessageRequest struct {
 	Text    string
 	Scope   scope.Scope
 	Project string
+	Dir     string
 	Update  UpdateMode
 }
 
@@ -1021,7 +1096,7 @@ func (p *Pipeline) Message(ctx context.Context, req MessageRequest) (MessageRepl
 	if req.Scope == scope.Global {
 		scopes = []scope.Scope{scope.Global}
 	}
-	recalled := p.recall(ctx, text, req.Project, scopes, RecallLimit, 0)
+	recalled := p.recall(ctx, text, site{project: req.Project, dir: req.Dir}, scopes, RecallLimit, 0)
 
 	// No budget gate here. The gate exists to stop unrequested advice
 	// interrupting somebody's turn; this answer was asked for and is being
@@ -1074,7 +1149,8 @@ func (p *Pipeline) learn(ctx context.Context, prov llm.Provider, req MessageRequ
 	// everywhere" is global however it was typed, and stamping the request's
 	// scope over it would file a statement about the user inside one project.
 	// The request supplies only the project a local fact is bound to.
-	return p.store(ctx, "cli", req.Project, facts.Reconcile(nil, deduced), recalled)
+	kept, _ := p.store(ctx, "cli", site{project: req.Project, dir: req.Dir}, facts.Reconcile(nil, deduced), recalled, replaceCollision)
+	return kept
 }
 
 // DigestRequest selects what to describe. Scope Any means both, which is what
@@ -1082,6 +1158,7 @@ func (p *Pipeline) learn(ctx context.Context, prov llm.Provider, req MessageRequ
 type DigestRequest struct {
 	Scope   scope.Scope
 	Project string
+	Dir     string
 }
 
 // Digest describes everything a scope holds, in prose. It lists nothing: the
@@ -1145,7 +1222,7 @@ func (p *Pipeline) listFor(ctx context.Context, req DigestRequest) (local, globa
 	defer cancel()
 
 	if req.Scope != scope.Global && req.Project != "" {
-		local, err = p.Memory.List(lctx, memory.Query{Limit: DigestLimit, Scope: scope.Local, Project: req.Project})
+		local, err = p.Memory.List(lctx, memory.Query{Limit: DigestLimit, Scope: scope.Local, Project: req.Project, Dir: req.Dir})
 		if err != nil {
 			return nil, nil, fmt.Errorf("list project knowledge: %w", err)
 		}

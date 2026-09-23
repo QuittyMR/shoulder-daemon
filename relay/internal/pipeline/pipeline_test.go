@@ -1187,7 +1187,7 @@ func TestRecallKeepsBothScopesWhenNothingIsRanked(t *testing.T) {
 		scope.Global: {{ID: "g1", Content: "prefers terse answers", Scope: scope.Global}},
 	}}
 
-	got := s.pipe.recall(context.Background(), "how should you answer me", projectOf(t, dir),
+	got := s.pipe.recall(context.Background(), "how should you answer me", site{project: projectOf(t, dir), dir: dir},
 		sessionScopes, RecallLimit, 0)
 
 	if len(got) != RecallLimit {
@@ -1300,5 +1300,109 @@ func TestCountedStepsWarnsOnSlowCall(t *testing.T) {
 	_, _ = c.Chat(context.Background(), nil, nil)
 	if buf.Len() != 0 {
 		t.Fatalf("an ordinary call must stay quiet, got %q", buf.String())
+	}
+}
+
+// The project is an identity nothing can turn back into a path, so the
+// directory the session was seen in travels beside it on every read and
+// write, for a backend that keeps local facts with the checkout. A
+// preference is the person's own and is marked so wherever it is filed.
+func TestASessionsDirectoryTravelsWithItsProject(t *testing.T) {
+	dir := t.TempDir()
+	ts := advisorServer(t, 0, decisionBody(t, "",
+		map[string]any{"content": "the release branch is release/stable", "category": "structure", "scope": "local"},
+		map[string]any{"content": "prefers rebasing over merging", "category": "preference", "scope": "local"}))
+	s := newStack(t, ts.URL, 2*time.Second)
+	mem := &fakeMemory{}
+	s.pipe.Memory = mem
+
+	s.post(t, "UserPromptSubmit", promptIn("s1", "which branch do we release from", dir))
+	s.post(t, "Stop", stop("s1", "release/stable."))
+	<-s.consults
+
+	stored, _, _ := mem.snapshot()
+	if len(stored) != 2 {
+		t.Fatalf("expected two stored facts, got %d: %+v", len(stored), stored)
+	}
+	for _, r := range stored {
+		if r.Dir != dir {
+			t.Errorf("stored %q with Dir %q, want the session's directory %q", r.Content, r.Dir, dir)
+		}
+		if want := r.Category == "preference"; r.Private != want {
+			t.Errorf("stored %q (%s) with Private=%v", r.Content, r.Category, r.Private)
+		}
+	}
+	searched, _ := mem.reads()
+	for _, q := range searched {
+		if q.Scope == scope.Local && q.Dir != dir {
+			t.Errorf("a local recall asked with Dir %q, want %q", q.Dir, dir)
+		}
+	}
+}
+
+// Scope says which memory a fact joins; privacy says whether a backend that
+// files facts beside a checkout may commit it. They are separate questions and
+// the model answers both: "Postgres listens on 5433 here" is local to this
+// project and still must not reach whoever clones it.
+func TestThePrivateFlagTheModelSetReachesTheStore(t *testing.T) {
+	ts := advisorServer(t, 0, decisionBody(t, "",
+		map[string]any{"content": "postgres listens on 5433 on this machine", "category": "structure", "scope": "local", "private": true},
+		map[string]any{"content": "the release branch is release/stable", "category": "structure", "scope": "local"}))
+	s := newStack(t, ts.URL, 2*time.Second)
+	mem := &fakeMemory{}
+	s.pipe.Memory = mem
+
+	s.post(t, "UserPromptSubmit", promptIn("s1", "where is postgres", t.TempDir()))
+	s.post(t, "Stop", stop("s1", "5433."))
+	<-s.consults
+
+	stored, _, _ := mem.snapshot()
+	if len(stored) != 2 {
+		t.Fatalf("expected two stored facts, got %d: %+v", len(stored), stored)
+	}
+	for _, r := range stored {
+		want := strings.Contains(r.Content, "5433")
+		if r.Private != want {
+			t.Errorf("stored %q with Private=%v, want %v", r.Content, r.Private, want)
+		}
+	}
+}
+
+// The turn that corrects a private fact is a turn about the code, and the model
+// answering it has been shown the record's words rather than where it is filed.
+// Left to restate the flag it would drop it, and the correction would publish
+// what the fact it corrects was kept out of.
+func TestACorrectionOfAPrivateFactStaysPrivate(t *testing.T) {
+	held := memory.Record{
+		ID: "mem_91c2", Scope: scope.Global, Category: "structure", Private: true,
+		Content: "postgres listens on 5433 on this machine",
+	}
+	ts := advisorServer(t, 0, decisionBody(t, "",
+		map[string]any{
+			"content":  "postgres listens on 5434 on this machine",
+			"category": "structure", "scope": "global", "supersedes": held.ID,
+		}))
+	s := newStack(t, ts.URL, 2*time.Second)
+	mem := &fakeMemory{
+		recalled: map[scope.Scope][]memory.Record{scope.Global: {held}},
+		listed:   map[scope.Scope][]memory.Record{scope.Global: {held}},
+	}
+	// Through the boundary, as in production: it is the only party that can
+	// read the record being replaced.
+	s.pipe.Memory = memory.Checked(mem)
+
+	s.post(t, "UserPromptSubmit", prompt("s1", "postgres moved to 5434"))
+	s.post(t, "Stop", stop("s1", "noted."))
+	<-s.consults
+
+	stored, superseded, _ := mem.snapshot()
+	if len(superseded) != 1 || superseded[0] != held.ID {
+		t.Fatalf("expected the fact to be superseded, got %v", superseded)
+	}
+	if len(stored) != 1 {
+		t.Fatalf("expected one write, got %+v", stored)
+	}
+	if !stored[0].Private {
+		t.Fatalf("the correction published what it corrected: %+v", stored[0])
 	}
 }

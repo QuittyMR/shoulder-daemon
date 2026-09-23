@@ -871,3 +871,71 @@ func TestWritesCarryTheSessionMarkAndReadsStripItBackOff(t *testing.T) {
 		}
 	}
 }
+
+// The flag decides, at a backend that has more than one place to put a record,
+// whether somebody's own preference is committed with the team's code. This
+// backend has one place and stores it anyway, because the boundary carries
+// privacy forward across a correction by reading it back off a listing, and a
+// flag that is never written comes back false.
+func TestMCPStoresAndReadsThePrivateMark(t *testing.T) {
+	c, seen := serve(t, func(path string, _ map[string]any) (int, string) {
+		if path == "/api/search/by-tag" {
+			return http.StatusOK, `{"memories":[{"content":"postgres runs on 5433","content_hash":"h1",` +
+				`"tags":["shoulder-scope:global"],"memory_type":"structure","metadata":{"private":true},` +
+				`"created_at_iso":"2026-03-04T05:06:07Z"}]}`
+		}
+		return http.StatusOK, `{"success":true,"content_hash":"h1"}`
+	})
+	ctx := context.Background()
+
+	if _, err := Checked(c).Store(ctx, Record{Content: "postgres runs on 5433", Category: "structure", Private: true, Scope: scope.Global}); err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	meta, ok := (*seen)[0].body["metadata"].(map[string]any)
+	if !ok || meta["private"] != true {
+		t.Fatalf("the private mark was not written: %+v", (*seen)[0].body)
+	}
+
+	got, err := Checked(c).List(ctx, Query{Scope: scope.Global})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(got) != 1 || !got[0].Private {
+		t.Fatalf("the private mark did not come back: %+v", got)
+	}
+}
+
+// A record that is not private carries no such key, so nothing is claimed
+// about a backend's other metadata by a write that had nothing to say.
+func TestMCPWritesNoPrivateMarkForAPublicRecord(t *testing.T) {
+	c, seen := serve(t, func(string, map[string]any) (int, string) {
+		return http.StatusOK, `{"success":true,"content_hash":"h1"}`
+	})
+	if _, err := Checked(c).Store(context.Background(), Record{Content: "releases ship on Fridays", Scope: scope.Global}); err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	meta, ok := (*seen)[0].body["metadata"].(map[string]any)
+	if !ok || len(meta) != 0 {
+		t.Fatalf("a public record carried metadata: %+v", (*seen)[0].body)
+	}
+}
+
+// A correction of a private record is written by whoever noticed the fact was
+// wrong, and the boundary marks it private on their behalf. The replacement
+// has to carry the mark onto the wire, or the correction publishes what it
+// corrected.
+func TestSupersedeCarriesThePrivateMark(t *testing.T) {
+	c, seen := serve(t, func(string, map[string]any) (int, string) {
+		return http.StatusOK, `{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"New hash: abc123def4567890"}]}}`
+	})
+	if _, err := c.Supersede(context.Background(), "old", Record{
+		Content: "postgres runs on 5544", Private: true, Scope: scope.Global,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	args := (*seen)[0].body["params"].(map[string]any)["arguments"].(map[string]any)
+	meta, ok := args["updates"].(map[string]any)["metadata"].(map[string]any)
+	if !ok || meta["private"] != true {
+		t.Fatalf("the replacement of a private record went out public: %+v", args)
+	}
+}

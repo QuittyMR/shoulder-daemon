@@ -43,6 +43,14 @@ type consolidation struct {
 	} `json:"merge"`
 }
 
+// ConsolidateRequest selects the scope to tidy. Unlike a digest it writes, so
+// an unset scope is an omission rather than "everything".
+type ConsolidateRequest struct {
+	Scope   scope.Scope
+	Project string
+	Dir     string
+}
+
 // Consolidate tidies one scope: it drops facts that have stopped being rules
 // and collapses several wordings of one rule into a single record.
 //
@@ -51,7 +59,8 @@ type consolidation struct {
 // fourth phrasing of something already stored, nor that a fact written last
 // week has since decayed into a note about history. Both are only visible from
 // above the whole scope.
-func (p *Pipeline) Consolidate(ctx context.Context, sc scope.Scope, project string) (dropped, merged int, err error) {
+func (p *Pipeline) Consolidate(ctx context.Context, req ConsolidateRequest) (dropped, merged int, err error) {
+	sc, project := req.Scope, req.Project
 	prov := p.Settings.Provider()
 	if p.Memory == nil || prov == nil {
 		return 0, 0, nil
@@ -66,7 +75,7 @@ func (p *Pipeline) Consolidate(ctx context.Context, sc scope.Scope, project stri
 	lctx, cancel := context.WithTimeout(ctx, p.Cfg.DigestTimeout)
 	defer cancel()
 
-	held, err := p.Memory.List(lctx, memory.Query{Scope: sc, Project: project, Kind: memory.KindFact})
+	held, err := p.Memory.List(lctx, memory.Query{Scope: sc, Project: project, Dir: req.Dir, Kind: memory.KindFact})
 	if err != nil {
 		p.Metrics.Inc("shoulder_memory_search_error_total")
 		return 0, 0, err
@@ -100,7 +109,7 @@ func (p *Pipeline) Consolidate(ctx context.Context, sc scope.Scope, project stri
 	// otherwise be handed to Forget, which deletes, and the boundary can only
 	// confirm the scope - not that this pass ever saw the record.
 	budget := int(float64(len(held)) * consolidateCeiling)
-	where := memory.Query{Scope: sc, Project: project, Kind: memory.KindFact}
+	where := memory.Query{Scope: sc, Project: project, Dir: req.Dir, Kind: memory.KindFact}
 
 	for _, m := range plan.Merge {
 		keep, ok := byID[m.Keep]
@@ -108,9 +117,15 @@ func (p *Pipeline) Consolidate(ctx context.Context, sc scope.Scope, project stri
 			continue
 		}
 		gone := make([]string, 0, len(m.Replaces))
+		// One sentence replaces all of them, so it inherits the strictest
+		// placement any of them had: merging a private fact into a public one
+		// would otherwise publish it under a wording nobody reviewed.
+		private := keep.Private
 		for _, id := range m.Replaces {
-			if _, ours := byID[id]; ours && id != m.Keep {
+			r, ours := byID[id]
+			if ours && id != m.Keep {
 				gone = append(gone, id)
+				private = private || r.Private
 			}
 		}
 		if len(gone) == 0 || dropped+len(gone) > budget {
@@ -118,6 +133,8 @@ func (p *Pipeline) Consolidate(ctx context.Context, sc scope.Scope, project stri
 		}
 		rec := keep
 		rec.Content = strings.TrimSpace(m.Content)
+		rec.Private = private
+		rec.Dir = req.Dir
 		if _, err := p.Memory.Supersede(ctx, m.Keep, rec); err != nil {
 			p.Metrics.Inc("shoulder_memory_write_error_total")
 			continue
@@ -162,18 +179,17 @@ func (p *Pipeline) forget(ctx context.Context, id string, where memory.Query) bo
 // consolidateBoth tidies the project and the global scope together, off the
 // hook path. Errors are logged rather than returned: nothing the session is
 // waiting on depends on this.
-func (p *Pipeline) consolidateBoth(ctx context.Context, project string) {
+func (p *Pipeline) consolidateBoth(ctx context.Context, at site) {
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 	defer cancel()
-	for _, s := range []struct {
-		sc      scope.Scope
-		project string
-	}{{scope.Local, project}, {scope.Global, ""}} {
-		if s.sc == scope.Local && project == "" {
+	for _, req := range []ConsolidateRequest{
+		{Scope: scope.Local, Project: at.project, Dir: at.dir}, {Scope: scope.Global},
+	} {
+		if req.Scope == scope.Local && at.project == "" {
 			continue
 		}
-		if _, _, err := p.Consolidate(cctx, s.sc, s.project); err != nil {
-			p.Log.Warn("tidying pass failed; the store is unchanged", "scope", s.sc, "err", err)
+		if _, _, err := p.Consolidate(cctx, req); err != nil {
+			p.Log.Warn("tidying pass failed; the store is unchanged", "scope", req.Scope, "err", err)
 		}
 	}
 }

@@ -111,7 +111,7 @@ func TestCloseSessionReportsWhatIsLeft(t *testing.T) {
 	now := time.Now()
 	seen(r, "s1", KindUserPrompt, now)
 	seen(r, "s2", KindUserPrompt, now)
-	r.SetKeywordRecord("s1", "/w", "mem_1", "a, b")
+	r.SetKeywordRecord("s1", "/w", "/w", "mem_1", "a, b")
 
 	gone, left := r.CloseSession("s1")
 	if left != 1 {
@@ -135,7 +135,7 @@ func TestDrainHandsBackEverySessionsNote(t *testing.T) {
 	now := time.Now()
 	for _, id := range []string{"s1", "s2"} {
 		seen(r, id, KindUserPrompt, now)
-		r.SetKeywordRecord(id, "/w", "mem_"+id, "kw")
+		r.SetKeywordRecord(id, "/w", "/w", "mem_"+id, "kw")
 	}
 
 	gone := r.Drain()

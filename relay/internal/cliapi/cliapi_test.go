@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -818,5 +819,93 @@ func TestMemoryProbeNeedsTheToken(t *testing.T) {
 	h, _, _ := newTestServer(t, "secret", nil)
 	if rec := do(t, h, http.MethodGet, "/v1/cli/memory", ""); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status %d, want 401: the probe makes the daemon read the store", rec.Code)
+	}
+}
+
+// Every route carries the directory the command ran in through to the store,
+// beside the project. The store may need it to find the checkout; nothing
+// here decides anything on it.
+func TestTheCommandsDirectoryTravelsWithEveryRequest(t *testing.T) {
+	h, mem, _ := newTestServer(t, "", &fakeLLM{prose: "the branch is master", decision: `{"inject":"","facts":[],"keywords":[]}`})
+	const dir = "/home/somebody/src/app"
+
+	rec := do(t, h, http.MethodPost, "/v1/cli/facts",
+		`{"content":"prefers rebasing","category":"preference","scope":"local","project":"app@0123abcd","dir":"`+dir+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("fact add: %d %s", rec.Code, rec.Body.String())
+	}
+	writes := mem.writes()
+	if len(writes) != 1 || writes[0].Dir != dir {
+		t.Fatalf("the stored record carries Dir %q, want %q: %+v", writes[0].Dir, dir, writes)
+	}
+	if !writes[0].Private {
+		t.Error("a preference typed at the terminal must be marked private")
+	}
+
+	rec = do(t, h, http.MethodGet, "/v1/cli/facts?scope=local&project=app%400123abcd&dir="+url.QueryEscape(dir), "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("fact list: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = do(t, h, http.MethodPost, "/v1/cli/digest", `{"scope":"local","project":"app@0123abcd","dir":"`+dir+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("digest: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = do(t, h, http.MethodPost, "/v1/cli/consolidate", `{"scope":"local","project":"app@0123abcd","dir":"`+dir+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("consolidate: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = do(t, h, http.MethodPost, "/v1/cli/message", `{"text":"which branch","scope":"local","project":"app@0123abcd","dir":"`+dir+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("message: %d %s", rec.Code, rec.Body.String())
+	}
+
+	asked := mem.asked()
+	local := 0
+	for _, q := range asked {
+		if q.Scope != scope.Local {
+			continue
+		}
+		local++
+		if q.Dir != dir {
+			t.Errorf("a local read asked with Dir %q, want %q: %+v", q.Dir, dir, q)
+		}
+	}
+	if local < 4 {
+		t.Fatalf("expected a local read from list, digest, consolidate and message, saw %d: %+v", local, asked)
+	}
+}
+
+// A fact typed at the terminal is stored verbatim, and the person is the only
+// one who can say whether it is about the project or about their machine. A
+// category that is private anyway does not need the flag, and no request can
+// take privacy away.
+func TestATypedFactCanBeMarkedPrivate(t *testing.T) {
+	h, mem, _ := newTestServer(t, "", &fakeLLM{decision: `{"inject":"","facts":[],"keywords":[]}`})
+
+	rec := do(t, h, http.MethodPost, "/v1/cli/facts",
+		`{"content":"postgres listens on 5433 here","category":"structure","private":true,"scope":"local","project":"app@0123abcd"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("fact add: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = do(t, h, http.MethodPost, "/v1/cli/facts",
+		`{"content":"deploys go to eu-west-2","category":"decision","scope":"local","project":"app@0123abcd"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("fact add: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = do(t, h, http.MethodPost, "/v1/cli/facts",
+		`{"content":"prefers rebasing over merging","category":"preference","private":false,"scope":"global"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("fact add: %d %s", rec.Code, rec.Body.String())
+	}
+
+	writes := mem.writes()
+	if len(writes) != 3 {
+		t.Fatalf("expected three writes, got %+v", writes)
+	}
+	want := []bool{true, false, true}
+	for i, w := range writes {
+		if w.Private != want[i] {
+			t.Errorf("stored %q with Private=%v, want %v", w.Content, w.Private, want[i])
+		}
 	}
 }

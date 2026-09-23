@@ -36,7 +36,7 @@ func consolidateStack(t *testing.T, reply string, listed []memory.Record) (*stac
 // a store that has barely been written to.
 func TestASmallScopeIsNotTidied(t *testing.T) {
 	s, mem := consolidateStack(t, `{"drop":["mem_0"],"merge":[]}`, held(consolidateFloor-1))
-	dropped, merged, err := s.pipe.Consolidate(context.Background(), scope.Global, "")
+	dropped, merged, err := s.pipe.Consolidate(context.Background(), ConsolidateRequest{Scope: scope.Global})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestASmallScopeIsNotTidied(t *testing.T) {
 // record this pass was never shown.
 func TestAnIdThePassNeverSawIsNotDeleted(t *testing.T) {
 	s, mem := consolidateStack(t, `{"drop":["mem_1","mem_hallucinated"],"merge":[]}`, held(10))
-	dropped, _, err := s.pipe.Consolidate(context.Background(), scope.Global, "")
+	dropped, _, err := s.pipe.Consolidate(context.Background(), ConsolidateRequest{Scope: scope.Global})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestOnePassCannotEmptyTheScope(t *testing.T) {
 	}
 	s, mem := consolidateStack(t, `{"drop":[`+strings.Join(ids, ",")+`],"merge":[]}`, recs)
 
-	dropped, _, err := s.pipe.Consolidate(context.Background(), scope.Global, "")
+	dropped, _, err := s.pipe.Consolidate(context.Background(), ConsolidateRequest{Scope: scope.Global})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestAMergeKeepsOneRecordAndRemovesTheRest(t *testing.T) {
 		`{"drop":[],"merge":[{"keep":"mem_0","replaces":["mem_1","mem_2"],"content":"one rule"}]}`,
 		held(10))
 
-	dropped, merged, err := s.pipe.Consolidate(context.Background(), scope.Global, "")
+	dropped, merged, err := s.pipe.Consolidate(context.Background(), ConsolidateRequest{Scope: scope.Global})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,10 +115,57 @@ func TestAMergeKeepsOneRecordAndRemovesTheRest(t *testing.T) {
 // another's.
 func TestConsolidateRefusesAnUnscopedRequest(t *testing.T) {
 	s, _ := consolidateStack(t, `{"drop":[],"merge":[]}`, held(10))
-	if _, _, err := s.pipe.Consolidate(context.Background(), scope.Any, ""); err == nil {
+	if _, _, err := s.pipe.Consolidate(context.Background(), ConsolidateRequest{Scope: scope.Any}); err == nil {
 		t.Fatal("a pass with no scope must be refused")
 	}
-	if _, _, err := s.pipe.Consolidate(context.Background(), scope.Local, ""); err == nil {
+	if _, _, err := s.pipe.Consolidate(context.Background(), ConsolidateRequest{Scope: scope.Local}); err == nil {
 		t.Fatal("a local pass with no project must be refused")
+	}
+}
+
+// The tidying pass sees ids, categories and content, and is never told which
+// records a backend keeps out of the repository. One sentence replacing several
+// therefore has to inherit the strictest placement any of them had, in either
+// direction: a private fact merged into a public one, or the reverse.
+func TestAMergePublishesNeither(t *testing.T) {
+	recs := held(10)
+	recs[0].Content, recs[0].Private = "postgres listens on 5433 here", true
+	recs[1].Content = "here postgres is on the 5433 port"
+	recs[2].Content = "deploys go to eu-west-2"
+	recs[3].Content, recs[3].Private = "deploys go to the eu-west-2 region", true
+
+	s, mem := consolidateStack(t, `{"drop":[],"merge":[
+		{"keep":"mem_1","replaces":["mem_0"],"content":"Postgres listens on 5433 on this machine."},
+		{"keep":"mem_2","replaces":["mem_3"],"content":"Deploys go to eu-west-2."}]}`, recs)
+
+	_, merged, err := s.pipe.Consolidate(context.Background(), ConsolidateRequest{Scope: scope.Global})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if merged != 2 {
+		t.Fatalf("merged %d, want 2", merged)
+	}
+	stored, superseded, _ := mem.snapshot()
+	if len(superseded) != 2 || len(stored) != 2 {
+		t.Fatalf("expected two supersedes, got %v and %+v", superseded, stored)
+	}
+	for _, r := range stored {
+		if !r.Private {
+			t.Errorf("the merged sentence %q was published; one of the facts it replaces was private", r.Content)
+		}
+	}
+}
+
+// And a merge of facts none of which were private must not invent the flag: a
+// backend that files private records separately would collect the whole scope
+// there over enough passes.
+func TestAMergeOfPublicFactsStaysPublic(t *testing.T) {
+	s, mem := consolidateStack(t, `{"drop":[],"merge":[{"keep":"mem_1","replaces":["mem_0"],"content":"Deploys go to eu-west-2."}]}`, held(10))
+	if _, _, err := s.pipe.Consolidate(context.Background(), ConsolidateRequest{Scope: scope.Global}); err != nil {
+		t.Fatal(err)
+	}
+	stored, _, _ := mem.snapshot()
+	if len(stored) != 1 || stored[0].Private {
+		t.Fatalf("the merged sentence was made private: %+v", stored)
 	}
 }

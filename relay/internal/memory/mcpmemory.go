@@ -196,6 +196,18 @@ type restMemory struct {
 	CreatedISO  string         `json:"created_at_iso"`
 }
 
+// privacy is the metadata a write carries. The flag is a placement hint this
+// backend has one place for, so it is stored and ignored rather than dropped:
+// dropped, a fact the person marked as their own comes back public, and the
+// boundary's rule that a correction cannot publish what it replaces has
+// nothing left to read.
+func privacy(r Record) map[string]any {
+	if !r.Private {
+		return map[string]any{}
+	}
+	return map[string]any{"private": true}
+}
+
 func (r restMemory) supersededBy() string {
 	if r.Metadata == nil {
 		return ""
@@ -212,6 +224,7 @@ func (r restMemory) toRecord(score float64, project string) Record {
 		ID: r.ContentHash, Content: r.Content, Category: r.MemoryType,
 		Score: score, Project: project,
 	}
+	rec.Private, _ = r.Metadata["private"].(bool)
 	for _, t := range r.Tags {
 		switch {
 		case strings.HasPrefix(t, tagScopePrefix):
@@ -470,7 +483,7 @@ func (m *MCPMemory) List(ctx context.Context, q Query) ([]Record, error) {
 }
 
 func (m *MCPMemory) Store(ctx context.Context, r Record) (string, error) {
-	in := map[string]any{"content": r.Content, "tags": writeTags(r), "metadata": map[string]any{}}
+	in := map[string]any{"content": r.Content, "tags": writeTags(r), "metadata": privacy(r)}
 	if r.Category != "" {
 		in["memory_type"] = r.Category
 	}
@@ -552,6 +565,9 @@ func (m *MCPMemory) Supersede(ctx context.Context, oldID string, r Record) (stri
 	}
 	if r.Category != "" {
 		updates["memory_type"] = r.Category
+	}
+	if r.Private {
+		updates["metadata"] = privacy(r)
 	}
 
 	text, err := m.callTool(ctx, "memory_update", map[string]any{

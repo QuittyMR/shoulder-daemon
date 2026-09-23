@@ -75,6 +75,44 @@ func TestConnector(t *testing.T, newConnector func() Connector) {
 		}
 	})
 
+	t.Run("the caller's directory is a hint and never a stored field", func(t *testing.T) {
+		c := open()
+		conformanceStore(ctx, t, c, Record{
+			Content: "the release branch is release/stable",
+			Scope:   scope.Local, Project: conformanceProjectA, Dir: "/nowhere/in/particular",
+		})
+		got := conformanceList(ctx, t, c, Query{Scope: scope.Local, Project: conformanceProjectA, Dir: "/somewhere/else"})
+		rec, ok := conformanceFind(got, "the release branch is release/stable")
+		if !ok {
+			t.Fatalf("a record written with a directory was not listed back: %+v", got)
+		}
+		if rec.Dir != "" {
+			t.Errorf("Dir came back as %q; it is local layout and must not be kept", rec.Dir)
+		}
+	})
+
+	// Private is a placement hint, never a filter: it says whether a backend
+	// that files records where other people can read them has to put this one
+	// somewhere they cannot. A backend that drops it commits, with a
+	// repository, the one record that was meant to stay out of it, and the
+	// boundary's rule that a correction may not publish what it replaces reads
+	// the flag back off a listing.
+	t.Run("Private survives the round trip", func(t *testing.T) {
+		c := open()
+		const own = "conformance: prefers the tests run before the linter"
+		conformanceStore(ctx, t, c, Record{
+			Content: own, Private: true, Scope: scope.Local, Project: conformanceProjectA,
+		})
+		got := conformanceList(ctx, t, c, Query{Scope: scope.Local, Project: conformanceProjectA})
+		rec, ok := conformanceFind(got, own)
+		if !ok {
+			t.Fatalf("a private record was not listed back; the flag is a placement hint and never a filter: %+v", got)
+		}
+		if !rec.Private {
+			t.Error("the private mark did not survive the round trip; a correction of this record would publish it")
+		}
+	})
+
 	t.Run("a scoped read sees only its own scope", func(t *testing.T) {
 		c := open()
 		const (

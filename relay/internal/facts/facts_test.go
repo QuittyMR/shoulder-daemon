@@ -231,3 +231,60 @@ func TestReconcileExplicitStillWinsWhenItNamedItsOwnScope(t *testing.T) {
 		t.Fatalf("the explicit fact and its own placement must win: %+v", got[0])
 	}
 }
+
+// Two wordings of one rule become one record. The wording that judged the rule
+// private has to be the one that decides, or a fact about somebody's laptop is
+// committed because a second sentence about it happened to arrive first.
+func TestReconcileKeepsPrivacyWhenItDropsTheRestatement(t *testing.T) {
+	got := Reconcile(nil, []Fact{
+		{Content: "postgres listens on port 5433 here"},
+		{Content: "here postgres is on the 5433 port", Private: true},
+	})
+	if len(got) != 1 {
+		t.Fatalf("expected one fact, got %d: %+v", len(got), got)
+	}
+	if !got[0].Private {
+		t.Fatalf("the surviving fact lost the privacy the restatement asked for: %+v", got[0])
+	}
+}
+
+// The agent that called record_fact was told the rule in those words and said
+// what it was. A deduced paraphrase does not get to overrule that, in either
+// direction.
+func TestReconcilePrivacyOfAnExplicitFactIsItsOwn(t *testing.T) {
+	got := Reconcile(
+		[]Fact{{Content: "deploys go to eu-west-2", Private: false}},
+		[]Fact{{Content: "eu-west-2 is where deploys go", Private: true}},
+	)
+	if len(got) != 1 || got[0].Source != Explicit {
+		t.Fatalf("expected the explicit fact alone, got %+v", got)
+	}
+	if got[0].Private {
+		t.Fatalf("a deduced restatement made an explicit team convention private: %+v", got[0])
+	}
+
+	// And the other way: the explicit fact arrives after the deduced one it
+	// replaces, still carrying its own answer.
+	got = Reconcile(
+		[]Fact{{Content: "postgres listens on 5433 here", Private: true}},
+		[]Fact{{Content: "here postgres is on port 5433"}},
+	)
+	if len(got) != 1 || got[0].Source != Explicit || !got[0].Private {
+		t.Fatalf("the explicit fact's own answer must survive: %+v", got)
+	}
+}
+
+// The explicit fact that loses to a scoped one loses its privacy answer with
+// it, which would be a leak if the survivor were the public wording.
+func TestReconcileKeepsPrivacyWhenAnUnscopedExplicitFactLoses(t *testing.T) {
+	got := Reconcile(nil, []Fact{
+		{Content: "here postgres is on port 5433", Scope: scope.Local},
+		{Content: "postgres listens on 5433 here", Source: Explicit, Private: true},
+	})
+	if len(got) != 1 || got[0].Scope != scope.Local {
+		t.Fatalf("expected the placeable fact to survive: %+v", got)
+	}
+	if !got[0].Private {
+		t.Fatalf("the fact that survives was published: %+v", got[0])
+	}
+}

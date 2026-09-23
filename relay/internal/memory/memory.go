@@ -61,17 +61,33 @@ type Record struct {
 	// and the in-memory id is only a shortcut to it.
 	Session string `json:"session,omitempty"`
 
+	// Private is a placement hint for a backend that files records where other
+	// people can read them: a preference or a working habit is the person's
+	// own and must not be committed with a repository alongside its
+	// architecture. It is never a filter; a read returns private and public
+	// records alike, and a backend with one place for everything stores the
+	// flag and ignores it.
+	Private bool `json:"private,omitempty"`
+
 	// Scope and Project say where this belongs. Scope is mandatory. Project is
 	// mandatory when Scope is local and must be empty when it is global.
 	//
-	// Project is the project path on write. On read it is that path when the
-	// query named one, and otherwise the opaque scope.Key of it: a backend is
-	// given the key rather than the directory so a memory service shared
-	// between machines does not learn local layout, and the path cannot be
-	// recovered from it afterwards. Callers that need to compare projects use
-	// ProjectKey, which is the same value either way.
+	// Project is the identity scope.Project produces on write: name@commit for
+	// a repository, the absolute path for a directory that is not one. On read
+	// it is that identity when the query named one, and otherwise the opaque
+	// scope.Key of it: a backend is given the key rather than the identity so a
+	// memory service shared between machines does not learn local layout, and
+	// nothing can be recovered from it afterwards. Callers that need to
+	// compare projects use ProjectKey, which is the same value either way.
 	Scope   scope.Scope `json:"scope"`
 	Project string      `json:"project,omitempty"`
+
+	// Dir is the directory the caller was working in, for a backend that
+	// keeps local records with the checkout and has to find it: the identity
+	// above is one-way and names no path. It is informational only, never
+	// stored and never compared; a backend that files by identity ignores it,
+	// and a record read back never carries one.
+	Dir string `json:"dir,omitempty"`
 
 	CreatedAt time.Time `json:"created_at,omitempty"`
 
@@ -90,10 +106,10 @@ var projectKeyLen = len(scope.Key("/"))
 // ProjectKey is the stable identifier of this record's project, whichever of
 // the two forms Project came back in.
 //
-// The alternative was a second field carrying the key beside the path, which
-// buys two fields that can contradict each other. One field plus a derivation
-// is safe here because the two forms cannot be confused: a project is an
-// absolute path, a key is a fixed run of hex digits.
+// The alternative was a second field carrying the key beside the identity,
+// which buys two fields that can contradict each other. One field plus a
+// derivation is safe here because the two forms cannot be confused: an
+// identity holds an @ or a path separator, a key is a fixed run of hex digits.
 func (r Record) ProjectKey() string {
 	if isProjectKey(r.Project) {
 		return r.Project
@@ -124,6 +140,11 @@ type Query struct {
 	Limit   int
 	Scope   scope.Scope
 	Project string
+
+	// Dir is the caller's working directory, with the meaning it has on a
+	// Record: a hint for a backend that has to locate the checkout, never a
+	// filter.
+	Dir string `json:"dir,omitempty"`
 
 	// Kind is matched exactly, and its zero value asks for facts. Session
 	// records are opt-in rather than opt-out: recall, digests and the fact list
@@ -221,6 +242,13 @@ var ErrUnscopedList = errors.New("list has no scope: a digest reads one scope, n
 // kept.
 var ErrNoBackend = errors.New("no memory backend configured")
 
+// ErrEmbedderNotReady is returned by an embedder whose model is still being
+// fetched or loaded. The store treats it as it treats any failed embedding —
+// the record is written and scored on words in common — so a daemon never
+// waits on a model to start, and a model that never arrives costs recall
+// quality rather than facts.
+var ErrEmbedderNotReady = errors.New("embedding model is not ready")
+
 // Validate rejects a record that could not be recalled correctly later.
 func Validate(r Record) error {
 	if r.Content == "" {
@@ -234,6 +262,13 @@ func Validate(r Record) error {
 	}
 	if r.Scope == scope.Global && r.Project != "" {
 		return fmt.Errorf("global record must not name a project, got %q", r.Project)
+	}
+	// A working note is keywords of the last few turns, written for the next
+	// minute and dropped when the session ends. Nothing about the person is in
+	// it, and a backend that files private records somewhere separate would be
+	// asked to keep session churn there forever.
+	if r.Kind == KindSession && r.Private {
+		return errors.New("a session working note cannot be private")
 	}
 	return nil
 }
@@ -358,11 +393,20 @@ func (c checked) Supersede(ctx context.Context, oldID string, r Record) (string,
 	if oldID == "" {
 		return c.inner.Supersede(ctx, oldID, r)
 	}
-	held, err := c.holds(ctx, oldID, r)
+	target, err := c.holds(ctx, oldID, r)
 	if err != nil {
 		return "", err
 	}
-	if held {
+	if target != nil {
+		// Privacy is carried forward rather than restated. A correction is
+		// written by whoever noticed the fact was wrong - usually a model that
+		// was never shown the flag - and a replacement that arrives without it
+		// would publish, into a repository, the one record that had been kept
+		// out of it. It only ever adds: a caller that already marked its
+		// replacement private is left alone.
+		if target.Private {
+			r.Private = true
+		}
 		return c.inner.Supersede(ctx, oldID, r)
 	}
 	// The refusal stands either way — a record this scope cannot see must not
@@ -388,7 +432,7 @@ func (c checked) Forget(ctx context.Context, id string, where Query) error {
 	if err != nil {
 		return err
 	}
-	if !held {
+	if held == nil {
 		// Already gone, or never here. Both mean the caller has nothing to
 		// delete, and Forget is documented as idempotent.
 		return nil
@@ -396,28 +440,30 @@ func (c checked) Forget(ctx context.Context, id string, where Query) error {
 	return c.inner.Forget(ctx, id, where)
 }
 
-// holds reports whether oldID sits in the same place as the replacement. The
-// listing is unbounded on purpose: a record past a cap would read as absent,
-// and refusing a correction to a fact that exists is the worse failure.
-func (c checked) holds(ctx context.Context, oldID string, r Record) (bool, error) {
+// holds returns the record oldID names if it sits in the same place as the
+// replacement, and nil if it does not. The listing is unbounded on purpose: a
+// record past a cap would read as absent, and refusing a correction to a fact
+// that exists is the worse failure.
+func (c checked) holds(ctx context.Context, oldID string, r Record) (*Record, error) {
 	// Kind is carried into the lookup because a session record supersedes
 	// itself every turn: asked for as a fact, the record being replaced reads
-	// as absent and the correction is refused as a cross-scope one.
-	return c.heldBy(ctx, oldID, Query{Scope: r.Scope, Project: r.Project, Kind: r.Kind})
+	// as absent and the correction is refused as a cross-scope one. Dir is
+	// carried for the backend that cannot list a project without it.
+	return c.heldBy(ctx, oldID, Query{Scope: r.Scope, Project: r.Project, Dir: r.Dir, Kind: r.Kind})
 }
 
-func (c checked) heldBy(ctx context.Context, oldID string, q Query) (bool, error) {
+func (c checked) heldBy(ctx context.Context, oldID string, q Query) (*Record, error) {
 	q.Limit = 0
 	found, err := c.List(ctx, q)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	for _, rec := range found {
 		if rec.ID == oldID {
-			return true, nil
+			return &rec, nil
 		}
 	}
-	return false, nil
+	return nil, nil
 }
 
 // elsewhere reports whether oldID was seen as a current record in some scope

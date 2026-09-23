@@ -70,6 +70,7 @@ func (s *Server) Mount(mux *http.ServeMux) {
 type ConsolidateRequest struct {
 	Scope   string `json:"scope"`
 	Project string `json:"project"`
+	Dir     string `json:"dir,omitempty"`
 }
 
 type ConsolidateResponse struct {
@@ -81,6 +82,7 @@ type MessageRequest struct {
 	Text    string `json:"text"`
 	Scope   string `json:"scope"`
 	Project string `json:"project"`
+	Dir     string `json:"dir,omitempty"`
 	Update  string `json:"update"`
 }
 
@@ -116,7 +118,7 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	reply, err := s.Pipe.Message(r.Context(), pipeline.MessageRequest{
-		Text: req.Text, Scope: sc, Project: req.Project, Update: mode,
+		Text: req.Text, Scope: sc, Project: req.Project, Dir: req.Dir, Update: mode,
 	})
 	if err != nil {
 		s.failed(w, err)
@@ -132,6 +134,17 @@ type FactRequest struct {
 	Tags     []string `json:"tags,omitempty"`
 	Scope    string   `json:"scope"`
 	Project  string   `json:"project,omitempty"`
+
+	// Private keeps this fact out of whatever a backend commits with the
+	// repository. It only ever sets the flag: a category that is private
+	// anyway stays private without it, and there is no way to type a fact
+	// public that the daemon judged otherwise.
+	Private bool `json:"private,omitempty"`
+
+	// Dir is the directory the command ran in. The project above is an
+	// identity, and a backend that keeps facts with the checkout needs the
+	// path as well.
+	Dir string `json:"dir,omitempty"`
 }
 
 type FactResponse struct {
@@ -191,9 +204,12 @@ func (s *Server) writeFact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rec := memory.Record{Content: req.Content, Category: category, Tags: req.Tags, Scope: sc}
+	rec := memory.Record{
+		Content: req.Content, Category: category, Tags: req.Tags, Scope: sc,
+		Private: req.Private || facts.Private(category),
+	}
 	if sc == scope.Local {
-		rec.Project = req.Project
+		rec.Project, rec.Dir = req.Project, req.Dir
 	}
 	var id string
 	if r.Method == http.MethodPatch {
@@ -237,7 +253,7 @@ func (s *Server) listFacts(w http.ResponseWriter, r *http.Request) {
 	}
 	query := memory.Query{Limit: limit, Scope: sc}
 	if sc == scope.Local {
-		query.Project = project
+		query.Project, query.Dir = project, q.Get("dir")
 	}
 	found, err := s.Pipe.Memory.List(r.Context(), query)
 	if err != nil {
@@ -253,6 +269,7 @@ func (s *Server) listFacts(w http.ResponseWriter, r *http.Request) {
 type DigestRequest struct {
 	Scope   string `json:"scope"`
 	Project string `json:"project"`
+	Dir     string `json:"dir,omitempty"`
 }
 
 type DigestResponse struct {
@@ -286,7 +303,7 @@ func (s *Server) handleDigest(w http.ResponseWriter, r *http.Request) {
 	if !s.requireModel(w) {
 		return
 	}
-	digest, err := s.Pipe.Digest(r.Context(), pipeline.DigestRequest{Scope: sc, Project: req.Project})
+	digest, err := s.Pipe.Digest(r.Context(), pipeline.DigestRequest{Scope: sc, Project: req.Project, Dir: req.Dir})
 	if err != nil {
 		s.failed(w, err)
 		return
@@ -477,7 +494,7 @@ func (s *Server) handleConsolidate(w http.ResponseWriter, r *http.Request) {
 	if !s.requireModel(w) {
 		return
 	}
-	dropped, merged, err := s.Pipe.Consolidate(r.Context(), sc, req.Project)
+	dropped, merged, err := s.Pipe.Consolidate(r.Context(), pipeline.ConsolidateRequest{Scope: sc, Project: req.Project, Dir: req.Dir})
 	if err != nil {
 		s.fail(w, http.StatusBadGateway, err)
 		return

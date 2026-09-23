@@ -6,6 +6,23 @@ Notable changes to shoulder-daemon. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Every CLI request and every session write carries the directory it came from
+  beside the project identity, so a store that keeps facts with the checkout can
+  find the checkout. It is informational: nothing stores or compares it.
+
+- Privacy is an axis of its own, beside the scope. A fact can be local to a project
+  and still be about this machine, an account, a path or a habit of yours - "Postgres
+  listens on 5433 here" - and a backend that files facts beside a checkout keeps those
+  out of what the team commits. The decision model is asked the question directly and
+  `shoulderd fact add|update --private` answers it by hand; team conventions are not
+  private. Privacy only ever travels forward: a correction of a private fact stays
+  private even when the model that wrote it said nothing, a merge of several facts
+  inherits the strictest of them, and a session working note is never private. Under
+  `SHOULDER_MEMORY=docs`, marking a stored fact private moves its line out of the
+  committed file and into the `USER.shoulder.md` git does not carry.
+
 ## [0.3.0] - 2026-09-05
 
 ### Added

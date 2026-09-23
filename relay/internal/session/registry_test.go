@@ -58,7 +58,7 @@ func TestTheSessionListingPublishesIdentityAndNotContent(t *testing.T) {
 	r := NewRegistry(10)
 	r.Observe(Event{SessionID: "s1", Kind: KindTurnEnd, TS: time.Now(), CWD: "/srv/app", Harness: "claude-code"})
 	r.AddKeywords("s1", []string{"parser", "loader"})
-	r.SetKeywordRecord("s1", "/repo", "mem_1", "parser, loader")
+	r.SetKeywordRecord("s1", "/repo", "/repo", "mem_1", "parser, loader")
 
 	listed := r.Sessions()
 	if len(listed) != 1 {
@@ -78,5 +78,34 @@ func TestTheSessionListingPublishesIdentityAndNotContent(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("the listing must still say who the session is; %s missing from %s", want, out)
 		}
+	}
+}
+
+// The project a note was filed under and the directory it was resolved from are
+// one pair. CWD follows every event, so a session that moves between checkouts
+// would otherwise be evicted with the project of the one its note is in and the
+// path of the one it left, and a backend that keeps local facts with the code
+// takes that pair as the truth about where the project is.
+func TestAnEvictionPairsTheProjectWithTheDirectoryItWasResolvedFrom(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name string
+		out  func(*Registry) Evicted
+	}{
+		{"close", func(r *Registry) Evicted { gone, _ := r.CloseSession("s1"); return gone }},
+		{"drain", func(r *Registry) Evicted { return r.Drain()[0] }},
+		{"evict", func(r *Registry) Evicted { return r.Evict(time.Minute, now.Add(time.Hour))[0] }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := NewRegistry(10)
+			r.Observe(Event{SessionID: "s1", Kind: KindUserPrompt, TS: now, CWD: "/repo/a"})
+			r.SetKeywordRecord("s1", "a@deadbeef", "/repo/a", "mem_1", "kw")
+			r.Observe(Event{SessionID: "s1", Kind: KindUserPrompt, TS: now, CWD: "/repo/b"})
+
+			gone := tc.out(r)
+			if gone.Project != "a@deadbeef" || gone.Dir != "/repo/a" {
+				t.Fatalf("the session left project %q with directory %q; the two name different checkouts", gone.Project, gone.Dir)
+			}
+		})
 	}
 }
