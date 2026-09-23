@@ -163,11 +163,14 @@ func cli(t *testing.T, d *daemon, dir string, args ...string) string {
 		at++
 	}
 	full := append(append(append([]string{}, args[:at]...), "--addr=http://"+d.addr), args[at:]...)
-	cmd := exec.Command(shoulderd, full...)
+	cmd := exec.Command(shoulderd, full...) //nolint:gosec // G204: the shoulderd this suite built, with the test's own arguments
 	cmd.Dir = dir
 	cmd.Env = []string{
 		"PATH=" + os.Getenv("PATH"),
-		"HOME=" + os.Getenv("HOME"),
+		"HOME=" + d.home,
+		"XDG_DATA_HOME=" + filepath.Join(d.home, "data"),
+		"XDG_CACHE_HOME=" + filepath.Join(d.home, "cache"),
+		"XDG_CONFIG_HOME=" + filepath.Join(d.home, "config"),
 		"SHOULDER_TOKEN=" + d.token,
 		"SHOULDER_ENV_FILE=/dev/null",
 	}
@@ -191,7 +194,7 @@ func TestAFactLearnedInOneTurnIsRecalledForALaterOneInOtherWords(t *testing.T) {
 		// The fact is offered once. A second offer of the same sentence is
 		// refused by the store as something it already holds, which is correct
 		// and would leave the log full of expected failures.
-		if strings.Contains(prompt, "staging") {
+		if strings.Contains(prompt, learned) {
 			return answer("")
 		}
 		return answer("", fact(learned, "global"))
@@ -223,7 +226,7 @@ func TestFactsSurviveTheDaemonExitingBetweenSessions(t *testing.T) {
 	const learned = "the release rota is kept in docs/rota.md"
 
 	a := newAdvisor(t, func(prompt string) string {
-		if strings.Contains(prompt, "rota") {
+		if strings.Contains(prompt, learned) {
 			return answer("")
 		}
 		return answer("", fact(learned, "global"))
@@ -420,7 +423,7 @@ func TestTheGeneratedTokenReachesTheHarnessAndThenIsEnforced(t *testing.T) {
 		Model string            `json:"model"`
 		Env   map[string]string `json:"env"`
 	}
-	if err := json.Unmarshal(raw, &got); err != nil {
+	if err = json.Unmarshal(raw, &got); err != nil {
 		t.Fatalf("the harness configuration is no longer JSON: %v\n%s", err, raw)
 	}
 	token := got.Env["SHOULDER_TOKEN"]
@@ -436,18 +439,18 @@ func TestTheGeneratedTokenReachesTheHarnessAndThenIsEnforced(t *testing.T) {
 	}
 
 	post := func(token, id string) int {
-		req, err := http.NewRequest(http.MethodPost, "http://"+addr+"/v1/events",
+		req, cerr := http.NewRequest(http.MethodPost, "http://"+addr+"/v1/events",
 			strings.NewReader(`{"session_id":"`+id+`","event":"user_prompt","prompt":"hello"}`))
-		if err != nil {
-			t.Fatal(err)
+		if cerr != nil {
+			t.Fatal(cerr)
 		}
 		req.Header.Set("Content-Type", "application/json")
 		if token != "" {
 			req.Header.Set("X-Shoulder-Token", token)
 		}
-		res, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
+		res, cerr := http.DefaultClient.Do(req)
+		if cerr != nil {
+			t.Fatal(cerr)
 		}
 		defer res.Body.Close()
 		return res.StatusCode

@@ -71,28 +71,35 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	os.Exit(testMainRun(m))
+}
+
+// testMainRun does the setup TestMain needs and returns the process exit code
+// rather than calling os.Exit itself, so the temporary directory it builds
+// shoulderd into is always cleaned up on the way out.
+func testMainRun(m *testing.M) int {
 	dir, err := os.MkdirTemp("", "shoulder-it")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return 1
 	}
 	defer os.RemoveAll(dir)
 
 	editorConfig = filepath.Join(dir, "config")
 	if err := os.MkdirAll(editorConfig, 0o755); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return 1
 	}
 
 	shoulderd = filepath.Join(dir, "shoulderd")
-	build := exec.Command("go", "build", "-o", shoulderd, "./cmd/shoulderd")
+	build := exec.Command("go", "build", "-o", shoulderd, "./cmd/shoulderd") //nolint:gosec // G204: literal arguments naming this test's own temp directory
 	build.Dir = ".."
 	build.Stderr = os.Stderr
 	if err := build.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "building shoulderd:", err)
-		os.Exit(1)
+		return 1
 	}
-	os.Exit(m.Run())
+	return m.Run()
 }
 
 // opencodeOrSkip keeps the suite runnable on a machine that does not have the
@@ -121,6 +128,7 @@ type daemon struct {
 	addr  string
 	token string
 	facts string
+	home  string
 	cmd   *exec.Cmd
 	log   *strings.Builder
 	// stopped is closed, not sent on: both the cleanup and a test waiting for
@@ -147,13 +155,15 @@ func startDaemon(t *testing.T, extra ...string) *daemon {
 	// daemon keeps itself defaults to one under HOME, which is the same leak by
 	// another route. Both are pointed at a directory of this test's own.
 	//
-	// Naming an empty env file is part of that and not a belt-and-braces extra.
-	// HOME has to be passed through, and the daemon reads its own env file from
-	// under it for every setting the process does not carry - so without this
-	// line the developer's SHOULDER_MEMORY_URL arrives by that route instead,
-	// outranks the SHOULDER_MEMORY_PATH set below, and the test daemon comes up
-	// on their real store with their real key. It did, for as long as this
-	// comment has claimed otherwise.
+	// HOME and the XDG directories are this test's too. Everything the daemon
+	// resolves without being told - its log file, its token, its env file, the
+	// model and vector caches, the harness settings it syncs a token into -
+	// hangs off them, and with the real HOME every run would append to the
+	// developer's own shoulderd.log. The daemon needs nothing from the real
+	// HOME: the default embedding is compiled in and the token is set here.
+	//
+	// An empty env file is named as well, so an env file some caller passes in
+	// extra is the only one the daemon can read.
 	//
 	// Not t.TempDir(): the daemon writes its store while it shuts down, and the
 	// framework removes that directory the moment the test ends, so the two
@@ -165,9 +175,13 @@ func startDaemon(t *testing.T, extra ...string) *daemon {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(factsDir) })
 	d.facts = filepath.Join(factsDir, "facts.json")
+	d.home = filepath.Join(factsDir, "home")
 	d.cmd.Env = append([]string{
 		"PATH=" + os.Getenv("PATH"),
-		"HOME=" + os.Getenv("HOME"),
+		"HOME=" + d.home,
+		"XDG_DATA_HOME=" + filepath.Join(d.home, "data"),
+		"XDG_CACHE_HOME=" + filepath.Join(d.home, "cache"),
+		"XDG_CONFIG_HOME=" + filepath.Join(d.home, "config"),
 		"SHOULDER_ADDR=" + d.addr,
 		"SHOULDER_TOKEN=" + d.token,
 		"SHOULDER_MEMORY_PATH=" + d.facts,
@@ -376,7 +390,7 @@ func (d *daemon) exited(within time.Duration) bool {
 func project(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	if out, err := exec.Command("git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {
+	if out, err := exec.Command("git", "-C", dir, "init", "-q").CombinedOutput(); err != nil { //nolint:gosec // G204: git with literal arguments in the test's own worktree
 		t.Fatalf("git init: %v\n%s", err, out)
 	}
 	plugins := filepath.Join(dir, ".opencode", "plugins")
@@ -387,7 +401,7 @@ func project(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(plugins, "shoulder-daemon.js"), adapter, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(plugins, "shoulder-daemon.js"), adapter, 0o644); err != nil { //nolint:gosec // G703: a path this test built from t.TempDir
 		t.Fatal(err)
 	}
 	return dir
@@ -443,7 +457,7 @@ func runOnce(t *testing.T, dir, prompt string, flags []string, env ...string) er
 	defer cancel()
 
 	args := append([]string{"run", "--dir", dir, "-m", model}, flags...)
-	cmd := exec.CommandContext(ctx, bin, append(args, prompt)...)
+	cmd := exec.CommandContext(ctx, bin, append(args, prompt)...) //nolint:gosec // G204: the editor binary found on PATH, with the test's own arguments
 	cmd.Dir = dir
 	// The editor keeps the caller's environment, because it needs the real HOME
 	// for its own credentials, but not one variable of ours. Whoever is running
@@ -473,13 +487,20 @@ func runOnce(t *testing.T, dir, prompt string, flags []string, env ...string) er
 }
 
 // clean takes every SHOULDER_ variable out of an environment and puts one
-// inert setting back.
+// inert setting back. The bash options go too: an exported SHELLOPTS carrying
+// onecmd makes the boot script run its first line and exit 0 having done
+// nothing, which reads as a daemon that was never started.
 func clean(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
-		if !strings.HasPrefix(kv, "SHOULDER_") {
-			out = append(out, kv)
+		switch {
+		case strings.HasPrefix(kv, "SHOULDER_"),
+			strings.HasPrefix(kv, "SHELLOPTS="),
+			strings.HasPrefix(kv, "BASHOPTS="),
+			strings.HasPrefix(kv, "BASH_ENV="):
+			continue
 		}
+		out = append(out, kv)
 	}
 	// Dropping SHOULDER_ENV_FILE is not the same as isolating it. The opencode
 	// adapter reads one setting at a time and falls back to the daemon's own env

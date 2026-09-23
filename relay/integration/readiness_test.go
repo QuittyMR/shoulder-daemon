@@ -99,7 +99,7 @@ func boot(t *testing.T, addr, runtime, started string) string {
 		t.Fatal("no SHOULDER_START_CMD: an unready relay would start a real daemon")
 	}
 	script := filepath.Join("..", "..", "adapters", "claude-code", "scripts", "ensure-daemon.sh")
-	cmd := exec.Command(script)
+	cmd := exec.Command(script) //nolint:gosec // G204: script is a literal path in this repository
 	// clean strips every SHOULDER_ variable the developer's shell carries, so
 	// the three set here are the only three the script can see; an inherited
 	// SHOULDER_ADDR pointing at the real relay cannot survive into the child.

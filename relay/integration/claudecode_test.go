@@ -44,7 +44,7 @@ func hookSettings(t *testing.T, addr, token string) string {
 	var plugin struct {
 		Hooks map[string]any `json:"hooks"`
 	}
-	if err := json.Unmarshal(body, &plugin); err != nil {
+	if err = json.Unmarshal(body, &plugin); err != nil {
 		t.Fatal(err)
 	}
 	// The boot script is a plugin path the editor cannot resolve here, and this
@@ -89,7 +89,15 @@ func runClaude(t *testing.T, settings, dir, prompt string) {
 	t.Helper()
 	bin := claudeOrSkip(t)
 
-	cmd := exec.Command(bin, "-p", prompt, "--permission-mode", "plan", "--settings", settings)
+	// Only the settings named here: the user's own settings enable their
+	// plugins and hooks, and those would run in this test's project - a
+	// background job can write into it after the editor exits, racing the
+	// directory's removal, and an installed shoulder-daemon plugin sends every
+	// test session's hooks to the developer's real relay. MCP servers, the
+	// session transcript and auto-memory would otherwise land in the real
+	// ~/.claude as well. The real HOME itself stays: it holds the login.
+	cmd := exec.Command(bin, "-p", prompt, "--permission-mode", "plan", "--settings", settings, //nolint:gosec // G204: the editor binary found on PATH, with the test's own arguments
+		"--setting-sources=", "--strict-mcp-config", "--no-session-persistence")
 	cmd.Dir = dir
 	// CLAUDECODE and the session variables belong to the editor running this
 	// suite; inherited, they make the child believe it is a nested session.
@@ -100,7 +108,8 @@ func runClaude(t *testing.T, settings, dir, prompt string) {
 			kept = append(kept, kv)
 		}
 	}
-	cmd.Env = append(kept, "SHOULDER_ENV_FILE=/dev/null")
+	kept = append(kept, "SHOULDER_ENV_FILE=/dev/null", "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1")
+	cmd.Env = kept
 	cmd.WaitDelay = 10 * time.Second
 	cmd.Stdin = strings.NewReader("")
 
@@ -188,7 +197,7 @@ func TestClaudeCodeRevivesADeadDaemon(t *testing.T) {
 	<-d.stopped
 
 	started := filepath.Join(t.TempDir(), "started")
-	cmd := exec.Command(script)
+	cmd := exec.Command(script) //nolint:gosec // G204: script is a literal path in this repository
 	cmd.Env = append(clean(os.Environ()),
 		"SHOULDER_ADDR="+d.addr,
 		"SHOULDER_START_CMD=touch "+started,
@@ -210,11 +219,11 @@ func TestClaudeCodeRevivesADeadDaemon(t *testing.T) {
 // every prompt pays for a container that is already running.
 func TestTheBootScriptIsQuietWhenTheDaemonIsUp(t *testing.T) {
 	claudeOrSkip(t)
-	// Without this the daemon reads the developer's own env file - HOME is
-	// inherited, and that is where SHOULDER_MEMORY_URL lives - so the daemon
-	// under test comes up pointed at the machine's real memory store. Readiness
-	// then reports on somebody's actual store rather than on this test's, and
-	// passes or fails according to whether their store happens to be up.
+	// Without this the daemon reads an env file, and the developer's own is
+	// where SHOULDER_MEMORY_URL lives - so the daemon under test would come up
+	// pointed at the machine's real memory store. Readiness then reports on
+	// somebody's actual store rather than on this test's, and passes or fails
+	// according to whether their store happens to be up.
 	d := startDaemon(t, "SHOULDER_ENV_FILE=/dev/null")
 	script := filepath.Join("..", "..", "adapters", "claude-code", "scripts", "ensure-daemon.sh")
 
@@ -234,7 +243,7 @@ func TestTheBootScriptIsQuietWhenTheDaemonIsUp(t *testing.T) {
 	}
 
 	started := filepath.Join(t.TempDir(), "started")
-	cmd := exec.Command(script)
+	cmd := exec.Command(script) //nolint:gosec // G204: script is a literal path in this repository
 	cmd.Env = append(clean(os.Environ()),
 		"SHOULDER_ADDR="+d.addr,
 		"SHOULDER_START_CMD=touch "+started,
