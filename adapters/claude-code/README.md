@@ -57,6 +57,23 @@ Nothing here stops the relay. It exits on its own once no session has used it fo
 editors open at once, and the next `SessionStart` starts it again. The session itself still opens
 lazily on the relay side, on the first event that arrives.
 
+## The setup skill
+
+`skills/setup-shoulder-daemon/` is a skill rather than a slash command because
+setting the daemon up is a conversation, not an invocation: what to ask depends
+on what `shoulderd doctor` and the env file already say. It interviews the user
+over the decision model, the store and the ranking model, writes
+`${XDG_CONFIG_HOME:-~/.config}/shoulder-daemon/env` through
+`scripts/env-set.sh`, restarts the daemon with `scripts/ensure-daemon.sh`, and
+reports what `doctor` says rather than what it wrote.
+
+`env-set.sh` exists so that no key ever reaches a terminal. It takes a variable
+by name and copies the value out of the environment, replaces a setting in place
+while carrying every other line - comments, the generated `SHOULDER_TOKEN`,
+anything written by hand - across untouched, and writes atomically at mode 600.
+Everything a command prints inside a coding session is kept in that session's
+transcript, and shoulder-daemon reads transcripts.
+
 ## Event → purpose
 
 | Hook event | Matcher | What it submits | May inject `additionalContext`? |

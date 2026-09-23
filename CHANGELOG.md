@@ -6,6 +6,19 @@ Notable changes to shoulder-daemon. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- A `setup-shoulder-daemon` skill ships with the Claude Code plugin. It reads
+  `shoulderd doctor` and the env file first so it asks only what is still open,
+  then interviews the user over the decision model, the store and how recall
+  ranks, and configures all of it from inside the session: it starts the
+  mcp-memory-service container and waits for it to answer before writing
+  `SHOULDER_MEMORY_URL`, restarts the daemon through the plugin's own script,
+  and finishes on a `doctor` run rather than on its own say-so. An API key is
+  copied from the environment by name and never printed, and when there is none
+  the skill stops and hands the user the line to run rather than writing a
+  placeholder that reports as configured and fails on the first turn.
+
 ## [0.4.0] - 2026-09-06
 
 ### Added

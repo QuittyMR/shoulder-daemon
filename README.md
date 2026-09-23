@@ -58,6 +58,13 @@ that it starts the daemon whenever a session needs one and sessions share it.
 same from GitLab. A `shoulderd` already on your `PATH` is used in preference to
 the fetched one, so `go install` or a package manager is never second-guessed.
 
+The plugin brings a `setup-shoulder-daemon` skill with it. Ask Claude Code to
+set shoulder-daemon up and it reads what is already configured, asks only what
+is still open - which model decides, where facts are kept, how recall ranks -
+and does the rest itself, including starting a memory service and proving the
+result with `shoulderd doctor`. It never asks for an API key in the chat: it
+copies one it can find by name, and otherwise hands you the line to run.
+
 **OpenCode** - the plugin is one file, and the daemon has to be on your `PATH`
 from any of the sources below. Copy into `~/.config/opencode/plugins/`, or into
 `.opencode/plugins/` for a single project; OpenCode loads both.

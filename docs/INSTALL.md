@@ -13,6 +13,12 @@ one settings key. Nothing here needs Node, Python, Go, or any other runtime; the
 Sections 1 to 4 cover the adapter. Sections 5 to 7 cover the relay it talks to, the command
 line you use to talk to it yourself, and the settings that command can change on a running daemon.
 
+On Claude Code you can have the plugin do all of it: the `setup-shoulder-daemon` skill it installs
+asks what this document would have you decide - which model decides, where facts are kept, how
+recall ranks - and then writes the env file, starts whatever the answers need, restarts the daemon
+and checks the result with `shoulderd doctor`. Read on for what it is choosing between, or for any
+other harness.
+
 ## 1. The token, which you do not have to set
 
 The daemon generates a token on first start, keeps it in
