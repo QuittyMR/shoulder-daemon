@@ -16,10 +16,7 @@ import (
 func writeBoth(t *testing.T, first, second string) error {
 	t.Helper()
 	ctx := context.Background()
-	l, openErr := NewLocal(filepath.Join(t.TempDir(), "facts.json"), vectors.Embedder{})
-	if openErr != nil {
-		t.Fatalf("open: %v", openErr)
-	}
+	l := openLocal(t, filepath.Join(t.TempDir(), "facts.json"), vectors.Embedder{})
 	if _, storeErr := l.Store(ctx, Record{Content: first, Scope: scope.Global}); storeErr != nil {
 		t.Fatalf("store %q: %v", first, storeErr)
 	}
@@ -97,10 +94,7 @@ func TestTheGuardIsAPropertyOfTheEmbedder(t *testing.T) {
 
 	write := func(t *testing.T, emb Embedder) error {
 		t.Helper()
-		l, openErr := NewLocal(filepath.Join(t.TempDir(), "facts.json"), emb)
-		if openErr != nil {
-			t.Fatalf("open: %v", openErr)
-		}
+		l := openLocal(t, filepath.Join(t.TempDir(), "facts.json"), emb)
 		if _, storeErr := l.Store(ctx, Record{Content: first, Scope: scope.Global}); storeErr != nil {
 			t.Fatalf("store: %v", storeErr)
 		}

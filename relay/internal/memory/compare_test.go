@@ -217,6 +217,7 @@ func TestCompare(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = local.Close() })
 	stores := []struct {
 		name string
 		c    memory.Connector
@@ -418,6 +419,7 @@ func TestCompareIdentifierFamily(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = local.Close() })
 	stores := []struct {
 		name string
 		c    memory.Connector
@@ -608,6 +610,7 @@ func loadedStore(ctx context.Context, t *testing.T, emb memory.Embedder, project
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = l.Close() })
 	c := memory.Checked(l)
 	stored := make(map[string]bool, len(contents))
 	for _, content := range contents {

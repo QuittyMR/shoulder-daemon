@@ -176,6 +176,9 @@ func NewDocs(opts DocsOptions) (*Docs, error) {
 
 func (d *Docs) Name() string { return "docs" }
 
+// Close ends the session store's background work. The docs files have none.
+func (d *Docs) Close() error { return d.session.Close() }
+
 // SessionPath is where working notes go, for the startup line.
 func (d *Docs) SessionPath() string { return d.session.Path() }
 

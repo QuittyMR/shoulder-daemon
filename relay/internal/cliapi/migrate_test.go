@@ -36,6 +36,7 @@ func docsIn(t *testing.T, base string) *memory.Docs {
 	if err != nil {
 		t.Fatalf("open docs store: %v", err)
 	}
+	t.Cleanup(func() { _ = d.Close() })
 	return d
 }
 
@@ -47,6 +48,7 @@ func oldStore(t *testing.T, path string, recs ...memory.Record) {
 	if err != nil {
 		t.Fatalf("open %s: %v", path, err)
 	}
+	t.Cleanup(func() { _ = l.Close() })
 	for _, r := range recs {
 		if _, err := l.Store(context.Background(), r); err != nil {
 			t.Fatalf("store %q: %v", r.Content, err)

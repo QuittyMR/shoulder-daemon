@@ -543,6 +543,7 @@ func backends(t *testing.T) []backend {
 			if err != nil {
 				return nil, nil, err
 			}
+			t.Cleanup(func() { _ = l.Close() })
 			l.SetLog(quiet)
 			// The re-embed pass the store runs for itself on a settled model
 			// finds nothing, because the model was ready before the store was
@@ -571,6 +572,7 @@ func backends(t *testing.T) []backend {
 			if err != nil {
 				return nil, nil, err
 			}
+			t.Cleanup(func() { _ = d.Close() })
 			return memory.Checked(d), nil, nil
 		}},
 	}

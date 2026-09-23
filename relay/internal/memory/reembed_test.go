@@ -78,10 +78,7 @@ func TestReembedRewritesVectorsFromAnotherModel(t *testing.T) {
 	// and the one below is the only one that runs.
 	emb := newLoadingEmbedder("new-model", 4)
 	emb.ready = true
-	l, err := NewLocal(path, emb)
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
+	l := openLocal(t, path, emb)
 	// Plus one record with no vector at all.
 	l.mu.Lock()
 	delete(l.vecs, ids[2])
@@ -101,10 +98,7 @@ func TestReembedRewritesVectorsFromAnotherModel(t *testing.T) {
 	}
 
 	// The pass saved: a restart sees the new vectors, and every fact.
-	again, err := NewLocal(path, emb)
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
+	again := openLocal(t, path, emb)
 	if again.Len() != 3 {
 		t.Fatalf("%d facts after the pass, want 3", again.Len())
 	}
@@ -128,10 +122,7 @@ func TestOpeningAStoreReembedsOnceTheModelArrives(t *testing.T) {
 	ids := writeStore(t, path, "old-model", "the main branch is called master", "we ship every build to staging first")
 
 	primary := newLoadingEmbedder("big-model", 8)
-	l, err := NewLocal(path, NewFallback(primary, fixedEmbedder{id: "small-model", dims: 2}))
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
+	l := openLocal(t, path, NewFallback(primary, fixedEmbedder{id: "small-model", dims: 2}))
 	// A write before the model arrives goes through the fallback.
 	written, err := l.Store(ctx, Record{Content: "prefers terse answers", Scope: scope.Local, Project: "/tmp/project"})
 	if err != nil {
@@ -166,10 +157,7 @@ func TestAModelThatNeverArrivesChangesNothing(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "facts.json")
 	ids := writeStore(t, path, "small-model", "the main branch is called master")
 	primary := newLoadingEmbedder("big-model", 8)
-	l, err := NewLocal(path, NewFallback(primary, fixedEmbedder{id: "small-model", dims: 2}))
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
+	l := openLocal(t, path, NewFallback(primary, fixedEmbedder{id: "small-model", dims: 2}))
 	primary.giveUp()
 	n, err := l.Reembed(context.Background())
 	if err != nil || n != 0 {
@@ -190,10 +178,7 @@ func TestReembedLeavesARecordReplacedDuringThePassAlone(t *testing.T) {
 	// Ready but not settled, so the only pass is the one below.
 	emb := newLoadingEmbedder("new-model", 4)
 	emb.ready = true
-	l, err := NewLocal(path, emb)
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
+	l := openLocal(t, path, emb)
 	replaced := ""
 	var once bool
 	emb.onEmbed = func() {
@@ -224,13 +209,44 @@ func TestReembedStopsWhenTheModelIsNotReady(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "facts.json")
 	writeStore(t, path, "old-model", "one fact", "another fact", "a third fact")
 	emb := newLoadingEmbedder("new-model", 4)
-	l, err := NewLocal(path, emb)
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
+	l := openLocal(t, path, emb)
 	n, err := l.Reembed(context.Background())
 	if err != nil || n != 0 {
 		t.Fatalf("pass on a model that is not ready did %d with %v", n, err)
+	}
+}
+
+// A model that goes away mid-batch stops the pass, but what it embedded before
+// going is from the model the pass started with and is kept, not paid for
+// again on the next start.
+func TestReembedKeepsTheBatchEmbeddedBeforeTheModelWentAway(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "facts.json")
+	ids := writeStore(t, path, "old-model", "one fact", "another fact", "a third fact")
+	// Ready but not settled, so the only pass is the one below.
+	emb := newLoadingEmbedder("new-model", 4)
+	emb.ready = true
+	calls := 0
+	emb.onEmbed = func() {
+		calls++
+		if calls == 3 {
+			emb.mu.Lock()
+			emb.ready = false
+			emb.mu.Unlock()
+		}
+	}
+	l := openLocal(t, path, emb)
+	n, err := l.Reembed(context.Background())
+	if err != nil || n != 2 {
+		t.Fatalf("pass did %d with %v, want the 2 embedded before the model went away", n, err)
+	}
+	again := openLocal(t, path, nil)
+	tagged := map[string]int{}
+	for _, id := range ids {
+		model, _ := vectorModel(t, again, id)
+		tagged[model]++
+	}
+	if tagged["new-model"] != 2 || tagged["old-model"] != 1 {
+		t.Fatalf("after the pass the saved vectors are tagged %v, want 2 new-model and 1 old-model", tagged)
 	}
 }
 
@@ -242,10 +258,7 @@ func TestAFreshStoreCatchesUpOnceTheModelArrives(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "facts.json")
 	primary := newLoadingEmbedder("big-model", 8)
-	l, err := NewLocal(path, NewFallback(primary, fixedEmbedder{id: "small-model", dims: 2}))
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
+	l := openLocal(t, path, NewFallback(primary, fixedEmbedder{id: "small-model", dims: 2}))
 	written, err := l.Store(ctx, Record{Content: "prefers terse answers", Scope: scope.Local, Project: "/tmp/project"})
 	if err != nil {
 		t.Fatalf("store: %v", err)
@@ -255,4 +268,88 @@ func TestAFreshStoreCatchesUpOnceTheModelArrives(t *testing.T) {
 	}
 	primary.arrive()
 	waitForModel(t, l, written, "big-model")
+}
+
+// Close is what lets the owner of a directory remove it: once it returns,
+// nothing the store started is left to write there. A vector the embedder
+// hands back for the record in progress when Close arrives is saved before
+// Close returns; the pass goes no further, and the record it had not reached
+// keeps the vector it had.
+func TestCloseWaitsForTheReembeddingPassInFlight(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "facts.json")
+	ids := writeStore(t, path, "old-model", "the main branch is called master", "we ship every build to staging first")
+	emb := newLoadingEmbedder("new-model", 4)
+	embedding, release := make(chan struct{}), make(chan struct{})
+	first := true
+	emb.onEmbed = func() {
+		if !first {
+			return
+		}
+		first = false
+		close(embedding)
+		<-release
+	}
+	l, err := NewLocal(path, emb)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	emb.arrive()
+	<-embedding
+
+	closed := make(chan struct{})
+	go func() {
+		_ = l.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+		t.Fatal("Close returned while the pass was still embedding")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not return once the pass finished")
+	}
+
+	again := openLocal(t, path, nil)
+	if model, _ := vectorModel(t, again, ids[0]); model != "new-model" {
+		t.Fatalf("the record embedded before Close was not saved; it is tagged %q", model)
+	}
+	if model, _ := vectorModel(t, again, ids[1]); model != "old-model" {
+		t.Fatalf("the pass went on after Close; the record it had not reached is tagged %q", model)
+	}
+}
+
+// A model can take minutes to download, and a daemon asked to stop must not
+// wait for it. Closing twice at once is what two owners racing to shut down
+// look like.
+func TestCloseDoesNotWaitForAModelStillLoading(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "facts.json")
+	ids := writeStore(t, path, "old-model", "the main branch is called master")
+	l, err := NewLocal(path, newLoadingEmbedder("new-model", 4))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	closed := make(chan struct{})
+	for range 2 {
+		go func() {
+			_ = l.Close()
+			closed <- struct{}{}
+		}()
+	}
+	for range 2 {
+		select {
+		case <-closed:
+		case <-time.After(5 * time.Second):
+			t.Fatal("Close waited for a model that had not arrived")
+		}
+	}
+	if err := l.Close(); err != nil {
+		t.Fatalf("a second Close: %v", err)
+	}
+	if model, _ := vectorModel(t, l, ids[0]); model != "old-model" {
+		t.Fatalf("the record is tagged %q; nothing should have run", model)
+	}
 }

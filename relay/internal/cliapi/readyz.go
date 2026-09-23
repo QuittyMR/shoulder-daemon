@@ -84,8 +84,10 @@ func (s *Server) probeReady() ReadyStatus {
 		// not disagree. A daemon with nowhere to write watches a whole session
 		// and keeps none of it, and an adapter that got a 200 here would have
 		// no other moment in which to find that out.
-		return ReadyStatus{Memory: "none",
-			Error: "no memory backend is configured; nothing observed in a session will be kept"}
+		return ReadyStatus{
+			Memory: "none",
+			Error:  "no memory backend is configured; nothing observed in a session will be kept",
+		}
 	}
 	if err := s.probeWithin(readyProbeTimeout); err != nil {
 		return ReadyStatus{Memory: "unreachable", Error: err.Error()}

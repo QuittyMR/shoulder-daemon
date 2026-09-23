@@ -107,6 +107,7 @@ func (s *Server) handleMigrate(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, http.StatusBadRequest, err)
 		return
 	}
+	defer func() { _ = src.Close() }()
 	// A query that never mentions Kind asks for facts, which is what leaves the
 	// working notes behind: they are the vocabulary of turns that ended months
 	// ago and belong in nobody's repository.

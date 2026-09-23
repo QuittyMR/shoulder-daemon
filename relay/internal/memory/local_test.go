@@ -14,27 +14,33 @@ import (
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/scope"
 )
 
+// openLocal opens the store at path and closes it when the test ends. Cleanups
+// run last-registered first, so the close lands before the removal of a
+// temporary directory the path was taken from, which the re-embedding pass
+// would otherwise still be writing into.
+func openLocal(t *testing.T, path string, emb Embedder) *Local {
+	t.Helper()
+	l, err := NewLocal(path, emb)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	return l
+}
+
 // newLocal builds the store as the daemon ships it: with the embedding table
 // compiled into the binary. A test against a store scoring some other way is a
 // test of something nobody runs.
 func newLocal(t *testing.T) *Local {
 	t.Helper()
-	l, err := NewLocal(filepath.Join(t.TempDir(), "facts.json"), vectors.Embedder{})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	return l
+	return openLocal(t, filepath.Join(t.TempDir(), "facts.json"), vectors.Embedder{})
 }
 
 // newLexicalLocal is the store with no embedding model, which is what a build
 // whose table failed to load falls back to.
 func newLexicalLocal(t *testing.T) *Local {
 	t.Helper()
-	l, err := NewLocal(filepath.Join(t.TempDir(), "facts.json"), nil)
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	return l
+	return openLocal(t, filepath.Join(t.TempDir(), "facts.json"), nil)
 }
 
 // The store that ships is held to the same contract as the one that talks to a
@@ -44,10 +50,7 @@ func TestLocalConformance(t *testing.T) {
 	n := 0
 	TestConnector(t, func() Connector {
 		n++
-		l, err := NewLocal(filepath.Join(dir, "facts-"+strings.Repeat("x", n)+".json"), vectors.Embedder{})
-		if err != nil {
-			t.Fatalf("open: %v", err)
-		}
+		l := openLocal(t, filepath.Join(dir, "facts-"+strings.Repeat("x", n)+".json"), vectors.Embedder{})
 		return l
 	})
 }
@@ -55,10 +58,7 @@ func TestLocalConformance(t *testing.T) {
 func TestLocalKeepsFactsAcrossARestart(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "facts.json")
-	first, err := NewLocal(path, vectors.Embedder{})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
+	first := openLocal(t, path, vectors.Embedder{})
 	const fact = "the integration tests need a live Postgres"
 	id, err := first.Store(ctx, Record{Content: fact, Category: "structure", Scope: scope.Local, Project: "/tmp/project"})
 	if err != nil {
@@ -67,10 +67,7 @@ func TestLocalKeepsFactsAcrossARestart(t *testing.T) {
 
 	// The daemon exits when the last session ends and is started again by the
 	// editor, so this is the ordinary case, not a disaster case.
-	second, err := NewLocal(path, vectors.Embedder{})
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
+	second := openLocal(t, path, vectors.Embedder{})
 	got, err := second.List(ctx, Query{Scope: scope.Local, Project: "/tmp/project"})
 	if err != nil {
 		t.Fatalf("list: %v", err)
@@ -97,9 +94,7 @@ func TestLocalRefusesToOpenAFileItCannotRead(t *testing.T) {
 
 func TestLocalStoresNothingUntilSomethingIsWritten(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sub", "facts.json")
-	if _, err := NewLocal(path, nil); err != nil {
-		t.Fatalf("open: %v", err)
-	}
+	openLocal(t, path, nil)
 	if _, err := os.Stat(filepath.Dir(path)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("opening the store must not create anything on disk")
 	}
@@ -295,10 +290,7 @@ func (s stubEmbedder) Embed(_ context.Context, text string) ([]float32, error) {
 func TestLocalRanksByTheEmbeddingWhenItHasOne(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "facts.json")
-	l, openErr := NewLocal(path, stubEmbedder{id: "stub-v1"})
-	if openErr != nil {
-		t.Fatalf("open: %v", openErr)
-	}
+	l := openLocal(t, path, stubEmbedder{id: "stub-v1"})
 	for _, content := range []string{"zebra crossing the road", "postgres runs on 5544"} {
 		if _, err := l.Store(ctx, Record{Content: content, Scope: scope.Global}); err != nil {
 			t.Fatalf("store: %v", err)
@@ -318,18 +310,12 @@ func TestLocalRanksByTheEmbeddingWhenItHasOne(t *testing.T) {
 func TestLocalIgnoresVectorsFromAnotherModel(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "facts.json")
-	first, openErr := NewLocal(path, stubEmbedder{id: "stub-v1"})
-	if openErr != nil {
-		t.Fatalf("open: %v", openErr)
-	}
+	first := openLocal(t, path, stubEmbedder{id: "stub-v1"})
 	if _, err := first.Store(ctx, Record{Content: "the deploy target is staging", Scope: scope.Global}); err != nil {
 		t.Fatalf("store: %v", err)
 	}
 
-	second, err := NewLocal(path, stubEmbedder{id: "stub-v2"})
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
+	second := openLocal(t, path, stubEmbedder{id: "stub-v2"})
 	got, err := second.Search(ctx, Query{Text: "what is the deploy target", Limit: 5, Scope: scope.Global})
 	if err != nil {
 		t.Fatalf("search: %v", err)
@@ -339,8 +325,7 @@ func TestLocalIgnoresVectorsFromAnotherModel(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("the record was lost when the model changed: %+v", got)
 	}
-	// The pass behind the store brings the vector up to the new model; waited
-	// for, so its write lands before the directory is taken away.
+	// The pass behind the store brings the vector up to the new model.
 	waitForModel(t, second, got[0].ID, "stub-v2")
 }
 
@@ -354,10 +339,7 @@ func (brokenEmbedder) Embed(context.Context, string) ([]float32, error) {
 
 func TestLocalStoresAndRecallsWhenTheEmbedderFails(t *testing.T) {
 	ctx := context.Background()
-	l, openErr := NewLocal(filepath.Join(t.TempDir(), "facts.json"), brokenEmbedder{})
-	if openErr != nil {
-		t.Fatalf("open: %v", openErr)
-	}
+	l := openLocal(t, filepath.Join(t.TempDir(), "facts.json"), brokenEmbedder{})
 	if _, err := l.Store(ctx, Record{Content: "the staging cluster is rebuilt nightly", Scope: scope.Global}); err != nil {
 		t.Fatalf("store: %v", err)
 	}
@@ -727,6 +709,13 @@ func (a angledEmbedder) Embed(_ context.Context, text string) ([]float32, error)
 	return []float32{float32(math.Cos(theta)), float32(math.Sin(theta)), 0}, nil
 }
 
+// unsettled is an embedder that never reports settling, which holds the pass
+// the store starts on opening until the store is closed, and so holds every
+// record at the model that wrote it for as long as a test needs.
+type unsettled struct{ Embedder }
+
+func (unsettled) Settled() <-chan struct{} { return nil }
+
 // TestSearchTakesItsFloorFromTheModelThatScoredTheQuery is the whole point of
 // the floor being a table: the same ranking, the same score, and two answers,
 // because the constant that was measured against one model is not a
@@ -743,10 +732,7 @@ func TestSearchTakesItsFloorFromTheModelThatScoredTheQuery(t *testing.T) {
 
 	search := func(t *testing.T, model string, floor float64) []Record {
 		t.Helper()
-		l, openErr := NewLocal(filepath.Join(t.TempDir(), "facts.json"), angledEmbedder{id: model, angles: angles})
-		if openErr != nil {
-			t.Fatalf("open: %v", openErr)
-		}
+		l := openLocal(t, filepath.Join(t.TempDir(), "facts.json"), angledEmbedder{id: model, angles: angles})
 		if _, storeErr := l.Store(ctx, Record{Content: fact, Scope: scope.Global}); storeErr != nil {
 			t.Fatalf("store: %v", storeErr)
 		}
@@ -800,17 +786,13 @@ func TestSearchJudgesARecordTheModelHasNotReachedOnTheDefaultFloor(t *testing.T)
 
 	// The second record is written while the old model is still answering, so
 	// its vector is tagged with that model and never compared again.
-	old, openErr := NewLocal(path, angledEmbedder{id: "old-table-v1", angles: angles})
-	if openErr != nil {
-		t.Fatalf("open: %v", openErr)
-	}
+	old := openLocal(t, path, angledEmbedder{id: "old-table-v1", angles: angles})
 	if _, storeErr := old.Store(ctx, Record{Content: behind, Scope: scope.Global}); storeErr != nil {
 		t.Fatalf("store: %v", storeErr)
 	}
-	l, reopenErr := NewLocal(path, angledEmbedder{id: "all-minilm-l6-v2-f32-v1", angles: angles})
-	if reopenErr != nil {
-		t.Fatalf("reopen: %v", reopenErr)
-	}
+	// The new model has not settled, so the pass that would bring the first
+	// record up to it is still waiting when the search runs.
+	l := openLocal(t, path, unsettled{angledEmbedder{id: "all-minilm-l6-v2-f32-v1", angles: angles}})
 	if _, storeErr := l.Store(ctx, Record{Content: reached, Scope: scope.Global}); storeErr != nil {
 		t.Fatalf("store: %v", storeErr)
 	}
@@ -851,10 +833,7 @@ func TestARestatementIsJudgedByTheThresholdsOfTheModelThatEmbeddedIt(t *testing.
 
 	write := func(t *testing.T, model string) error {
 		t.Helper()
-		l, openErr := NewLocal(filepath.Join(t.TempDir(), "facts.json"), angledEmbedder{id: model, angles: angles})
-		if openErr != nil {
-			t.Fatalf("open: %v", openErr)
-		}
+		l := openLocal(t, filepath.Join(t.TempDir(), "facts.json"), angledEmbedder{id: model, angles: angles})
 		if _, storeErr := l.Store(ctx, Record{Content: stored, Scope: scope.Global}); storeErr != nil {
 			t.Fatalf("store: %v", storeErr)
 		}
@@ -940,10 +919,7 @@ func TestRestatementThresholdIsTheOneForThePolarity(t *testing.T) {
 	write := func(t *testing.T, model string, cos float64, content string) (claimID string, err error) {
 		t.Helper()
 		angles := map[string]float64{claim: 0, content: math.Acos(cos)}
-		l, openErr := NewLocal(filepath.Join(t.TempDir(), "facts.json"), angledEmbedder{id: model, angles: angles})
-		if openErr != nil {
-			t.Fatalf("open: %v", openErr)
-		}
+		l := openLocal(t, filepath.Join(t.TempDir(), "facts.json"), angledEmbedder{id: model, angles: angles})
 		claimID, err = l.Store(ctx, Record{Content: claim, Scope: scope.Global})
 		if err != nil {
 			t.Fatalf("store the claim: %v", err)

@@ -16,16 +16,23 @@ const reembedBatch = 32
 // embedder that is still loading, because a pass taken before that would
 // rewrite every vector into the fallback's space and a second pass would
 // rewrite them all again minutes later, on every start.
-func (l *Local) watch() {
+func (l *Local) watch(ctx context.Context) {
+	defer close(l.done)
 	if s, ok := l.emb.(Settler); ok {
-		<-s.Settled()
+		select {
+		case <-s.Settled():
+		case <-ctx.Done():
+			return
+		}
 	}
-	n, err := l.Reembed(context.Background())
+	n, err := l.Reembed(ctx)
 	log := l.logger()
 	if log == nil {
 		return
 	}
-	if err != nil {
+	// A pass cut short by Close is the store shutting down, not something
+	// going wrong: the next start picks up where it stopped.
+	if err != nil && !errors.Is(err, context.Canceled) {
 		log.Warn("re-embedding stopped early; the rest is scored on words until the next start",
 			"path", l.path, "done", n, "error", err)
 		return
@@ -60,10 +67,25 @@ func (l *Local) Reembed(ctx context.Context) (int, error) {
 		fresh := make(map[string]vector, len(batch))
 		for _, r := range batch {
 			if err := ctx.Err(); err != nil {
+				// Inference is the expensive part; what it already produced
+				// is kept rather than paid for again on the next start.
+				n, aerr := l.adopt(model, fresh)
+				done += n
+				if aerr != nil {
+					return done, fmt.Errorf("re-embedding: %w", aerr)
+				}
 				return done, err
 			}
 			vec, err := embedTagged(ctx, l.emb, r.Content)
 			if errors.Is(err, ErrEmbedderNotReady) {
+				// Every vector already in the batch was checked against the
+				// model this pass started with, so it is as good as one from a
+				// batch that finished.
+				n, aerr := l.adopt(model, fresh)
+				done += n
+				if aerr != nil {
+					return done, fmt.Errorf("re-embedding: %w", aerr)
+				}
 				return done, nil
 			}
 			if err != nil {
@@ -75,6 +97,8 @@ func (l *Local) Reembed(ctx context.Context) (int, error) {
 				continue
 			}
 			if vec.Model != model {
+				// The batch so far is in the old model's space, which is the
+				// one the pass for the new model is about to replace.
 				return done, nil
 			}
 			fresh[r.ID] = *vec

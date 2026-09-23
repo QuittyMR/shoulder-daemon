@@ -269,6 +269,7 @@ func TestAStoreCatchesUpOnceTheModelArrives(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = first.Close() })
 	old, err := first.Store(ctx, memory.Record{Content: "the main branch is called master", Scope: scope.Local, Project: "/tmp/project"})
 	if err != nil {
 		t.Fatal(err)
@@ -278,6 +279,7 @@ func TestAStoreCatchesUpOnceTheModelArrives(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = l.Close() })
 	fresh, err := l.Store(ctx, memory.Record{Content: "we ship every build to staging first", Scope: scope.Local, Project: "/tmp/project"})
 	if err != nil {
 		t.Fatal(err)
@@ -395,6 +397,7 @@ func TestADenialOfAStoredClaimIsRefusedByTheModel(t *testing.T) {
 		if openErr != nil {
 			t.Fatal(openErr)
 		}
+		t.Cleanup(func() { _ = l.Close() })
 		id, err = l.Store(ctx, memory.Record{Content: first, Scope: scope.Global})
 		if err != nil {
 			t.Fatalf("store %q: %v", first, err)

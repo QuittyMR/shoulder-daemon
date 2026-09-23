@@ -127,6 +127,11 @@ func serve() error {
 				mem = memory.Nop{}
 				break
 			}
+			// Closed on the way out, once serveUntil has let the requests and
+			// the pipeline finish or run out of time, so exit does not cut the
+			// re-embedding pass off mid-save and leave its temp file beside the
+			// notes.
+			defer func() { _ = docs.Close() }()
 			// Only the global files can be counted here: the local ones are
 			// one directory per checkout, found as sessions arrive.
 			global, gerr := docs.List(context.Background(), memory.Query{Scope: scope.Global})
@@ -147,6 +152,7 @@ func serve() error {
 			mem = memory.Nop{}
 			break
 		}
+		defer func() { _ = local.Close() }()
 		local.SetLog(log)
 		log.Info("remembering locally", "path", local.Path(), "facts", local.Len(),
 			"embedding", cfg.Embedding, "vocabulary", words, "model_dir", cfg.ModelDir,

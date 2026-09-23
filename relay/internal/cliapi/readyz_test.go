@@ -62,6 +62,7 @@ func TestReadyReportsTheStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = local.Close() })
 
 	cases := []struct {
 		name    string

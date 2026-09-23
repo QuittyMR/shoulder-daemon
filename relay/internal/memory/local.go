@@ -55,6 +55,12 @@ type Local struct {
 	// reembedMu makes the pass one at a time; the store lock is never held
 	// across inference.
 	reembedMu sync.Mutex
+
+	// stop and done belong to the pass the store starts on opening, which
+	// writes into the store's directory on its own schedule: whoever owns the
+	// directory has to be able to end it and know it has ended.
+	stop context.CancelFunc
+	done chan struct{}
 }
 
 // Embedder turns text into a dense vector, so the store can rank by meaning
@@ -442,8 +448,23 @@ func NewLocal(path string, emb Embedder) (*Local, error) {
 	// empty store starts the watcher too: everything written before the model
 	// arrives carries the fallback's vector and is scored on words against
 	// the model's queries until something brings it up to date.
-	go l.watch()
+	ctx, stop := context.WithCancel(context.Background())
+	l.stop, l.done = stop, make(chan struct{})
+	go l.watch(ctx)
 	return l, nil
+}
+
+// Close ends the re-embedding pass and returns once it has, so nothing writes
+// to the store's directory afterwards. Every vector the pass already made is
+// saved before it stops, and so is one the embedder still hands back for the
+// record in progress; an embedder that gives that record up on the
+// cancellation leaves it, with the records the pass had not reached, for the
+// next start. The store still answers calls made after it; only the work
+// nobody asked for is stopped. It is safe to call more than once.
+func (l *Local) Close() error {
+	l.stop()
+	<-l.done
+	return nil
 }
 
 // SetLog gives the store somewhere to report its own background work. Nil is

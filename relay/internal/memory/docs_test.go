@@ -45,6 +45,7 @@ func newDocsIn(t *testing.T, base string, emb Embedder, roots func(scope.Scope, 
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
+	t.Cleanup(func() { _ = d.Close() })
 	return d
 }
 
@@ -596,6 +597,7 @@ func TestDocsIgnoresThePrivateFile(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		t.Cleanup(func() { _ = d.Close() })
 		private.Project = repo
 		docsStore(t, d, private)
 		if got := readFile(t, filepath.Join(repo, ".gitignore")); got != "*.log\n*.tmp\n" {
@@ -641,6 +643,7 @@ func TestDocsDefaultRootsFindTheWorktreeAndAnExistingDocDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = d.Close() })
 	docsStore(t, d, Record{Content: "the api is versioned in the path", Category: "structure", Scope: scope.Local, Project: inside})
 	docsStore(t, d, Record{Content: "prefers rebasing", Category: "preference", Private: true, Scope: scope.Local, Project: inside})
 	if !strings.Contains(readFile(t, filepath.Join(repo, "doc", "ARCHITECTURE.shoulder.md")), "versioned") {
@@ -678,6 +681,7 @@ func TestDocsDefaultRootsFallBackToThePath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = d.Close() })
 	if gitToplevel(dir) != "" {
 		t.Skip("the temporary directory is inside a git repository")
 	}
@@ -719,6 +723,7 @@ func TestDocsResolvesTheCheckoutFromTheDirectoryAndRemembersIt(t *testing.T) {
 		if oerr != nil {
 			t.Fatal(oerr)
 		}
+		t.Cleanup(func() { _ = d.Close() })
 		return d
 	}
 	ctx := context.Background()
@@ -793,6 +798,7 @@ func TestDocsFollowsTheDirectoryBetweenCheckoutsOfOneRepository(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = d.Close() })
 	docsStore(t, d, Record{Content: "the first checkout builds with make", Scope: scope.Local, Project: project, Dir: first})
 	docsStore(t, d, Record{Content: "the second checkout builds with mage", Scope: scope.Local, Project: project, Dir: second})
 	if got := readFile(t, filepath.Join(first, "docs", "NOTES.shoulder.md")); strings.Contains(got, "mage") {
@@ -821,6 +827,7 @@ func TestDocsHonoursTheConfiguredDirectoryName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = d.Close() })
 	docsStore(t, d, Record{Content: "the api is versioned in the path", Category: "structure", Scope: scope.Local, Project: repo, Dir: repo})
 	if _, err := os.Stat(filepath.Join(repo, "notes", "ARCHITECTURE.shoulder.md")); err != nil {
 		t.Fatalf("the configured name was not used: %v", err)
@@ -1041,6 +1048,7 @@ func TestDocsRefusesAProjectAndADirectoryThatNameDifferentCheckouts(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = d.Close() })
 	ctx := context.Background()
 
 	mixed := Record{Content: "the deploy script lives in bin/ship", Scope: scope.Local, Project: projectA, Dir: b}
