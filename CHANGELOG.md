@@ -6,6 +6,8 @@ Notable changes to shoulder-daemon. The format follows
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-24
+
 ### Added
 
 - A `setup-shoulder-daemon` skill ships with the Claude Code plugin. It reads
@@ -21,15 +23,27 @@ Notable changes to shoulder-daemon. The format follows
 
 ### Fixed
 
-- `make update` no longer drops a running mcp-memory-service. Compose acts only
-  on the services its profiles select, so an update recreated the relay and left
-  it pointing at a store that was no longer there - which the daemon reported as
-  healthy while it dropped every search. It now selects the memory profile when
-  that container exists. `make up` instead names the relay and only the relay,
-  because it is what `SHOULDER_START_CMD` runs every time the daemon idles out
-  and a session brings it back, and podman-compose recreates whatever `up`
-  selects even when it is already healthy. `make down` removed the store either
-  way and now says so explicitly.
+- `make update` and `make up` no longer drop a running mcp-memory-service.
+  Compose acts only on the services its profiles select, so either command
+  recreated the relay and left it pointing at a store that was no longer there -
+  which the daemon reported as healthy while it dropped every search. Both now
+  select the memory profile whenever the store's volume exists, so the first
+  `up` after a `make down` brings the store back too. `make up`, which is what
+  `SHOULDER_START_CMD` runs every time the daemon idles out and a session brings
+  it back, passes `--no-recreate`, because podman-compose otherwise recreates a
+  healthy relay and makes the store pay its model load on every session start.
+  `make down` removed the store either way and now says so explicitly.
+- Stopping the daemon no longer cuts writes off half way. It exits when the last
+  session ends or it has been idle, and until now it did so while requests,
+  the advice for a turn and the tidying pass were still writing: a fact the
+  model had already decided could be lost, a tidying pass could leave both
+  wordings of a merged fact behind, and a stray temporary file could be left
+  beside the store. The daemon now cancels what has not decided yet, lets what
+  has decided finish writing, waits for the last tidying pass before going idle,
+  and closes the store only after all of it, within a fixed shutdown budget.
+  `shoulderd memory migrate` and `shoulderd learn` cut off by a stop now say so
+  and exit non-zero instead of reporting a partial copy as complete, and a
+  partly read document is never removed by `--replace`.
 
 ## [0.4.0] - 2026-09-06
 
@@ -343,7 +357,8 @@ The first tagged release.
   results are unwrapped properly.
 - Session notes are remembered as the store accepted them, not as they were offered.
 
-[Unreleased]: https://github.com/QuittyMR/shoulder-daemon/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/QuittyMR/shoulder-daemon/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/QuittyMR/shoulder-daemon/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/QuittyMR/shoulder-daemon/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/QuittyMR/shoulder-daemon/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/QuittyMR/shoulder-daemon/compare/v0.1.1...v0.2.0
