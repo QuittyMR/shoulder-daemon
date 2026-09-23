@@ -59,6 +59,7 @@ func (s *Server) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/cli/facts", s.handleFacts)
 	mux.HandleFunc("/v1/cli/digest", s.handleDigest)
 	mux.HandleFunc("/v1/cli/consolidate", s.handleConsolidate)
+	mux.HandleFunc("/v1/cli/migrate", s.handleMigrate)
 	mux.HandleFunc("/v1/cli/config", s.handleConfig)
 	mux.HandleFunc("/v1/cli/memory", s.handleMemory)
 }

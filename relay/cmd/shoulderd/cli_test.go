@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/cliapi"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/llm"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/prompts"
 )
@@ -382,7 +383,7 @@ func TestUnknownSubcommandPrintsEveryCommand(t *testing.T) {
 	if code != 2 {
 		t.Fatalf("exit %d, want 2", code)
 	}
-	for _, want := range []string{"remember", "doctor", "message", "fact add", "fact update", "fact list", "digest"} {
+	for _, want := range []string{"remember", "doctor", "message", "fact add", "fact update", "fact list", "digest", "memory migrate"} {
 		if !strings.Contains(stderr, want) {
 			t.Fatalf("usage does not mention %q:\n%s", want, stderr)
 		}
@@ -472,6 +473,8 @@ func TestSubcommandHelpTeachesTheScopeContract(t *testing.T) {
 		{[]string{"fact", "list", "--help"}, []string{"(default)", "--global"}},
 		{[]string{"message", "--help"}, []string{"(default)", "--no-update"}},
 		{[]string{"digest", "--help"}, []string{"covers both"}},
+		{[]string{"memory", "--help"}, []string{"memory migrate", "--from"}},
+		{[]string{"memory", "migrate", "--help"}, []string{"--local", "--global", "required", "--from PATH"}},
 		{[]string{"doctor", "--help"}, []string{"--liveness"}},
 	}
 	for _, c := range cases {
@@ -834,5 +837,115 @@ func TestFactWriteSendsPrivateOnlyWhenAsked(t *testing.T) {
 				t.Fatalf("a command that did not pass --private sent %v", d.req().body["private"])
 			}
 		})
+	}
+}
+
+func TestMemoryMigrateRefusesToPickAScope(t *testing.T) {
+	d := newDaemon(t, `{"from":"/tmp/facts.json"}`)
+	code, _, stderr := run(t, "memory", "migrate", "--addr", d.URL)
+	if code != 2 {
+		t.Fatalf("exit %d, want 2: %s", code, stderr)
+	}
+	if !strings.Contains(stderr, "--local or --global") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+	if d.req().calls != 0 {
+		t.Fatal("a migration with no scope reached the daemon")
+	}
+}
+
+func TestMemoryMigrateSendsWhereItRanAndWhatToRead(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	d := newDaemon(t, `{"from":"/old/facts.json","stored":2,"skipped":1,"failed":0}`)
+
+	code, stdout, stderr := run(t, "memory", "migrate", "--addr", d.URL, "--local", "--from", "old.json")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	if got := d.req().path; got != "/v1/cli/migrate" {
+		t.Fatalf("path = %q", got)
+	}
+	if got := d.field(t, "scope"); got != "local" {
+		t.Fatalf("scope = %q", got)
+	}
+	want, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := d.field(t, "project"); got != want && got != dir {
+		t.Fatalf("project = %q, want the directory the command ran in (%s)", got, dir)
+	}
+	if got := d.field(t, "dir"); got != want && got != dir {
+		t.Fatalf("dir = %q, want the directory the command ran in (%s)", got, dir)
+	}
+	// The daemon opens the file, so a path typed against this shell has to
+	// leave it as one nothing else has to resolve.
+	if got := d.field(t, "from"); !filepath.IsAbs(got) || filepath.Base(got) != "old.json" {
+		t.Fatalf("from = %q, want an absolute path to old.json", got)
+	}
+	if !strings.Contains(stdout, "2 stored, 1 skipped, 0 failed") || !strings.Contains(stdout, "/old/facts.json") {
+		t.Fatalf("stdout = %q", stdout)
+	}
+}
+
+// With no --from the daemon picks the file, so the request carries none.
+func TestMemoryMigrateWithNoSourceNamesNone(t *testing.T) {
+	d := newDaemon(t, `{"from":"/var/facts.json","stored":1}`)
+	if code, _, stderr := run(t, "memory", "migrate", "--addr", d.URL, "--global"); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	if got := d.field(t, "from"); got != "" {
+		t.Fatalf("from = %q, want the daemon's own choice", got)
+	}
+	if got := d.field(t, "project"); got != "" {
+		t.Fatalf("a global migration named project %q", got)
+	}
+}
+
+// A fact the store would not take is named, and the exit code says the
+// migration was not complete.
+func TestMemoryMigrateExitsOneWhenSomethingWasRefused(t *testing.T) {
+	d := newDaemon(t, `{"from":"/old/facts.json","stored":1,"failed":1,"facts":[{"content":"the api listens on 8081","outcome":"failed","error":"the store is on fire"}]}`)
+	code, stdout, stderr := run(t, "memory", "migrate", "--addr", d.URL, "--global")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1: a migration that lost a fact is not a success", code)
+	}
+	if !strings.Contains(stdout, "1 stored, 0 skipped, 1 failed") {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	if !strings.Contains(stderr, "the api listens on 8081") || !strings.Contains(stderr, "on fire") {
+		t.Fatalf("stderr = %q does not say what was lost or why", stderr)
+	}
+}
+
+func TestMemoryMigrateJSONIsTheWireShape(t *testing.T) {
+	d := newDaemon(t, `{"from":"/old/facts.json","stored":1,"skipped":0,"failed":0,"facts":[{"content":"the api listens on 8081","category":"structure","outcome":"stored","id":"abc"}]}`)
+	code, stdout, stderr := run(t, "memory", "migrate", "--addr", d.URL, "--json", "--global")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	var got cliapi.MigrateResponse
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("stdout %q is not the reply shape: %v", stdout, err)
+	}
+	if got.Stored != 1 || len(got.Facts) != 1 || got.Facts[0].Outcome != cliapi.MigrateStored {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestMemoryNeedsAVerb(t *testing.T) {
+	d := newDaemon(t, `{}`)
+	for _, args := range [][]string{{"memory"}, {"memory", "migate", "--global"}} {
+		code, _, stderr := run(t, args...)
+		if code != 2 {
+			t.Fatalf("%v: exit %d, want 2: %s", args, code, stderr)
+		}
+		if !strings.Contains(stderr, "migrate") {
+			t.Fatalf("%v: stderr %q does not name the verb there is", args, stderr)
+		}
+	}
+	if d.req().calls != 0 {
+		t.Fatal("a command line nobody could act on reached the daemon")
 	}
 }

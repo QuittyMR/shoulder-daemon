@@ -26,6 +26,14 @@ Notable changes to shoulder-daemon. The format follows
   stays `glove`: measured on the benchmark in `docs/INSTALL.md`, the transformer's
   scores need a floor of their own before it can be the default.
 
+- `shoulderd memory migrate --local|--global [--from=PATH]` copies a scope of the
+  built-in JSON store into whatever backend the daemon is running now, keeping each
+  fact's category, tags, timestamp and privacy. The source file is only read;
+  working notes are left behind; a fact the running store already holds is skipped,
+  so a second run changes nothing. It prints stored, skipped and failed counts,
+  exits 1 if anything was refused, and refuses to migrate the JSON store into
+  itself.
+
 - Every CLI request and every session write carries the directory it came from
   beside the project identity, so a store that keeps facts with the checkout can
   find the checkout. It is informational: nothing stores or compares it.

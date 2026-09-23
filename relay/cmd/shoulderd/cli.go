@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -55,6 +56,8 @@ func (c *cli) dispatch(name string, args []string) int {
 		return c.digest(args)
 	case "consolidate":
 		return c.consolidate(args)
+	case "memory":
+		return c.memory(args)
 	case "config":
 		return c.config(args)
 	case "monitor":
@@ -86,6 +89,7 @@ const usage = `usage:
   shoulderd fact list   [--local|--global] [--limit=N]
   shoulderd digest      [--local|--global]
   shoulderd consolidate --local|--global
+  shoulderd memory migrate --local|--global [--from=PATH]      move a JSON store here
   shoulderd config [show]                                      what the daemon is doing now
   shoulderd config set [--log-level=L] [--pickiness=P] [--provider=N] [--model=M]
   shoulderd monitor [--log=PATH] [--all] [--no-follow] [--json]   watch facts move
@@ -805,5 +809,101 @@ func (c *cli) consolidate(args []string) int {
 		return code
 	}
 	fmt.Fprintf(c.out, "%d dropped, %d merged\n", reply.Dropped, reply.Merged)
+	return 0
+}
+
+
+const memoryUsage = `usage: shoulderd memory migrate --local|--global [--from=PATH] [--json] [--addr=URL]
+
+Copy what the built-in JSON store holds into the store the daemon is running
+now, one scope at a time. This is what to run after pointing an established
+daemon at another backend, which otherwise starts empty with every fact it was
+taught still in a file nothing reads.
+
+  --local        this project only          } exactly one is required;
+  --global       you, in every project      } there is no default
+  --from PATH    the JSON file to read; the default is the one the daemon
+                 would have kept its own facts in. The daemon opens it, not
+                 this shell, and only ever reads it.
+  --json         machine-readable: every fact and what became of it
+  --addr URL     relay base URL (default http://127.0.0.1:8787)
+
+A fact the running store already holds is skipped, so a second run changes
+nothing the first one did, and working notes are left behind. A fact the store
+refused for any other reason is named on stderr and the command exits 1: a
+migration that lost something must not look like one that did not.
+` + projectIs
+
+// memory groups the commands about the store itself rather than about what is
+// in it. It has one verb; the daemon says the rest through `doctor`.
+func (c *cli) memory(args []string) int {
+	if len(args) == 0 {
+		return c.reject(errors.New("memory needs a verb: migrate"))
+	}
+	switch args[0] {
+	case "migrate":
+		return c.memoryMigrate(args[1:])
+	case "help", "-h", "-help", "--help":
+		fmt.Fprint(c.out, memoryUsage)
+		return 0
+	}
+	return c.reject(fmt.Errorf("unknown memory verb %q: use migrate", args[0]))
+}
+
+func (c *cli) memoryMigrate(args []string) int {
+	fs := c.flags("memory migrate", memoryUsage)
+	addr := bindAddr(fs)
+	var sf scopeFlags
+	sf.bind(fs)
+	from := fs.String("from", "", "the JSON store to read; default is the daemon's own")
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	if code := c.parse(fs, args); code >= 0 {
+		return code
+	}
+	if fs.NArg() > 0 {
+		return c.reject(fmt.Errorf("memory migrate takes no arguments, got %q", fs.Arg(0)))
+	}
+	// The scope decides which half of the old store is read and where it is
+	// written, so it is chosen the way a write is: never for the user.
+	sc, project, err := sf.forWriting()
+	if err != nil {
+		return c.reject(err)
+	}
+	// Made absolute here, where the shell is. The daemon opens the file and is
+	// routinely in another directory, or another container.
+	source := *from
+	if source != "" {
+		if source, err = filepath.Abs(source); err != nil {
+			return c.reject(err)
+		}
+	}
+
+	var reply cliapi.MigrateResponse
+	if code := c.call(*addr, http.MethodPost, "/v1/cli/migrate", cliapi.MigrateRequest{
+		Scope: string(sc), Project: project, Dir: cwd(), From: source,
+	}, &reply); code != 0 {
+		return code
+	}
+	if *asJSON {
+		enc := json.NewEncoder(c.out)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(reply); err != nil {
+			fmt.Fprintln(c.err, "shoulderd:", err)
+			return 1
+		}
+	} else {
+		fmt.Fprintf(c.out, "%d stored, %d skipped, %d failed (from %s)\n",
+			reply.Stored, reply.Skipped, reply.Failed, reply.From)
+		for _, f := range reply.Facts {
+			if f.Outcome == cliapi.MigrateFailed {
+				fmt.Fprintf(c.err, "not migrated: %s: %s\n", f.Content, f.Error)
+			}
+		}
+	}
+	// Exit 1 on anything the store would not take. The counts are on stdout
+	// either way; this is for the script that ran it.
+	if reply.Failed > 0 {
+		return 1
+	}
 	return 0
 }

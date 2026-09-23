@@ -268,6 +268,7 @@ func TestUnscopedRequestsNameTheFlag(t *testing.T) {
 		{"fact add", http.MethodPost, "/v1/cli/facts", `{"content":"a fact"}`},
 		{"fact update", http.MethodPatch, "/v1/cli/facts", `{"id":"x","content":"a fact"}`},
 		{"fact list", http.MethodGet, "/v1/cli/facts", ""},
+		{"memory migrate", http.MethodPost, "/v1/cli/migrate", `{}`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
