@@ -6,6 +6,16 @@ Notable changes to shoulder-daemon. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- The daemon, the CLI and the OpenCode adapter read the env file with the
+  grammar podman-compose reads it with, python-dotenv's: a ` # comment` after
+  an unquoted value is dropped, a `#` inside quotes is kept, double quotes take
+  escapes such as `\n` and `\"`, single quotes take only `\'` and `\\`, and
+  `${NAME}` and `${NAME:-default}` are expanded. They used to keep the comment
+  and the backslashes and leave `${...}` alone, so a containerised daemon and
+  doctor, or a bare daemon and compose, could read one line two ways.
+
 ## [0.4.1] - 2026-09-24
 
 ### Added

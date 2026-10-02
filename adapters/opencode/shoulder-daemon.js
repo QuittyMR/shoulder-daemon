@@ -33,19 +33,134 @@ import { join } from "node:path";
  * daemon rejects every hook, which looks exactly like the daemon being down
  * while it sits there healthy - the one failure the user cannot see from
  * either side. The file is the same one the daemon is configured from, so
- * there is nothing extra to keep in step.
+ * there is nothing extra to keep in step, and it is read with the same
+ * grammar: python-dotenv's, which podman-compose reads it with and which
+ * relay/internal/config/dotenv.go documents. The adapter's tests check this
+ * reader against that package's table of cases.
  */
-const envFile = (() => {
-  const path =
-    process.env.SHOULDER_ENV_FILE ||
-    join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "shoulder-daemon", "env");
-  try {
-    const out = {};
-    for (const line of readFileSync(path, "utf8").split("\n")) {
-      const m = /^\s*(?:export\s+)?(SHOULDER_[A-Z0-9_]+)\s*=\s*(.*)$/.exec(line);
-      if (m) out[m[1]] = m[2].trim().replace(/^(['"])(.*)\1$/, "$2");
+const SPACE = /[\t-\r\x1c-\x20\x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]/;
+const ESCAPES = { "\\": "\\", "'": "'", '"': '"', a: "\x07", b: "\b", f: "\f", n: "\n", r: "\r", t: "\t", v: "\v" };
+
+function parseEnv(src, env) {
+  const s = Array.from(src.replace(/\r\n?/g, "\n"));
+  const isSpace = (c) => c !== undefined && SPACE.test(c);
+  const isBlank = (c) => isSpace(c) && c !== "\n";
+  let i = 0;
+  const skip = (pred) => {
+    while (i < s.length && pred(s[i])) i++;
+  };
+  const toEol = () => skip((c) => c !== "\n");
+  const value = () => {
+    const q = s[i];
+    if (q !== "'" && q !== '"') {
+      const start = i;
+      toEol();
+      let v = s.slice(start, i);
+      for (let k = 0; k < v.length; k++) {
+        if (!isSpace(v[k])) continue;
+        let m = k;
+        while (m < v.length && isSpace(v[m])) m++;
+        if (v[m] === "#") {
+          v = v.slice(0, k);
+          break;
+        }
+        k = m - 1;
+      }
+      while (v.length && isSpace(v[v.length - 1])) v.pop();
+      return v.join("");
+    }
+    let j = i + 1;
+    let last = -1;
+    for (; j < s.length; j++) {
+      if (s[j] === "\\" && s[j + 1] === q) {
+        j++;
+        last = j;
+        continue;
+      }
+      if (s[j] === q) break;
+    }
+    if (j >= s.length) {
+      if (last < 0) return null;
+      j = last;
+    }
+    const raw = s.slice(i + 1, j);
+    i = j + 1;
+    const allowed = q === '"' ? "\\'\"abfnrtv" : "\\'";
+    let out = "";
+    for (let k = 0; k < raw.length; k++) {
+      if (raw[k] === "\\" && k + 1 < raw.length && allowed.includes(raw[k + 1])) {
+        out += ESCAPES[raw[++k]];
+      } else out += raw[k];
     }
     return out;
+  };
+  const binding = () => {
+    if (s.slice(i, i + 6).join("") === "export" && isBlank(s[i + 6])) {
+      i += 6;
+      skip(isBlank);
+    }
+    let key = "";
+    if (s[i] === "'") {
+      let end = i + 1;
+      while (end < s.length && s[end] !== "'") end++;
+      if (end >= s.length || end === i + 1) return null;
+      key = s.slice(i + 1, end).join("");
+      i = end + 1;
+    } else if (s[i] !== "#") {
+      const start = i;
+      skip((c) => c !== "=" && c !== "#" && !isSpace(c));
+      if (i === start) return null;
+      key = s.slice(start, i).join("");
+    }
+    skip(isBlank);
+    let val;
+    if (s[i] === "=") {
+      i++;
+      skip(isBlank);
+      val = value();
+      if (val === null) return null;
+    }
+    skip(isBlank);
+    if (s[i] === "#") toEol();
+    if (i < s.length) {
+      if (s[i] !== "\n") return null;
+      i++;
+    }
+    return { key, val };
+  };
+  const out = {};
+  const bare = new Set();
+  for (;;) {
+    skip(isSpace);
+    if (i >= s.length) return out;
+    const b = binding();
+    if (b === null) {
+      toEol();
+      continue;
+    }
+    if (!b.key) continue;
+    if (b.val === undefined) {
+      delete out[b.key];
+      bare.add(b.key);
+      continue;
+    }
+    out[b.key] = b.val.replace(/\$\{([^}:]*)(:-([^}]*))?\}/g, (_, name, _d, def) => {
+      if (Object.hasOwn(out, name)) return out[name];
+      if (bare.has(name)) return "";
+      if (Object.hasOwn(env, name)) return env[name];
+      return def ?? "";
+    });
+    bare.delete(b.key);
+  }
+}
+
+const envFile = (() => {
+  const named = process.env.SHOULDER_ENV_FILE || "";
+  const path = named.startsWith("~/")
+    ? join(homedir(), named.slice(2))
+    : named || join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "shoulder-daemon", "env");
+  try {
+    return parseEnv(readFileSync(path, "utf8"), process.env);
   } catch {
     return {};
   }
@@ -490,5 +605,9 @@ export const ShoulderDaemon = async ({ directory, worktree }) => {
     },
   };
 };
+
+// Reachable from the tests without being a module export: OpenCode treats every
+// export of a plugin file as a plugin.
+ShoulderDaemon.parseEnv = parseEnv;
 
 export default ShoulderDaemon;

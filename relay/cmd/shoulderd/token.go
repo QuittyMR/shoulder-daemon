@@ -11,7 +11,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/config"
@@ -28,10 +27,6 @@ import (
 // copied into the places a harness reads its environment from, so the person
 // who installed a plugin never learns that any of this happened.
 const tokenBytes = 32
-
-// envAssignment matches one line of the daemon's env file, which is the shape
-// syncEnvFile has to rewrite without disturbing the rest of somebody's file.
-var envAssignment = regexp.MustCompile(`^\s*(?:export\s+)?([A-Z][A-Z0-9_]*)\s*=\s*(.*)$`)
 
 // ensureToken resolves the shared secret and reports whether the daemon had to
 // invent it. An operator who set SHOULDER_TOKEN owns the value and nothing here
@@ -139,34 +134,7 @@ func claudeSettingsPaths() []string {
 // line as it was. The OpenCode adapter and the CLI both read this file, so a
 // terminal that has sourced nothing can still talk to the daemon.
 func syncEnvFile(path, tok string) error {
-	line := fmt.Sprintf("SHOULDER_TOKEN=%q", tok)
-
-	raw, err := os.ReadFile(path) //nolint:gosec // G304: SHOULDER_ENV_FILE is the operator's own setting
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	var out []string
-	replaced := false
-	for _, l := range strings.Split(strings.TrimRight(string(raw), "\n"), "\n") {
-		if m := envAssignment.FindStringSubmatch(l); m != nil && m[1] == "SHOULDER_TOKEN" {
-			if replaced {
-				continue
-			}
-			out = append(out, line)
-			replaced = true
-			continue
-		}
-		if l != "" || len(out) > 0 {
-			out = append(out, l)
-		}
-	}
-	if !replaced {
-		out = append(out, line)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	return os.WriteFile(path, []byte(strings.Join(out, "\n")+"\n"), 0o600) //nolint:gosec // G703: SHOULDER_ENV_FILE is the operator's own setting
+	return config.SetInFile(path, "SHOULDER_TOKEN", &tok)
 }
 
 // syncClaudeSettings sets env.SHOULDER_TOKEN in Claude Code's settings, and

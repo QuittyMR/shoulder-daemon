@@ -43,10 +43,18 @@ jobs:
       - name: go build
         run: go build ./...
 
+      # The env file reader is checked against python-dotenv, which
+      # podman-compose reads the file with; required so it is never skipped.
+      - name: python-dotenv
+        if: matrix.module == 'relay'
+        run: python3 -m pip install --break-system-packages -q python-dotenv==1.2.2
+
       # The live provider and live memory tests skip themselves without their
       # credentials, and the integration suite is behind the `integration` build
       # tag, so this is the offline subset.
       - name: go test
+        env:
+          SHOULDER_DOTENV_REQUIRED: "1"
         run: go test -race -count=1 -covermode=atomic -coverprofile=coverage.out ./...
 
       - name: coverage summary

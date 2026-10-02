@@ -57,6 +57,13 @@ build:
 test:
   extends: .go
   coverage: '/^total:\s+\(statements\)\s+(\d+\.\d+)%/'
+  # The env file reader is checked against python-dotenv, which podman-compose
+  # reads the file with; required here so that check is never skipped.
+  variables:
+    SHOULDER_DOTENV_REQUIRED: "1"
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq python3-pip >/dev/null
+    - pip3 install --break-system-packages -q python-dotenv==1.2.2
   script:
     - (cd advisor-echo && go test -race -count=1 -covermode=atomic -coverprofile=coverage.out ./... && go tool cover -func=coverage.out | tail -1)
     - (cd relay && go test -race -count=1 -covermode=atomic -coverprofile=coverage.out ./... && go tool cover -func=coverage.out | tail -1)

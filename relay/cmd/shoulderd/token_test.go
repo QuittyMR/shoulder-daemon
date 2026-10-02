@@ -203,7 +203,7 @@ func TestTheEnvFileLearnsTheTokenWithoutLosingWhatWasThere(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := string(raw)
-	if !strings.Contains(got, `SHOULDER_TOKEN="new"`) || strings.Contains(got, `"old"`) {
+	if !strings.Contains(got, `SHOULDER_TOKEN='new'`) || strings.Contains(got, `"old"`) {
 		t.Errorf("the token was not replaced:\n%s", got)
 	}
 	for _, want := range []string{`SHOULDER_LLM="gemini"`, `GEMINI_API_KEY="secret"`} {
@@ -251,5 +251,24 @@ func TestAnExistingEnvFileTokenIsAdoptedRatherThanReplaced(t *testing.T) {
 	}
 	if strings.TrimSpace(string(raw)) != "from-the-installer" {
 		t.Errorf("the token file holds %q", strings.TrimSpace(string(raw)))
+	}
+}
+
+// The token is read back by the daemon, the CLI, compose and the adapters, all
+// through the env file's one grammar, so whatever it holds has to survive it.
+func TestTheTokenWrittenToTheEnvFileReadsBackUnchanged(t *testing.T) {
+	quiet(t)
+	path := filepath.Join(t.TempDir(), "env")
+	t.Setenv("SHOULDER_ENV_FILE", path)
+	t.Setenv("SHOULDER_TOKEN", "")
+	t.Cleanup(config.ResetEnvFile)
+	for _, tok := range []string{"0123abcd", `it's # a\ "token"`, `ends in \`, " spaced "} {
+		if err := syncEnvFile(path, tok); err != nil {
+			t.Fatalf("sync %q: %v", tok, err)
+		}
+		config.ResetEnvFile()
+		if got := config.Setting("SHOULDER_TOKEN"); got != tok {
+			t.Fatalf("wrote %q, read back %q", tok, got)
+		}
 	}
 }

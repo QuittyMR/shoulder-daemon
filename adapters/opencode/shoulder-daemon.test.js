@@ -320,3 +320,16 @@ test("an absent relay is started immediately, floor or no floor", async (t) => {
   await p.load();
   assert.ok(await waitFor(() => p.starts() === 2), "an absent relay was made to wait out the backoff floor");
 });
+
+// The adapter reads the env file itself, before any daemon exists to ask, so
+// it carries its own copy of the grammar. The cases and the values python-dotenv
+// gives for them are the Go package's; the two readers have to agree on all.
+test("the env file is read with the grammar the daemon and compose read it with", async () => {
+  process.env.SHOULDER_ENV_FILE = "/dev/null";
+  const { default: plugin } = await import(`${adapter}?case=${count++}`);
+  delete process.env.SHOULDER_ENV_FILE;
+  const table = fileURLToPath(new URL("../../relay/internal/config/testdata/dotenv.json", import.meta.url));
+  for (const c of JSON.parse(readFileSync(table, "utf8"))) {
+    assert.deepEqual(plugin.parseEnv(c.in, { HOME: "/home/u", EMPTY: "" }), c.want, c.name);
+  }
+});

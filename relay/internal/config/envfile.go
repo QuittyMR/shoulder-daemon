@@ -1,10 +1,8 @@
 package config
 
 import (
-	"bufio"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 )
@@ -22,16 +20,21 @@ import (
 //
 // The process environment always wins. A value somebody exported deliberately
 // is not overridden by a file they may have forgotten.
-var envLine = regexp.MustCompile(`^\s*(?:export\s+)?([A-Z][A-Z0-9_]*)\s*=\s*(.*)$`)
-
 var (
 	envOnce sync.Once
 	envVars map[string]string
 )
 
-// EnvFilePath is $SHOULDER_ENV_FILE, or the conventional location.
+// EnvFilePath is $SHOULDER_ENV_FILE, or the conventional location. A leading
+// ~/ is the home directory, as the Makefile reads it too: the variable is often
+// set somewhere no shell expands it, such as an editor's settings.
 func EnvFilePath() string {
 	if path := os.Getenv("SHOULDER_ENV_FILE"); path != "" {
+		if rest, ok := strings.CutPrefix(path, "~/"); ok {
+			if home, err := os.UserHomeDir(); err == nil {
+				return filepath.Join(home, rest)
+			}
+		}
 		return path
 	}
 	dir := os.Getenv("XDG_CONFIG_HOME")
@@ -54,19 +57,11 @@ func envFile() map[string]string {
 		if path == "" {
 			return
 		}
-		f, err := os.Open(path) //nolint:gosec // G304: SHOULDER_ENV_FILE is the operator's own setting
+		raw, err := os.ReadFile(path) //nolint:gosec // G304: SHOULDER_ENV_FILE is the operator's own setting
 		if err != nil {
 			return
 		}
-		defer f.Close()
-		sc := bufio.NewScanner(f)
-		for sc.Scan() {
-			m := envLine.FindStringSubmatch(sc.Text())
-			if m == nil {
-				continue
-			}
-			envVars[m[1]] = strings.Trim(strings.TrimSpace(m[2]), `"'`)
-		}
+		envVars = parseEnv(string(raw), os.LookupEnv)
 	})
 	return envVars
 }
