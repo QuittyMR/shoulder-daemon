@@ -685,7 +685,9 @@ Everything is environment driven. The only two you need:
 Then `SHOULDER_TOKEN` (generated for you; set it only to override),
 `SHOULDER_ADDR`, `SHOULDER_MEMORY_KEY`, `SHOULDER_PICKINESS`, `SHOULDER_LOG` (the log file;
 `~/.local/share/shoulder-daemon/shoulderd.log`, or `stderr` for none), `LOG_LEVEL`,
-`SHOULDER_DRY_RUN`, `SHOULDER_IDLE_EXIT_MINUTES` (60; zero turns it off),
+`SHOULDER_DRY_RUN`, `SHOULDER_IDLE_EXIT_MINUTES` (60; zero turns it off), `SHOULDER_TRIAGE`
+with `TYPESAFE_API_KEY`, `TYPESAFE_BASE_URL`, `SHOULDER_JEV_MODEL` and
+`SHOULDER_JEV_MIN_CONFIDENCE` (a Jev triage in front of the model, see docs/ADVISOR.md),
 `LEARN_TIMEOUT_SECONDS` (1800, what one `shoulderd learn` may take end to end) and the `WINDOW_*`,
 `BUDGET_*` and `ADVISOR_*` tuning knobs, all of which belong in the env file
 described under "Where configuration lives".

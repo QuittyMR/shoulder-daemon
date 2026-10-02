@@ -116,6 +116,44 @@ show` (or a bare `shoulderd config`) reports the provider and model actually in 
 persisted: a restart returns to whatever `SHOULDER_LLM` and its overrides say. `docs/INSTALL.md`
 covers the other two settings this same command reaches - the log level and the pickiness.
 
+### Triage with Jev
+
+`SHOULDER_TRIAGE=jev` puts TypeSafe's Jev (System One) in front of the decision model. Jev answers
+typed questions with calibrated probabilities and never writes text, so it cannot replace the
+decision model; it decides which turns need it. Each turn it is sent the recent turn and the
+recalled facts and asked, in one call, whether the turn calls for `nothing`, `create` (a new fact),
+`update` (a stored fact is now wrong) or `inject` (a stored fact the session should be reminded of),
+and which stored fact it means. `update` and `inject` are offered only when a recalled fact has an
+id to name.
+
+| Variable | Default | |
+|---|---|---|
+| `SHOULDER_TRIAGE` | empty (off) | `jev` turns it on; anything else refuses to start. |
+| `TYPESAFE_API_KEY` | none | Required when triage is on. |
+| `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | |
+| `SHOULDER_JEV_MODEL` | `jev-latest` | |
+| `SHOULDER_JEV_MIN_CONFIDENCE` | `0.6` | From 0 to 1. A verdict below it is not acted on. |
+
+A confident `inject` queues the stored fact's text as action-level advice, delivered at the
+session's next tool call rather than its next prompt, and ends the turn without calling the decision
+model. A confident `nothing` ends the turn the same way, but only at pickiness `balanced` or
+stricter: `eager` and `open` tell the decision model to store rules a turn merely implies, which a
+"nothing" does not rule out, so at those two the turn still goes to it. `create`, `update`, a
+verdict below the threshold, and any triage failure go to the decision model exactly as if triage
+were off. Facts the agent recorded explicitly are written either way, but a turn triage ends
+records no session keywords, because only the decision model produces them.
+
+Triage without `SHOULDER_LLM` is allowed: stored facts can still be repeated, and a confident
+`create` or `update` that nothing can write is logged and counted in
+`shoulder_triage_unhandled_total`. The other counters are `shoulder_triage_nothing_total`,
+`shoulder_triage_inject_total`, `shoulder_triage_create_total`, `shoulder_triage_update_total`,
+`shoulder_triage_unsure_total` and `shoulder_triage_error_total`. The state is cut to about 48 KB,
+well inside Jev's 32k-token window, by dropping the oldest part of the turn; a clipped fact is cut
+at a character boundary. Triage has its own time limit, a quarter of `ADVISOR_TIMEOUT_SECONDS` and
+never more than 5s, so a stalled Jev leaves the decision model its full timeout. Its latency is the
+`shoulder_hook_latency_seconds` series with `event="triage"`. `shoulderd config show` reports the triage in use; it is
+fixed at startup and `config set` cannot change it.
+
 ## The request
 
 ```

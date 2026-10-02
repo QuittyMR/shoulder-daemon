@@ -40,6 +40,11 @@ type Pipeline struct {
 	Memory   memory.Connector
 	Queue    chan session.Event
 
+	// Triage, when set, is asked about every turn before the decision model,
+	// and ends the turn itself when it is sure the turn needs nothing or needs
+	// a stored fact repeated. Everything else still goes to the decision model.
+	Triage Triager
+
 	// Settings is the half of the configuration that may change while this is
 	// running: the model, and how picky it is told to be. It is read once per
 	// operation rather than once at assembly, which is the whole point, and a
@@ -398,13 +403,17 @@ func (p *Pipeline) Consult(ctx context.Context, sessionID string) {
 	// a decision half made under one setting and half under another is a
 	// decision nobody chose.
 	prov := p.Settings.Provider()
-	if prov == nil {
+	if prov == nil && p.Triage == nil {
 		return
 	}
 	pick := p.Settings.Pickiness()
 
 	at := p.sessionSite(events)
 	recalled := p.recall(ctx, render.RecallQuery(events), at, sessionScopes, RecallLimit, 0)
+
+	if p.Triage != nil && p.triaged(ctx, sessionID, turn, at, window, recalled, pick, prov != nil) {
+		return
+	}
 
 	cctx, cancel := context.WithTimeout(ctx, p.Cfg.AdvisorTimeout)
 	defer cancel()
@@ -440,6 +449,86 @@ func (p *Pipeline) Consult(ctx context.Context, sessionID string) {
 	p.queueInjection(sessionID, turn, decision.Inject, decision.Level)
 	p.persist(wctx, sessionID, at, decision.Facts, recalled)
 	p.rememberKeywords(wctx, sessionID, at, window+decision.Inject, decision.Keywords)
+}
+
+// Triager answers what a turn calls for without writing anything: nothing, a
+// new fact, a change to a stored one, or a stored one repeated to the session.
+type Triager interface {
+	Name() string
+	Triage(ctx context.Context, turnWindow string, recalled []memory.Record) (llm.Verdict, error)
+	// MinConfidence is the confidence below which a verdict is not acted on.
+	MinConfidence() float64
+}
+
+// triageTimeout bounds the triage call. It has its own budget rather than a
+// share of the decision model's, because a triage that stalls must leave the
+// fallback it exists to protect with time to answer.
+func (p *Pipeline) triageTimeout() time.Duration {
+	return min(5*time.Second, p.Cfg.AdvisorTimeout/4)
+}
+
+// triaged asks the triage about the turn and reports whether that settled it.
+// A turn it settles still gets the facts the agent recorded explicitly written,
+// because the decision model that would otherwise have written them is not
+// asked. With no decision model, every turn is settled here: there is nothing
+// to hand the rest to, and a create or update it could not act on is counted
+// rather than lost without a trace.
+func (p *Pipeline) triaged(ctx context.Context, sessionID string, turn uint64, at site, window string, recalled []memory.Record, pick prompts.Pickiness, generative bool) bool {
+	tctx, cancel := context.WithTimeout(ctx, p.triageTimeout())
+	defer cancel()
+	start := time.Now()
+	v, err := p.Triage.Triage(tctx, window, recalled)
+	p.Metrics.ObserveTriage(time.Since(start))
+	settle := func() bool {
+		wctx, done := Decided(ctx)
+		defer done()
+		p.persist(wctx, sessionID, at, nil, recalled)
+		return true
+	}
+	switch {
+	case err != nil:
+		p.Metrics.Inc("shoulder_triage_error_total")
+		p.Log.Warn("triage failed", "session", sessionID, "err", err)
+	case v.Confidence < p.Triage.MinConfidence():
+		p.Metrics.Inc("shoulder_triage_unsure_total")
+		p.Log.Debug("triage unsure", "session", sessionID, "action", v.Action, "confidence", v.Confidence)
+	case v.Action == llm.Nothing:
+		p.Metrics.Inc("shoulder_triage_nothing_total")
+		// Below Balanced the decision model is told to store what a turn
+		// merely implies, which is exactly what a triage asked about stated
+		// facts answers "nothing" to. Settling there would make eager and
+		// open behave as balanced.
+		if pick >= prompts.Balanced {
+			return settle()
+		}
+	case v.Action == llm.Inject:
+		for _, r := range recalled {
+			if r.ID != "" && r.ID == v.FactID {
+				p.Metrics.Inc("shoulder_triage_inject_total")
+				// A stored fact the session is about to act against is only
+				// worth repeating at the action; at the next prompt it arrives
+				// after the thing it was about.
+				p.queueInjection(sessionID, turn, r.Content, string(session.LevelAction))
+				return settle()
+			}
+		}
+		p.Metrics.Inc("shoulder_triage_error_total")
+		p.Log.Warn("triage named a fact that was not recalled", "session", sessionID, "fact", v.FactID)
+	case v.Action == llm.Create || v.Action == llm.Update:
+		p.Metrics.Inc("shoulder_triage_" + string(v.Action) + "_total")
+		if !generative {
+			p.Metrics.Inc("shoulder_triage_unhandled_total")
+			p.Log.Info("triage wants a fact written but no decision model is configured to write it",
+				"session", sessionID, "action", v.Action, "fact", v.FactID, "confidence", v.Confidence)
+		}
+	default:
+		p.Metrics.Inc("shoulder_triage_error_total")
+		p.Log.Warn("triage returned an unknown action", "session", sessionID, "action", v.Action)
+	}
+	if generative {
+		return false
+	}
+	return settle()
 }
 
 // Decided is the context for storing a result that already exists. It is not

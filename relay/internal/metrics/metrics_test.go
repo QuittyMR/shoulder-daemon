@@ -105,3 +105,19 @@ func TestAdvisorLatencyIsItsOwnSeries(t *testing.T) {
 		t.Fatalf("the advisor call leaked into the hook series:\n%s", out)
 	}
 }
+
+// Triage is a second call on every turn, so it is timed as its own series
+// beside the advisor rather than folded into it.
+func TestTriageLatencyIsItsOwnSeries(t *testing.T) {
+	m := New()
+	m.ObserveAdvisor(time.Second)
+	m.ObserveTriage(2 * time.Millisecond)
+
+	out := m.Render()
+	if !strings.Contains(out, `shoulder_hook_latency_seconds_bucket{event="triage",le="0.002"} 1`) {
+		t.Fatalf("triage observation missing:\n%s", out)
+	}
+	if !strings.Contains(out, `shoulder_hook_latency_seconds_count{event="advisor"} 1`) {
+		t.Fatalf("the triage call leaked into the advisor series:\n%s", out)
+	}
+}

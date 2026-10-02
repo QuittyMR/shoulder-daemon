@@ -137,3 +137,7 @@ func (m *Metrics) Render() string {
 // separate series from the hook latency: the whole design rests on these two
 // being unrelated.
 func (m *Metrics) ObserveAdvisor(d time.Duration) { m.ObserveHook("advisor", d) }
+
+// ObserveTriage records how long a triage call took, beside the advisor series
+// and for the same reason: a turn now costs the two added together.
+func (m *Metrics) ObserveTriage(d time.Duration) { m.ObserveHook("triage", d) }

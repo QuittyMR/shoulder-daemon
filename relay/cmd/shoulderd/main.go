@@ -77,10 +77,11 @@ func serve() error {
 	if err != nil {
 		return err
 	}
-	if provider == nil {
-		log.Warn("no decision model configured; shoulder-daemon will observe and stay silent",
-			"hint", "set SHOULDER_LLM to one of: "+strings.Join(llm.Presets(), ", "))
+	jev, err := llm.JevFromEnv()
+	if err != nil {
+		return err
 	}
+	warnMissingModel(log, provider, jev)
 
 	// A memory service if one was named, and otherwise one of the two stores
 	// that ship inside this binary. Nothing is the last resort rather than the
@@ -174,6 +175,11 @@ func serve() error {
 		IdleExit: cfg.IdleExit, OnIdle: stop,
 		Outbox: box, Settings: live, Memory: mem, Queue: queue,
 	}
+	// Assigned only when there is one: a nil *Jev in the interface is a
+	// triage that is set and panics on first use.
+	if jev != nil {
+		pipe.Triage = jev
+	}
 
 	// The CLI routes share the mux, the address and the token with the hooks,
 	// and live in another package only because this one may not import the
@@ -199,7 +205,7 @@ func serve() error {
 	}()
 
 	log.Info("shoulderd listening",
-		"addr", cfg.Addr, "llm", providerName(provider), "memory", mem.Name(),
+		"addr", cfg.Addr, "llm", providerName(provider), "triage", triageName(jev), "memory", mem.Name(),
 		"pickiness", cfg.Pickiness, "dry_run", cfg.Budget.DryRun, "auth", token != "",
 		"log", cfg.LogPath)
 
@@ -597,6 +603,28 @@ func report(asJSON bool, v map[string]any, text string) {
 		return
 	}
 	fmt.Println(text)
+}
+
+// warnMissingModel says what a daemon without a decision model can still do.
+// With a triage it is more than nothing: facts the agent records are written
+// and stored ones repeated, and only deducing one from the turn is lost.
+func warnMissingModel(log *slog.Logger, provider llm.Provider, jev *llm.Jev) {
+	if provider != nil {
+		return
+	}
+	hint := "set SHOULDER_LLM to one of: " + strings.Join(llm.Presets(), ", ")
+	if jev == nil {
+		log.Warn("no decision model configured; shoulder-daemon will observe and stay silent", "hint", hint)
+		return
+	}
+	log.Warn("triage without a decision model; stored facts can be repeated but no fact is deduced from the turn", "hint", hint)
+}
+
+func triageName(j *llm.Jev) string {
+	if j == nil {
+		return "none"
+	}
+	return j.Name() + " (" + j.Model + ")"
 }
 
 func providerName(p llm.Provider) string {

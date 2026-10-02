@@ -1,14 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/llm"
 )
 
 type served struct {
@@ -165,5 +169,29 @@ func TestServeUntilStopsThePipelineWhenTheListenerFails(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("waited out its grace instead of stopping the pipeline")
+	}
+}
+
+// Triage alone still writes the facts the agent records explicitly, so a
+// warning that says nothing is written sends the reader after a fault that is
+// not there.
+func TestTheMissingModelWarningSaysWhatIsLost(t *testing.T) {
+	var buf bytes.Buffer
+	warnMissingModel(slog.New(slog.NewTextHandler(&buf, nil)), nil, &llm.Jev{})
+	got := buf.String()
+	if !strings.Contains(got, "no fact is deduced from the turn") || strings.Contains(got, "no new fact is written") {
+		t.Fatalf("warning = %q", got)
+	}
+
+	buf.Reset()
+	warnMissingModel(slog.New(slog.NewTextHandler(&buf, nil)), nil, nil)
+	if !strings.Contains(buf.String(), "observe and stay silent") {
+		t.Fatalf("warning without triage = %q", buf.String())
+	}
+
+	buf.Reset()
+	warnMissingModel(slog.New(slog.NewTextHandler(&buf, nil)), &llm.OpenAICompatible{}, nil)
+	if buf.Len() != 0 {
+		t.Fatalf("warned with a decision model configured: %q", buf.String())
 	}
 }

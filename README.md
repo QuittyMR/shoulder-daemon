@@ -122,7 +122,15 @@ flash-tier model beats a better one that thinks for twenty seconds; deciding
 whether a turn contradicts a stored fact is classification, not authorship. On
 one machine `gemini-3.5-flash-lite` answered in 0.9s and one coding-plan
 endpoint took 29s, so time your own choice - the `shoulder_hook_latency_seconds`
-metric with `event="advisor"` reports what the pass is costing you.
+metric with `event="advisor"` reports what the model call is costing you, and
+with a triage configured, `event="triage"` reports the call made before it;
+a turn the triage hands on costs the two together.
+
+`SHOULDER_TRIAGE=jev` with `TYPESAFE_API_KEY` adds TypeSafe's Jev as a triage
+in front of the model: turns it is sure need nothing, or need a stored fact
+repeated before the next tool call, are settled by that one call without the
+model, and everything else goes to the model as before. [docs/ADVISOR.md](docs/ADVISOR.md) has the details and the
+other `SHOULDER_JEV_*` settings.
 
 Put the choice and its key in `~/.config/shoulder-daemon/env` as above. The
 daemon reads that file wherever it was started from - a container, a service

@@ -8,6 +8,21 @@ Notable changes to shoulder-daemon. The format follows
 
 ### Added
 
+- An optional triage step in front of the decision model, backed by TypeSafe's
+  Jev (System One). With `SHOULDER_TRIAGE=jev` and `TYPESAFE_API_KEY`, every
+  turn is first classified as needing nothing, a new fact, a change to a stored
+  fact, or a stored fact repeated to the session. A confident "repeat" injects
+  the stored fact as it is at the next tool call, and a confident "nothing" at
+  pickiness `balanced` or stricter ends the turn, both without calling the
+  decision model; everything else, including "nothing" at `eager` or `open`, a
+  verdict under `SHOULDER_JEV_MIN_CONFIDENCE` (0.6) and any triage failure,
+  goes to the decision model unchanged. Triage is cut off after a quarter of
+  `ADVISOR_TIMEOUT_SECONDS`, at most 5s, so a stalled Jev does not use up the
+  decision model's time, and its latency is reported as
+  `shoulder_hook_latency_seconds{event="triage"}`. Triage also runs with no
+  `SHOULDER_LLM`, where a fact it wants written is counted in
+  `shoulder_triage_unhandled_total` rather than dropped. `shoulderd config
+  show` reports the triage in use.
 - `shoulderd env path|get|set|unset` reads and writes the env file with the
   grammar the daemon reads it with; `set` changes a setting where it first
   stands, takes a secret on standard input and writes through a link. The

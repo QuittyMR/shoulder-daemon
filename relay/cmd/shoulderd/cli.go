@@ -319,7 +319,7 @@ func (c *cli) configShow(args []string) int {
 	if code := c.call(*addr, http.MethodGet, "/v1/cli/config", nil, &reply); code != 0 {
 		return code
 	}
-	return c.printConfig(reply.Snapshot, *asJSON)
+	return c.printConfig(reply, *asJSON)
 }
 
 func (c *cli) configSet(args []string) int {
@@ -362,12 +362,12 @@ func (c *cli) configSet(args []string) int {
 	if code := c.call(*addr, http.MethodPatch, "/v1/cli/config", change, &reply); code != 0 {
 		return code
 	}
-	return c.printConfig(reply.Snapshot, *asJSON)
+	return c.printConfig(reply, *asJSON)
 }
 
 // printConfig renders the same four values whether they were just read or just
 // changed, so `config set` answers the question `config show` would have.
-func (c *cli) printConfig(s settings.Snapshot, asJSON bool) int {
+func (c *cli) printConfig(s cliapi.ConfigResponse, asJSON bool) int {
 	if asJSON {
 		enc := json.NewEncoder(c.out)
 		enc.SetIndent("", "  ")
@@ -382,6 +382,12 @@ func (c *cli) printConfig(s settings.Snapshot, asJSON bool) int {
 	fmt.Fprintf(c.out, "provider:   %s\n", s.Provider)
 	if s.Model != "" {
 		fmt.Fprintf(c.out, "model:      %s\n", s.Model)
+	}
+	switch {
+	case s.TriageModel != "":
+		fmt.Fprintf(c.out, "triage:     %s (%s)\n", s.Triage, s.TriageModel)
+	case s.Triage != "":
+		fmt.Fprintf(c.out, "triage:     %s\n", s.Triage)
 	}
 	return 0
 }

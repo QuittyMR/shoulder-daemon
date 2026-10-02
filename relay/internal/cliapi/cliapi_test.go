@@ -674,6 +674,38 @@ func TestConfigReportsWhatTheDaemonIsDoingNow(t *testing.T) {
 	}
 }
 
+// Triage is fixed at startup but is still part of what the daemon is doing, so
+// config reports it beside the settings, and says so when there is none.
+func TestConfigReportsTheTriage(t *testing.T) {
+	for _, c := range []struct {
+		name        string
+		triage      pipeline.Triager
+		want, model string
+	}{
+		{"none", nil, "none", ""},
+		{"jev", &llm.Jev{Model: "jev-latest"}, "jev", "jev-latest"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			pipe := &pipeline.Pipeline{
+				Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+				Metrics:  metrics.New(),
+				Settings: settings.ForProvider(nil),
+				Triage:   c.triage,
+			}
+			mux := http.NewServeMux()
+			New(pipe, "").Mount(mux)
+			rec := do(t, mux, http.MethodGet, "/v1/cli/config", "")
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+			}
+			got := decode[ConfigResponse](t, rec)
+			if got.Triage != c.want || got.TriageModel != c.model {
+				t.Fatalf("triage = %q (%q), want %q (%q)", got.Triage, got.TriageModel, c.want, c.model)
+			}
+		})
+	}
+}
+
 func TestAConfigChangeIsVisibleToTheNextReader(t *testing.T) {
 	h, live, m := configServer(t, "")
 

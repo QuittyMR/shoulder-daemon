@@ -603,6 +603,24 @@ func (s *Server) probeStore(ctx context.Context) error {
 // knob sees the state of all four without asking twice.
 type ConfigResponse struct {
 	settings.Snapshot
+	// Triage is fixed when the daemon starts and cannot be changed from here,
+	// so it sits beside the settings rather than among them.
+	Triage      string `json:"triage,omitempty"`
+	TriageModel string `json:"triage_model,omitempty"`
+
+}
+
+func (s *Server) configResponse(snap settings.Snapshot) ConfigResponse {
+	out := ConfigResponse{
+		Snapshot: snap, Triage: "none",
+	}
+	if t := s.Pipe.Triage; t != nil {
+		out.Triage = t.Name()
+		if n, ok := t.(llm.Named); ok {
+			out.TriageModel = n.ModelID()
+		}
+	}
+	return out
 }
 
 // handleConfig reads the live settings with GET and turns them with PATCH.
@@ -615,7 +633,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, ConfigResponse{s.Pipe.Settings.Snapshot()})
+		writeJSON(w, http.StatusOK, s.configResponse(s.Pipe.Settings.Snapshot()))
 	case http.MethodPatch:
 		var req settings.Change
 		if !s.decode(w, r, &req) {
@@ -634,7 +652,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		s.Pipe.Log.Info("settings changed at the terminal",
 			"log_level", now.LogLevel, "pickiness", now.Pickiness,
 			"provider", now.Provider, "model", now.Model)
-		writeJSON(w, http.StatusOK, ConfigResponse{now})
+		writeJSON(w, http.StatusOK, s.configResponse(now))
 	default:
 		s.fail(w, http.StatusMethodNotAllowed, errors.New("use GET to read the settings, PATCH to change them"))
 	}

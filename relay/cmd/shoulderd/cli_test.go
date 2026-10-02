@@ -626,6 +626,17 @@ func TestConfigShowReadsAndPrints(t *testing.T) {
 	}
 }
 
+func TestConfigShowPrintsTheTriage(t *testing.T) {
+	d := newDaemon(t, `{"log_level":"info","pickiness":"strict","pickiness_level":4,"provider":"none","model":"","triage":"jev","triage_model":"jev-latest"}`)
+	code, stdout, stderr := run(t, "config", "--addr", d.URL)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "triage:     jev (jev-latest)") {
+		t.Fatalf("stdout does not report the triage:\n%s", stdout)
+	}
+}
+
 func TestConfigShowJSONIsTheWireShape(t *testing.T) {
 	d := newDaemon(t, configReply)
 	code, stdout, stderr := run(t, "config", "show", "--addr", d.URL, "--json")
