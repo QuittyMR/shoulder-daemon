@@ -66,6 +66,9 @@ Read the report:
 - `llm: NONE` - no decision model. That is question 1. `llm: none (triage
   only: jev)` is a triage running without one, which is supported; ask whether
   the user wants a decision model as well rather than treating it as broken.
+- `relay unreachable` followed by the start command's output - `make up` or
+  `SHOULDER_START_CMD` failed; the lines say why. Its full output is in
+  `~/.local/state/shoulder-daemon/up.log`.
 - A `make up` warning that `deploy/.env` still sets some names - move any
   daemon setting among them into the env file with `"$S" copy NAME` after the
   user exports it, or `"$S" set NAME VALUE` for a non-secret, then have the

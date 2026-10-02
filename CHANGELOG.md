@@ -79,6 +79,9 @@ Notable changes to shoulder-daemon. The format follows
   `flock`.
 - `make update` fails when a relay exists and could not be recreated, rather
   than reporting success; an install with no stack is still skipped.
+- The plugin keeps the start command's output in
+  `~/.local/state/shoulder-daemon/up.log` instead of discarding it, says when
+  the start failed, and waits thirty seconds before trying again.
 
 ## [0.4.1] - 2026-09-24
 

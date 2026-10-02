@@ -207,8 +207,25 @@ link() {
   esac
 }
 
+# The start command runs where nobody reads its output, so the output is kept
+# where `shoulderd doctor` shows it, and a failure is said here - once every
+# five minutes, like the nag above. A start that just failed is not run again
+# before the next prompt either, but only after thirty seconds: whatever broke
+# it is rarely fixed between two prompts, and every retry is the whole stack.
 if [ -n "${SHOULDER_START_CMD:-}" ]; then
-  ( eval "${SHOULDER_START_CMD}" ) >/dev/null 2>&1 &
+  RUN="${XDG_STATE_HOME:-$HOME/.local/state}/shoulder-daemon"
+  mkdir -p "$RUN" 2>/dev/null || true
+  code="$(cat "$RUN/up.exit" 2>/dev/null)"
+  if [ -n "$code" ] && [ "$code" != 0 ]; then
+    NAG="${XDG_RUNTIME_DIR:-/tmp}/shoulder-daemon.start-failed.stamp"
+    if ! recently "$NAG" 300; then
+      say "the start command failed with exit $code; its output is in $RUN/up.log, and 'shoulderd doctor' shows the end of it"
+      mark "$NAG"
+    fi
+    recently "$RUN/up.at" 30 && exit 0
+  fi
+  mark "$RUN/up.at"
+  ( (eval "${SHOULDER_START_CMD}") >"$RUN/up.log" 2>&1; echo $? >"$RUN/up.exit" ) >/dev/null 2>&1 &
   exit 0
 fi
 

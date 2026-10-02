@@ -317,9 +317,16 @@ func (c *cli) doctor(args []string) int {
 
 	resp, err := client.Get(*base + "/healthz")
 	if err != nil {
-		report(*asJSON, map[string]any{"relay": "unreachable", "error": err.Error()},
-			"relay unreachable at "+*base+": "+err.Error()+
-				"\nHooks fail open, so sessions still work — but nothing is being observed.")
+		v := map[string]any{"relay": "unreachable", "error": err.Error()}
+		text := "relay unreachable at " + *base + ": " + err.Error() +
+			"\nHooks fail open, so sessions still work — but nothing is being observed."
+		// The plugin starts the relay with SHOULDER_START_CMD at session start,
+		// where nobody reads its output, and keeps that output here.
+		if path, tail := startLog(); tail != "" && !*liveness {
+			v["start_log"] = tail
+			text += "\nThe last start command said, in " + path + ":\n" + tail
+		}
+		report(*asJSON, v, text)
 		return 1
 	}
 	_ = resp.Body.Close()
@@ -616,6 +623,26 @@ func compare(what, running, source, daemonFile, want string) (msg string, stale 
 }
 
 // startLog is the file ensure-daemon.sh keeps the start command's output in,
+// and its last few lines.
+func startLog() (path, tail string) {
+	dir := os.Getenv("XDG_STATE_HOME")
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", ""
+		}
+		dir = filepath.Join(home, ".local", "state")
+	}
+	path = filepath.Join(dir, "shoulder-daemon", "up.log")
+	raw, err := os.ReadFile(path) //nolint:gosec // G304: built from the state directory
+	if err != nil {
+		return path, ""
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	return path, strings.Join(lines[max(0, len(lines)-5):], "\n")
+}
+
+// printFinding prints whichever of a mismatch and a note doctor recorded.
 func printFinding(out map[string]any, mismatch, note string) {
 	for _, k := range []string{mismatch, note} {
 		if msg, ok := out[k].(string); ok {

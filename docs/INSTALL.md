@@ -236,6 +236,11 @@ up`, so after changing such a variable, run `make down && make up` yourself.
 `SHOULDER_MEMORY_IMAGE`, `make up` and `make update` say so on every run, naming what it sets
 without the values; move any daemon setting among them to the env file and delete the rest.
 
+The plugin runs `make up` (or whatever `SHOULDER_START_CMD` says) where nobody reads it, so its
+output is kept in `${XDG_STATE_HOME:-~/.local/state}/shoulder-daemon/up.log`. When it fails the
+session says so once every five minutes, the start is not retried for thirty seconds, and `shoulderd
+doctor` shows the end of the log while nothing is listening.
+
 To check the relay itself rather than the hooks:
 
 ```bash

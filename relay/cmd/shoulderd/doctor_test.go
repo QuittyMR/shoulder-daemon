@@ -643,3 +643,26 @@ func TestDoctorAcceptsATriageWithoutADecisionModel(t *testing.T) {
 		t.Fatalf("exit %d; a triage-only daemon is healthy:\n%s", code, out)
 	}
 }
+
+// The start command runs where nobody reads it, so a relay it failed to start
+// has to show its last words here.
+func TestDoctorShowsWhatTheStartCommandSaidWhenNothingListens(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	srv := relay(t, true, nil, 0)
+	srv.Close()
+	dir := filepath.Join(t.TempDir(), "state")
+	t.Setenv("XDG_STATE_HOME", dir)
+	if err := os.MkdirAll(filepath.Join(dir, "shoulder-daemon"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	log := "one\ntwo\nthree\nfour\nfive\nsix\nError: no such image\n"
+	if err := os.WriteFile(filepath.Join(dir, "shoulder-daemon", "up.log"), []byte(log), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := &cli{out: io.Discard, err: io.Discard}
+	var code int
+	out := stdout(t, func() { code = c.dispatch("doctor", []string{"--addr=" + srv.URL}) })
+	if code != 1 || !strings.Contains(out, "Error: no such image") || strings.Contains(out, "one\n") {
+		t.Fatalf("exit %d; the last lines of the start command's output must be shown:\n%s", code, out)
+	}
+}
