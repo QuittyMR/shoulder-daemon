@@ -68,6 +68,8 @@ func (c *cli) dispatch(name string, args []string) int {
 		return c.memory(args)
 	case "config":
 		return c.config(args)
+	case "env":
+		return c.env(args)
 	case "monitor":
 		return c.monitor(args)
 	case "version", "-v", "-version", "--version":
@@ -102,6 +104,7 @@ const usage = `usage:
   shoulderd config [show]                                      what the daemon is doing now
   shoulderd config set [--log-level=L] [--pickiness=P] [--provider=N] [--model=M]
   shoulderd monitor [--log=PATH] [--all] [--no-follow] [--json]   watch facts move
+  shoulderd env path|get NAME|set NAME [VALUE]|unset NAME      read and write the env file
   shoulderd version [--json]                                   which build this is
 
 --local is this project alone; --global follows you into every other one.

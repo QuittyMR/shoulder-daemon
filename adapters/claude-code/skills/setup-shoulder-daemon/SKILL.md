@@ -28,14 +28,21 @@ something already configured looks like it did not look.
 S="${CLAUDE_PLUGIN_ROOT:-adapters/claude-code}/skills/setup-shoulder-daemon/scripts/env-set.sh"
 [ -x "$S" ] || S="$(find ~/.claude "$PWD" -name env-set.sh -path '*setup-shoulder-daemon*' 2>/dev/null | head -1)"
 "$S" path                                    # the file you are about to write
-[ -f "$("$S" path)" ] && cat "$("$S" path)" | sed 's/=.*/=<set>/'   # names only, never values
+[ -f "$("$S" path)" ] && sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*=.*/\2/p' "$("$S" path)"   # names only, never values
 command -v shoulderd || echo "no shoulderd on PATH"
 shoulderd doctor 2>&1 || true
 shoulderd config show 2>&1 || true           # provider, model and pickiness of a running daemon
 ```
 
 Never print the contents of the env file as-is: it holds API keys and this
-session's transcript is stored on disk. The `sed` above is why.
+session's transcript is stored on disk. The `sed` above prints names alone,
+even where a quoted value runs over several lines.
+
+Everything `"$S"` does except `path` goes through `shoulderd env`, so it needs
+a binary that has it: the checkout's, which `make install-plugins` records in
+the env file, or one on PATH or fetched by the plugin. When `"$S"` says there is
+none, or that it is too old, relay its message to the user; it names the fix
+for either kind of install.
 
 Read the report:
 

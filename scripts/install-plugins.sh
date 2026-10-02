@@ -43,32 +43,24 @@ fi
 # Every path-dependent setting is rewritten from $REPO on each install, so a
 # moved or renamed checkout is repaired by running this again rather than by
 # hunting stale absolute paths through two config files.
-ENV_FILE="${SHOULDER_ENV_FILE:-$HOME/.config/shoulder-daemon/env}"
-mkdir -p "$(dirname "$ENV_FILE")"
-touch "$ENV_FILE"; chmod 600 "$ENV_FILE"
+ENV_FILE="${SHOULDER_ENV_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/shoulder-daemon/env}"
+export SHOULDER_ENV_FILE="$ENV_FILE"
+# Read and written through the binary, so this script uses the grammar the
+# daemon and compose read the file with rather than a third one of its own.
+# `make install-plugins` builds it first.
+BIN="$REPO/bin/shoulderd"
+[ -x "$BIN" ] || { echo "no $BIN; run make build first" >&2; exit 1; }
 
-set_var() {
-  local key="$1" val="$2"
-  if grep -q "^$key=" "$ENV_FILE"; then
-    python3 - "$ENV_FILE" "$key" "$val" <<'PY'
-import sys
-path, key, val = sys.argv[1], sys.argv[2], sys.argv[3]
-lines = open(path).read().splitlines()
-out = [f'{key}="{val}"' if l.startswith(key + '=') else l for l in lines]
-open(path, 'w').write("\n".join(out) + "\n")
-PY
-  else
-    printf '%s="%s"\n' "$key" "$val" >> "$ENV_FILE"
-  fi
-}
-
-set_var SHOULDER_START_CMD "make -C $REPO up"
-if ! grep -q '^SHOULDER_TOKEN=' "$ENV_FILE"; then
+"$BIN" env set SHOULDER_START_CMD "make -C $REPO up"
+# The setup skill runs from the plugin's copy, not from here, and would not
+# find this binary otherwise. Nothing starts it: SHOULDER_START_CMD does that.
+"$BIN" env set SHOULDER_BIN "$BIN"
+if [ -z "$("$BIN" env get SHOULDER_TOKEN)" ]; then
   # The daemon injects text into a live coding session, and anything that can
   # reach 127.0.0.1 can post to it - including a page open in your browser, for
   # which localhost is not special. Generated rather than prompted for, because
   # a setup step nobody performs is a daemon running with no authentication.
-  set_var SHOULDER_TOKEN "$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' | "$BIN" env set SHOULDER_TOKEN
   echo "env:         generated SHOULDER_TOKEN"
 fi
 echo "env:         $ENV_FILE"
@@ -77,14 +69,11 @@ echo "env:         $ENV_FILE"
 # block, and reads SHOULDER_START_CMD from there to boot the daemon, so those
 # values have to exist in both places.
 if [ -f "$HOME/.claude/settings.json" ]; then
-  python3 - "$ENV_FILE" <<'PY'
-import collections, json, os, re, sys
+  SHOULDER_TOKEN="$("$BIN" env get SHOULDER_TOKEN)" SHOULDER_START_CMD="$("$BIN" env get SHOULDER_START_CMD)" \
+    python3 - "$ENV_FILE" <<'PY'
+import collections, json, os, sys
 envfile = sys.argv[1]
-want = {}
-for line in open(envfile):
-    m = re.match(r'^\s*(SHOULDER_[A-Z0-9_]+)\s*=\s*(.*)$', line)
-    if m:
-        want[m.group(1)] = m.group(2).strip().strip('"\'')
+want = {k: os.environ[k] for k in ('SHOULDER_TOKEN', 'SHOULDER_START_CMD') if os.environ.get(k)}
 want['SHOULDER_ENV_FILE'] = envfile
 
 p = os.path.expanduser('~/.claude/settings.json')

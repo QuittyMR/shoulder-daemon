@@ -555,6 +555,17 @@ the same file, which is why `shoulderd doctor` works in a terminal that has sour
 Switching the store is that file and a restart: add `SHOULDER_MEMORY_URL` for a memory service,
 remove it for the one built into the daemon.
 
+The file is read the way podman-compose reads an env file, which is python-dotenv's way, by the
+daemon, the CLI, the OpenCode adapter and the setup skill alike; `shoulderd env get`, `set` and
+`unset` read and write it the same way for scripts, `set` changing a setting where it first stands and
+writing through a link to the file:
+blank lines and `#` lines are skipped and `export ` is dropped; an unquoted value ends at the first
+whitespace followed by `#`; a `#` inside quotes is part of the value; double quotes take `\n`,
+`\t`, `\r`, `\a`, `\b`, `\f`, `\v`, `\"`, `\'` and `\\`, single quotes only `\'` and `\\`; and `${NAME}` or
+`${NAME:-default}` is replaced from the lines above it, then from the environment, in every kind of
+value. `$NAME` without braces is left as it is. docker compose reads some of this differently and is
+not supported.
+
 `deploy/docker-compose.yml` reads `${SHOULDER_ENV_FILE:-.env}`, so with that
 variable set `make up` uses your file, and without it falls back to `deploy/.env`
 next to the compose file. Both are gitignored. If you have an old `deploy/.env`
@@ -570,9 +581,11 @@ rejected and the session carries on as though nothing were installed, because
 hooks fail open. `shoulderd doctor` reports that as `auth: N REJECTED`.
 
 `make install-plugins`, which `make update` runs, writes the path-dependent
-settings itself: `SHOULDER_START_CMD` for the checkout it is run from, a
-generated `SHOULDER_TOKEN` if the file has none, and the same three values into
-the `env` block of `~/.claude/settings.json`. Moving or renaming the checkout is
+settings itself: `SHOULDER_START_CMD` for the checkout it is run from,
+`SHOULDER_BIN` naming the checkout's `bin/shoulderd` so the setup skill can find
+it (nothing starts it from there), a generated `SHOULDER_TOKEN` if the file has
+none, and the start command, the token and the file's path into the `env` block
+of `~/.claude/settings.json`. Moving or renaming the checkout is
 therefore repaired by running it again, rather than by hunting a stale absolute
 path through two config files.
 

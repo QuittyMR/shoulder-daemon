@@ -76,6 +76,12 @@ func Setting(name string) string {
 	return envFile()[name]
 }
 
+// FileSetting reads one variable from the env file alone. It is what the file
+// asks for now, which a daemon started before the last edit does not know.
+func FileSetting(name string) string {
+	return envFile()[name]
+}
+
 // ResetEnvFile drops the cached file. It exists for tests, which write one and
 // then expect it read; a daemon reads it once and keeps it.
 func ResetEnvFile() {

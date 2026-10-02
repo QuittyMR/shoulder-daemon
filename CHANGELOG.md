@@ -6,6 +6,16 @@ Notable changes to shoulder-daemon. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `shoulderd env path|get|set|unset` reads and writes the env file with the
+  grammar the daemon reads it with; `set` changes a setting where it first
+  stands, takes a secret on standard input and writes through a link. The
+  setup skill's `env-set.sh` and `make install-plugins` now go through it, and
+  the token the daemon generates is written single-quoted, so every value they
+  write reads back as itself. A leading `~/` in `SHOULDER_ENV_FILE` is home
+  everywhere the file is resolved.
+
 ### Fixed
 
 - The daemon, the CLI and the OpenCode adapter read the env file with the

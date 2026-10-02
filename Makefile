@@ -77,7 +77,7 @@ release:
 # harness loads until that copy is replaced, and the failure is silent: the
 # stale copy goes on posting to whatever address and header it was built
 # against. `shoulderd doctor` reports it; this fixes it.
-install-plugins:
+install-plugins: build
 	@scripts/install-plugins.sh
 
 # Everything an update needs, in the order it needs it.
