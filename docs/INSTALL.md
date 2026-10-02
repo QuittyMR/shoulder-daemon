@@ -690,6 +690,14 @@ With a container or a systemd unit, point the plugin at it:
 install that has added the memory service further down gets it back too, and an `up` against a
 healthy stack leaves it alone unless the env file changed since the relay was created.
 
+`make check-stack` builds the image from the checkout and runs it through `make up` under a compose
+project, a port, a volume, an env file, a `deploy/.env` and a state directory of its own, the env
+file pointing at a stub model and a stub store. It fails unless the daemon's reader agrees with
+python-dotenv, the Makefile resolves the env file as the daemon does, compose reads that file and no
+other, `make up` recreates a relay without a hash and names what the stand-in `deploy/.env` sets
+without its values, leaves a current relay alone, recreates one whose file changed with the new
+hash, and doctor reports the stub model and store as coming from the file. It does not touch a running install, and
+removes everything it created when it exits.
 
 ## Every setting
 

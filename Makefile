@@ -26,7 +26,7 @@ UP = DOCKER='$(DOCKER)' COMPOSE_BIN='$(COMPOSE_BIN)' PROJECT='$(PROJECT)' COMPOS
 
 GOLANGCI := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
 
-.PHONY: build test adapter-test cover bench lint vulncheck release-check release docker-build up down logs memory doctor e2e clean install-plugins update up-check
+.PHONY: build test adapter-test cover bench lint vulncheck release-check release docker-build up down logs memory doctor e2e clean install-plugins update up-check check-stack
 
 build:
 	@mkdir -p $(BIN)
@@ -116,6 +116,12 @@ logs:
 
 doctor: build
 	./$(BIN)/shoulderd doctor
+
+# The compose stack as an install runs it, under a project and a port of its
+# own, with a stub model and a stub store, asked through doctor whether it runs
+# what its env file says. See scripts/check-stack.sh for what it leaves alone.
+check-stack: build
+	@scripts/check-stack.sh
 
 clean:
 	rm -rf $(BIN)

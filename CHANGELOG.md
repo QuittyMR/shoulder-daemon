@@ -45,6 +45,13 @@ Notable changes to shoulder-daemon. The format follows
   everywhere the file is resolved.
 - `make up-check` prints whether `make up` would recreate the relay, and the
   names of the variables behind the answer, without doing anything.
+- `make check-stack` runs the compose stack through `make up` under a project,
+  a port, a volume, an env file, a `deploy/.env` and a state directory of its
+  own, with a stub model and a stub store, and fails unless compose reads that
+  env file and no other, `make up` recreates a relay that is stale or predates
+  the hash and leaves a current one alone, and doctor reports the configured
+  model and store as coming from the file. It leaves a running install alone
+  and removes what it created.
 
 ### Fixed
 
