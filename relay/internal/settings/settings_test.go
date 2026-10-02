@@ -381,3 +381,34 @@ func TestEveryOfferedSpellingIsAccepted(t *testing.T) {
 		}
 	}
 }
+
+// Doctor reports a model set at the terminal as such rather than as a daemon
+// that disagrees with its env file, so Live remembers which knobs were turned.
+func TestSetAtRuntimeRemembersWhatTheTerminalChanged(t *testing.T) {
+	keys(t)
+	live := New(new(slog.LevelVar), prompts.Eager, "gemini", "", provider(t, "gemini", ""))
+	if p, m := live.SetAtRuntime(); p || m {
+		t.Fatalf("nothing was changed yet: %v, %v", p, m)
+	}
+	if _, err := live.Apply(Change{Pickiness: ptr("strict")}); err != nil {
+		t.Fatal(err)
+	}
+	if p, m := live.SetAtRuntime(); p || m {
+		t.Fatalf("a pickiness change is not a model change: %v, %v", p, m)
+	}
+	if _, err := live.Apply(Change{Model: ptr("gemini-2.5-flash")}); err != nil {
+		t.Fatal(err)
+	}
+	if p, m := live.SetAtRuntime(); p || !m {
+		t.Fatalf("after a model change: %v, %v", p, m)
+	}
+	if _, err := live.Apply(Change{Provider: ptr("gemini")}); err != nil {
+		t.Fatal(err)
+	}
+	if p, m := live.SetAtRuntime(); !p || !m {
+		t.Fatalf("a provider change resets the model too: %v, %v", p, m)
+	}
+	if p, m := (*Live)(nil).SetAtRuntime(); p || m {
+		t.Fatal("a nil Live changed nothing")
+	}
+}

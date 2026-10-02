@@ -236,3 +236,19 @@ func TestModelOfAProviderThatCannotSay(t *testing.T) {
 		t.Fatalf("chain ModelID = %q", got)
 	}
 }
+
+// Doctor names what a daemon started on a spec would run with the same parser
+// Configure uses, so the two cannot drift apart.
+func TestSpecNamesIsWhatConfigureBuilds(t *testing.T) {
+	for spec, want := range map[string]string{
+		"":                   "",
+		" , ":                "",
+		"Gemini":             "gemini",
+		"gemini,":            "gemini",
+		" OpenRouter , glm ": "openrouter|glm",
+	} {
+		if got := strings.Join(SpecNames(spec), "|"); got != want {
+			t.Errorf("SpecNames(%q) = %q, want %q", spec, got, want)
+		}
+	}
+}

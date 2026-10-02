@@ -34,6 +34,10 @@ type Live struct {
 	model string
 	prov  llm.Provider
 
+	// setProv and setModel record that the provider or the model was changed
+	// at the terminal, which is not where a restart will look for it.
+	setProv, setModel bool
+
 	// level is shared with the logger's handler rather than copied into it.
 	// slog reads a Leveler on every record, which is what makes a level change
 	// take effect on the next line written instead of the next handler built.
@@ -210,7 +214,24 @@ func (l *Live) Apply(c Change) (Snapshot, error) {
 
 	l.level.Set(level)
 	l.pick, l.spec, l.model, l.prov = pick, spec, model, prov
+	if c.Provider != nil {
+		l.setProv, l.setModel = true, true
+	}
+	if c.Model != nil {
+		l.setModel = true
+	}
 	return l.snapshot(), nil
+}
+
+// SetAtRuntime says whether the provider and the model in use were set with
+// Apply rather than taken from the environment the daemon started in.
+func (l *Live) SetAtRuntime() (provider, model bool) {
+	if l == nil {
+		return false, false
+	}
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.setProv, l.setModel
 }
 
 // parseLevel is stricter than the one config uses at startup. A typo there must

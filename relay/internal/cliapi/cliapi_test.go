@@ -996,3 +996,58 @@ func TestATypedFactCanBeMarkedPrivate(t *testing.T) {
 		}
 	}
 }
+
+// Doctor tells a stale daemon from one somebody configured on purpose by where
+// each value came from, so the route says so, and says `config set` once the
+// terminal has changed one.
+func TestConfigSaysWhereTheModelCameFrom(t *testing.T) {
+	t.Setenv("SHOULDER_ENV_FILE", filepath.Join(t.TempDir(), "absent"))
+	config.ResetEnvFile()
+	t.Cleanup(config.ResetEnvFile)
+	t.Setenv("SHOULDER_LLM", "gemini")
+	t.Setenv(config.EnvFileLoaded, "")
+	h, _, _ := configServer(t, "")
+
+	got := decode[ConfigResponse](t, do(t, h, http.MethodGet, "/v1/cli/config", ""))
+	if got.ProviderSource != config.SourceEnvironment || got.ModelSource != config.SourceDefault {
+		t.Fatalf("sources = %q, %q", got.ProviderSource, got.ModelSource)
+	}
+
+	// Under compose the file's values arrive as the process environment.
+	t.Setenv(config.EnvFileLoaded, "/host/shoulder-daemon/env")
+	got = decode[ConfigResponse](t, do(t, h, http.MethodGet, "/v1/cli/config", ""))
+	if got.ProviderSource != config.SourceFile || got.EnvFile != "/host/shoulder-daemon/env" {
+		t.Fatalf("source %q from %q, want the file the runtime loaded", got.ProviderSource, got.EnvFile)
+	}
+
+	got = decode[ConfigResponse](t, do(t, h, http.MethodPatch, "/v1/cli/config", `{"model":"gemini-2.5-flash"}`))
+	if got.ProviderSource != config.SourceFile || got.ModelSource != SourceConfigSet {
+		t.Fatalf("after a model change: sources = %q, %q", got.ProviderSource, got.ModelSource)
+	}
+	got = decode[ConfigResponse](t, do(t, h, http.MethodPatch, "/v1/cli/config", `{"provider":"gemini"}`))
+	if got.ProviderSource != SourceConfigSet || got.ModelSource != SourceConfigSet {
+		t.Fatalf("after a provider change: sources = %q, %q", got.ProviderSource, got.ModelSource)
+	}
+}
+
+// A store that failed to open leaves the daemon on none, and the reason is
+// what separates that from a daemon told about no store at all.
+func TestMemoryStatusCarriesWhyTheStoreFailedToOpen(t *testing.T) {
+	t.Setenv("SHOULDER_ENV_FILE", filepath.Join(t.TempDir(), "absent"))
+	config.ResetEnvFile()
+	t.Cleanup(config.ResetEnvFile)
+	t.Setenv("SHOULDER_MEMORY", "")
+	t.Setenv("SHOULDER_MEMORY_URL", "")
+	pipe := &pipeline.Pipeline{
+		Cfg: config.Load(), Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Metrics: metrics.New(), Memory: memory.Checked(memory.Nop{}),
+	}
+	srv := New(pipe, "")
+	srv.MemoryOpenError = "the local store at /x: permission denied"
+	mux := http.NewServeMux()
+	srv.Mount(mux)
+	got := decode[MemoryStatus](t, do(t, mux, http.MethodGet, "/v1/cli/memory", ""))
+	if got.Configured || got.OpenError != srv.MemoryOpenError || got.Source != config.SourceDefault {
+		t.Fatalf("status = %+v", got)
+	}
+}

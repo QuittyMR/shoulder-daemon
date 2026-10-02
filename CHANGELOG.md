@@ -23,6 +23,19 @@ Notable changes to shoulder-daemon. The format follows
   `SHOULDER_LLM`, where a fact it wants written is counted in
   `shoulder_triage_unhandled_total` rather than dropped. `shoulderd config
   show` reports the triage in use.
+- `shoulderd doctor` reports the decision model on an `llm:` line and compares
+  the provider, the model where the env file names one, and the store with
+  what the env file asks for. `/v1/cli/config` and `/v1/cli/memory` now say
+  where each value came from - the env file, the process environment,
+  `config set`, or nothing - and which file the daemon read. A difference in a
+  value from the file or from nothing is a daemon started before the file was
+  edited or from another file, and fails as `MISMATCH`; one from the process
+  environment or `config set` was chosen over the file and is printed as a
+  note. Doctor also fails when there is no decision model, and when the store
+  failed to open at start, which it reports with the reason rather than as no
+  store. A triage with no decision model reads `llm: none (triage only)` and
+  passes. While nothing listens, it shows the end of the start command's
+  output. `--liveness` is unchanged.
 - `shoulderd env path|get|set|unset` reads and writes the env file with the
   grammar the daemon reads it with; `set` changes a setting where it first
   stands, takes a secret on standard input and writes through a link. The

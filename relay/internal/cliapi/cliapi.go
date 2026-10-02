@@ -52,6 +52,11 @@ type Server struct {
 	Now func() time.Time
 
 	readyz readyCache
+
+	// MemoryOpenError is why the configured store could not be opened at
+	// start, when it could not. The daemon then runs on no store at all, and
+	// that is a different fault from having been told about none.
+	MemoryOpenError string
 }
 
 func New(pipe *pipeline.Pipeline, token string) *Server {
@@ -545,6 +550,15 @@ type MemoryStatus struct {
 	// Overridden names a setting that lost to another one, so a person who
 	// set SHOULDER_MEMORY and still sees a service is told why.
 	Overridden string `json:"overridden,omitempty"`
+
+	// Source is where the setting that chose this store came from, and EnvFile
+	// the file the daemon's settings were read from, so that a store which is
+	// not the one the file asks for can be traced to why.
+	Source  string `json:"source,omitempty"`
+	EnvFile string `json:"env_file,omitempty"`
+
+	// OpenError is why the configured store failed to open at start.
+	OpenError string `json:"open_error,omitempty"`
 }
 
 // handleMemory probes the store and reports what happened. It lives on the
@@ -560,8 +574,12 @@ func (s *Server) handleMemory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	st := MemoryStatus{Name: s.Pipe.Memory.Name()}
+	st := MemoryStatus{Name: s.Pipe.Memory.Name(), EnvFile: config.LoadedFile(), OpenError: s.MemoryOpenError}
 	st.Configured = st.Name != memory.Nop{}.Name()
+	st.Source = config.Source("SHOULDER_MEMORY")
+	if s.Pipe.Cfg.MemoryURL != "" {
+		st.Source = config.Source("SHOULDER_MEMORY_URL")
+	}
 	if s.Pipe.Cfg.MemoryURL != "" && s.Pipe.Cfg.Memory != config.MemoryLocal {
 		st.Overridden = "SHOULDER_MEMORY=" + s.Pipe.Cfg.Memory + " is ignored while SHOULDER_MEMORY_URL is set"
 	}
@@ -608,11 +626,28 @@ type ConfigResponse struct {
 	Triage      string `json:"triage,omitempty"`
 	TriageModel string `json:"triage_model,omitempty"`
 
+	// Where the provider and the model in use came from: the env file, the
+	// process environment, `config set`, or the defaults. EnvFile is the file
+	// the daemon's settings were read from.
+	ProviderSource string `json:"provider_source,omitempty"`
+	ModelSource    string `json:"model_source,omitempty"`
+	EnvFile        string `json:"env_file,omitempty"`
 }
+
+// SourceConfigSet is the source of a provider or model set at the terminal.
+const SourceConfigSet = "config set"
 
 func (s *Server) configResponse(snap settings.Snapshot) ConfigResponse {
 	out := ConfigResponse{
-		Snapshot: snap, Triage: "none",
+		Snapshot: snap, Triage: "none", EnvFile: config.LoadedFile(),
+		ProviderSource: config.Source("SHOULDER_LLM"), ModelSource: config.Source("SHOULDER_LLM_MODEL"),
+	}
+	prov, model := s.Pipe.Settings.SetAtRuntime()
+	if prov {
+		out.ProviderSource = SourceConfigSet
+	}
+	if model {
+		out.ModelSource = SourceConfigSet
 	}
 	if t := s.Pipe.Triage; t != nil {
 		out.Triage = t.Name()

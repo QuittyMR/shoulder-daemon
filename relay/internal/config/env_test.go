@@ -2,6 +2,8 @@ package config
 
 import (
 	"log/slog"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -69,5 +71,38 @@ func TestDryRunIsReadFromTheEnvironment(t *testing.T) {
 	t.Setenv("SHOULDER_DRY_RUN", "")
 	if Load().Budget.DryRun {
 		t.Fatal("dry run must be off by default")
+	}
+}
+
+// The process environment wins over the file, except that a container runtime
+// that loaded the file put the file's values there, and says which file.
+func TestSourceSaysWhereASettingCameFrom(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "env")
+	if err := os.WriteFile(path, []byte("SHOULDER_LLM=gemini\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHOULDER_ENV_FILE", path)
+	t.Setenv(EnvFileLoaded, "")
+	t.Setenv("SHOULDER_LLM", "")
+	t.Setenv("SHOULDER_MEMORY", "")
+	ResetEnvFile()
+	t.Cleanup(ResetEnvFile)
+
+	if got := Source("SHOULDER_LLM"); got != SourceFile {
+		t.Errorf("a value only the file sets: %q", got)
+	}
+	if got := Source("SHOULDER_MEMORY"); got != SourceDefault {
+		t.Errorf("a value nothing sets: %q", got)
+	}
+	t.Setenv("SHOULDER_LLM", "openrouter")
+	if got, file := Source("SHOULDER_LLM"), FileSetting("SHOULDER_LLM"); got != SourceEnvironment || file != "gemini" {
+		t.Errorf("an exported value: %q; the file still says %q", got, file)
+	}
+	if LoadedFile() != path {
+		t.Errorf("LoadedFile = %q, want %q", LoadedFile(), path)
+	}
+	t.Setenv(EnvFileLoaded, "/host/env")
+	if got := Source("SHOULDER_LLM"); got != SourceFile || LoadedFile() != "/host/env" {
+		t.Errorf("under a runtime that loaded the file: %q from %q", got, LoadedFile())
 	}
 }

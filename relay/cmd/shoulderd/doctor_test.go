@@ -14,21 +14,64 @@ import (
 	"testing"
 
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/cliapi"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/config"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/httpapi"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/settings"
 )
 
 // relay stands in for a daemon that has seen the given events, turned away the
-// given number of hooks, and holds a store that answers. doctor reads the first
-// two off the metrics scrape and asks the daemon for the third.
+// given number of hooks, holds a store that answers and runs the model the env
+// file asks for. doctor reads the first two off the metrics scrape and asks the
+// daemon for the rest.
 func relay(t *testing.T, healthy bool, seen []string, unauthorised int) *httptest.Server {
 	t.Helper()
-	return relayWithMemory(t, healthy, seen, unauthorised,
-		&cliapi.MemoryStatus{Name: "mcp-memory-service", Configured: true, OK: true})
+	srv := relayRunning(t, healthy, seen, unauthorised,
+		&cliapi.MemoryStatus{Name: "mcp-memory-service", Configured: true, OK: true},
+		&cliapi.ConfigResponse{Snapshot: settings.Snapshot{Provider: "gemini", Model: "gemini-flash-lite-latest"}})
+	envFileSays(t, "SHOULDER_LLM=gemini", "SHOULDER_MEMORY_URL=http://127.0.0.1:8100")
+	return srv
 }
 
 // relayWithMemory is the same stand-in with the store's answer chosen by the
-// caller. A nil status is a daemon too old to know the route.
+// caller, and an env file that asks for that store. A nil status is a daemon
+// too old to know the route.
 func relayWithMemory(t *testing.T, healthy bool, seen []string, unauthorised int, mem *cliapi.MemoryStatus) *httptest.Server {
+	t.Helper()
+	switch {
+	case mem == nil:
+		envFileSays(t)
+	case mem.Name == "mcp-memory-service":
+		envFileSays(t, "SHOULDER_MEMORY_URL=http://127.0.0.1:8100")
+	default:
+		envFileSays(t, "SHOULDER_MEMORY="+mem.Name)
+	}
+	return relayRunning(t, healthy, seen, unauthorised, mem, nil)
+}
+
+// envFileSays points the env file at one holding lines, and clears the process
+// environment of everything doctor compares, so that neither the machine the
+// tests run on nor the order they run in decides what is expected.
+func envFileSays(t *testing.T, lines ...string) string {
+	t.Helper()
+	for _, k := range []string{"SHOULDER_LLM", "SHOULDER_LLM_MODEL", "SHOULDER_MEMORY", "SHOULDER_MEMORY_URL", "SHOULDER_TOKEN"} {
+		t.Setenv(k, "")
+	}
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	path := filepath.Join(t.TempDir(), "env")
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHOULDER_ENV_FILE", path)
+	config.ResetEnvFile()
+	t.Cleanup(config.ResetEnvFile)
+	return path
+}
+
+// relayRunning is the stand-in with every answer chosen by the caller. A nil
+// one is a route the daemon does not know.
+func relayRunning(t *testing.T, healthy bool, seen []string, unauthorised int,
+	mem *cliapi.MemoryStatus, running *cliapi.ConfigResponse,
+) *httptest.Server {
 	t.Helper()
 	var scrape strings.Builder
 	for _, e := range seen {
@@ -53,6 +96,12 @@ func relayWithMemory(t *testing.T, healthy bool, seen []string, unauthorised int
 				return
 			}
 			_ = json.NewEncoder(w).Encode(mem)
+		case "/v1/cli/config":
+			if running == nil {
+				http.NotFound(w, r)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(running)
 		default:
 			http.NotFound(w, r)
 		}
@@ -387,5 +436,210 @@ func TestDoctorDescribesTheDocsStoreFromWhereItWasTyped(t *testing.T) {
 	out = stdout(t, func() { code = c.dispatch("doctor", []string{"--addr=" + srv.URL, "--json"}) })
 	if code != 0 || !strings.Contains(out, `"memory_overridden": "SHOULDER_MEMORY=docs is ignored`) {
 		t.Fatalf("exit %d; the JSON must carry the precedence note:\n%s", code, out)
+	}
+}
+
+// daemonRuns is what the stand-in daemon reports it runs and where each value
+// came from. An empty envFile is the file doctor itself reads.
+type daemonRuns struct {
+	provider, providerSource, model, modelSource string
+	store, storeSource, openError, envFile       string
+	triage                                       string
+}
+
+// doctorAgainst runs doctor with args against a daemon that runs d, with the
+// env file holding lines.
+func doctorAgainst(t *testing.T, d daemonRuns, args []string, lines ...string) (int, string) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	noRelease(t)
+	path := envFileSays(t, lines...)
+	if d.envFile == "" {
+		d.envFile = path
+	}
+	srv := relayRunning(t, true, httpapi.RoutineEvents(), 0,
+		&cliapi.MemoryStatus{
+			Name: d.store, Configured: d.store != "none", OK: d.store != "none",
+			Source: d.storeSource, EnvFile: d.envFile, OpenError: d.openError,
+		},
+		&cliapi.ConfigResponse{
+			Snapshot:       settings.Snapshot{Provider: d.provider, Model: d.model},
+			ProviderSource: d.providerSource, ModelSource: d.modelSource, EnvFile: d.envFile,
+			Triage: d.triage,
+		})
+	c := &cli{out: io.Discard, err: io.Discard}
+	var code int
+	out := stdout(t, func() { code = c.dispatch("doctor", append([]string{"--addr=" + srv.URL}, args...)) })
+	return code, out
+}
+
+// fromFile is a daemon that started on the env file and runs what fileAsks
+// asks for.
+var fromFile = daemonRuns{
+	provider: "gemini", providerSource: config.SourceFile, model: "gemini-flash-lite-latest", modelSource: config.SourceDefault,
+	store: "mcp-memory-service", storeSource: config.SourceFile,
+}
+
+var fileAsks = []string{"SHOULDER_LLM=gemini", "SHOULDER_MEMORY_URL=http://127.0.0.1:8100"}
+
+func TestDoctorIsCleanWhenTheDaemonRunsWhatTheEnvFileAsksFor(t *testing.T) {
+	code, out := doctorAgainst(t, fromFile, nil, fileAsks...)
+	if code != 0 || strings.Contains(out, "MISMATCH") || strings.Contains(out, "note:") ||
+		!strings.Contains(out, "llm:     gemini (gemini-flash-lite-latest)") {
+		t.Fatalf("exit %d, want 0 and the running model named:\n%s", code, out)
+	}
+
+	chain := fromFile
+	chain.provider = "gemini→openrouter"
+	code, out = doctorAgainst(t, chain, nil, "SHOULDER_LLM=Gemini, openrouter", "SHOULDER_MEMORY_URL=http://127.0.0.1:8100")
+	if code != 0 || strings.Contains(out, "MISMATCH") {
+		t.Fatalf("exit %d; a chain is named the way the daemon names it:\n%s", code, out)
+	}
+}
+
+// A daemon with no decision model observes and says nothing, and looked
+// healthy to every other line of this report for weeks.
+func TestDoctorFailsWithoutADecisionModel(t *testing.T) {
+	d := fromFile
+	d.provider, d.providerSource, d.model = "none", config.SourceDefault, ""
+	code, out := doctorAgainst(t, d, nil, "SHOULDER_MEMORY_URL=http://127.0.0.1:8100")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	if !strings.Contains(out, "llm:     NONE") || !strings.Contains(out, "SHOULDER_LLM") || strings.Contains(out, "MISMATCH") {
+		t.Fatalf("output must name the missing model, and nothing it disagrees with:\n%s", out)
+	}
+}
+
+// The incident: the file asks for a model, and the daemon was started from an
+// environment that never saw it.
+func TestDoctorFailsWhenTheDaemonStartedWithoutTheModelTheFileAsksFor(t *testing.T) {
+	d := fromFile
+	d.provider, d.providerSource, d.model = "none", config.SourceDefault, ""
+	code, out := doctorAgainst(t, d, nil, fileAsks...)
+	if code != 1 || !strings.Contains(out, "asks for the model provider gemini; the daemon started with nothing set and runs none") {
+		t.Fatalf("exit %d; output must say what the file asks for and that nothing set what runs:\n%s", code, out)
+	}
+}
+
+func TestDoctorNamesWhichFileAStaleDaemonStartedFrom(t *testing.T) {
+	d := fromFile
+	d.provider = "openrouter"
+	code, out := doctorAgainst(t, d, nil, fileAsks...)
+	if code != 1 || !strings.Contains(out, "started from this file, since edited and runs openrouter") ||
+		!strings.Contains(out, "restart it") {
+		t.Fatalf("exit %d; a file edited since the start must be named as such:\n%s", code, out)
+	}
+
+	d.envFile = "/elsewhere/env"
+	code, out = doctorAgainst(t, d, nil, fileAsks...)
+	if code != 1 || !strings.Contains(out, "started from /elsewhere/env, not this file") {
+		t.Fatalf("exit %d; a daemon started on another file must name it:\n%s", code, out)
+	}
+}
+
+// A value the daemon's own environment or `config set` gave it beat the file
+// on purpose, so it is said and not failed.
+func TestDoctorOnlyNotesAModelChosenOverTheFile(t *testing.T) {
+	d := fromFile
+	d.provider, d.providerSource = "openrouter", config.SourceEnvironment
+	code, out := doctorAgainst(t, d, nil, fileAsks...)
+	if code != 0 || strings.Contains(out, "MISMATCH") || !strings.Contains(out, "note: the model provider openrouter comes from the daemon's process environment") {
+		t.Fatalf("exit %d, want 0 and a note naming the environment:\n%s", code, out)
+	}
+
+	d.providerSource = cliapi.SourceConfigSet
+	code, out = doctorAgainst(t, d, nil, fileAsks...)
+	if code != 0 || !strings.Contains(out, "was set with `config set`") || !strings.Contains(out, "a restart returns to") {
+		t.Fatalf("exit %d, want 0 and a note naming config set:\n%s", code, out)
+	}
+}
+
+// The model is compared only where the file names one; otherwise the daemon
+// runs the preset's default and there is nothing to disagree with.
+func TestDoctorComparesTheModelOnlyWhereTheFileNamesOne(t *testing.T) {
+	code, out := doctorAgainst(t, fromFile, nil, append(fileAsks, "SHOULDER_LLM_MODEL=gemini-2.5-flash")...)
+	if code != 1 || !strings.Contains(out, "asks for the model gemini-2.5-flash; the daemon started with nothing set and runs gemini-flash-lite-latest") {
+		t.Fatalf("exit %d; a model other than the file's must fail:\n%s", code, out)
+	}
+
+	d := fromFile
+	d.model, d.modelSource = "gemini-2.5-flash", config.SourceFile
+	code, out = doctorAgainst(t, d, nil, append(fileAsks, "SHOULDER_LLM_MODEL=gemini-2.5-flash")...)
+	if code != 0 || strings.Contains(out, "MISMATCH") {
+		t.Fatalf("exit %d; the model the file names is the clean case:\n%s", code, out)
+	}
+}
+
+func TestDoctorFailsWhenTheDaemonKeepsAnotherStoreThanTheEnvFileAsksFor(t *testing.T) {
+	d := fromFile
+	d.store, d.storeSource = "local", config.SourceDefault
+	code, out := doctorAgainst(t, d, nil, fileAsks...)
+	if code != 1 || !strings.Contains(out, "asks for the store mcp-memory-service; the daemon started with nothing set and runs local") {
+		t.Fatalf("exit %d; output must say which store the file asks for and which runs:\n%s", code, out)
+	}
+
+	d.store, d.storeSource = "mcp-memory-service", config.SourceFile
+	code, out = doctorAgainst(t, d, nil, "SHOULDER_LLM=gemini", "SHOULDER_MEMORY=docs")
+	if code != 1 || !strings.Contains(out, "asks for the store docs;") {
+		t.Fatalf("exit %d; a service the file no longer names is stale too:\n%s", code, out)
+	}
+
+	d.storeSource = config.SourceEnvironment
+	code, out = doctorAgainst(t, d, nil, "SHOULDER_LLM=gemini")
+	if code != 0 || !strings.Contains(out, "note: the store mcp-memory-service comes from the daemon's process environment") {
+		t.Fatalf("exit %d; a store from the environment is a note:\n%s", code, out)
+	}
+}
+
+// A store that could not be opened is not the wrong store: the file may be
+// right, and sending somebody to edit it would be sending them the wrong way.
+func TestDoctorSaysWhenTheStoreFailedToOpen(t *testing.T) {
+	d := fromFile
+	d.store, d.storeSource, d.openError = "none", config.SourceDefault, "the local store at /x/facts.json: permission denied"
+	code, out := doctorAgainst(t, d, nil, "SHOULDER_LLM=gemini")
+	if code != 1 || !strings.Contains(out, "FAILED TO OPEN: the local store at /x/facts.json: permission denied") ||
+		strings.Contains(out, "MISMATCH") {
+		t.Fatalf("exit %d; output must carry the reason and no mismatch:\n%s", code, out)
+	}
+}
+
+func TestDoctorJSONCarriesTheSourcesAndTheMismatch(t *testing.T) {
+	d := fromFile
+	d.provider, d.providerSource, d.model = "none", config.SourceDefault, ""
+	d.store, d.storeSource = "local", config.SourceDefault
+	code, out := doctorAgainst(t, d, []string{"--json"}, fileAsks...)
+	var v map[string]any
+	if err := json.Unmarshal([]byte(out), &v); err != nil {
+		t.Fatalf("not JSON: %v\n%s", err, out)
+	}
+	if code != 1 || v["llm"] != "none" || v["llm_source"] != config.SourceDefault || v["memory_source"] != config.SourceDefault {
+		t.Fatalf("exit %d; JSON must carry what runs and where it came from: %v", code, v)
+	}
+	for _, k := range []string{"llm_mismatch", "memory_mismatch"} {
+		if msg, _ := v[k].(string); !strings.HasPrefix(msg, "MISMATCH: ") {
+			t.Errorf("JSON %s = %v", k, v[k])
+		}
+	}
+}
+
+// The healthcheck must not turn a container unhealthy over its configuration:
+// restarting it would not change the environment it was created with.
+func TestDoctorLivenessIgnoresAMismatch(t *testing.T) {
+	d := fromFile
+	d.provider, d.providerSource = "none", config.SourceDefault
+	code, _ := doctorAgainst(t, d, []string{"--liveness"}, fileAsks...)
+	if code != 0 {
+		t.Fatalf("liveness exit %d, want 0", code)
+	}
+}
+
+// Triage with no decision model is a supported way to run, not a missing one.
+func TestDoctorAcceptsATriageWithoutADecisionModel(t *testing.T) {
+	d := fromFile
+	d.provider, d.providerSource, d.model, d.triage = "none", config.SourceDefault, "", "jev"
+	code, out := doctorAgainst(t, d, nil, "SHOULDER_MEMORY_URL=http://127.0.0.1:8100", "SHOULDER_TRIAGE=jev")
+	if code != 0 || !strings.Contains(out, "llm:     none (triage only: jev)") || strings.Contains(out, "NONE") {
+		t.Fatalf("exit %d; a triage-only daemon is healthy:\n%s", code, out)
 	}
 }

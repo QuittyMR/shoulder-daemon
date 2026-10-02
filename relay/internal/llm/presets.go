@@ -105,6 +105,19 @@ func EnvSpec() string { return strings.TrimSpace(config.Setting("SHOULDER_LLM"))
 // with a chain, each provider takes its key from its own preset variable.
 func FromEnv() (Provider, error) { return Configure(EnvSpec(), "") }
 
+// SpecNames is the presets a spec names, lower-cased and in order. The empty
+// entries are dropped before anything is counted, so a spec of "gemini," is the
+// one provider it names rather than a chain that happens to be refused a model.
+func SpecNames(spec string) []string {
+	names := make([]string, 0, strings.Count(spec, ",")+1)
+	for _, n := range strings.Split(spec, ",") {
+		if n = strings.ToLower(strings.TrimSpace(n)); n != "" {
+			names = append(names, n)
+		}
+	}
+	return names
+}
+
 // Configure builds the provider a spec names, where spec has the shape
 // SHOULDER_LLM takes: one preset, or several comma-separated and tried in
 // order. An empty spec is no provider and no error, which is the daemon
@@ -123,15 +136,7 @@ func Configure(spec, model string) (Provider, error) {
 		}
 		return nil, nil
 	}
-	// The empty entries are dropped before anything is counted, so a spec of
-	// "gemini," is the one provider it names rather than a chain that happens
-	// to be refused a model.
-	names := make([]string, 0, strings.Count(spec, ",")+1)
-	for _, n := range strings.Split(spec, ",") {
-		if n = strings.ToLower(strings.TrimSpace(n)); n != "" {
-			names = append(names, n)
-		}
-	}
+	names := SpecNames(spec)
 	if len(names) == 0 {
 		if model != "" {
 			return nil, fmt.Errorf("a model was named but the provider %q names nothing; use one of %s", spec, strings.Join(Presets(), ", "))

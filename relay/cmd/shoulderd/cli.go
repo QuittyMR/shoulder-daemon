@@ -119,7 +119,8 @@ Flags come before the text: shoulderd message --no-update "your question"
 const doctorUsage = `usage: shoulderd doctor [--addr=URL] [--json] [--liveness]
 
 Report whether the relay is running, whether the harness has ever reached it,
-and whether anything is being remembered.
+whether anything is being remembered, and whether the decision model and the
+store it runs are the ones the env file asks for.
 
   --addr URL   relay base URL (default http://127.0.0.1:8787)
   --json       machine-readable output

@@ -98,7 +98,7 @@ func Load() Config {
 		WindowChars:    envInt("WINDOW_CHARS", 12000),
 		MemoryURL:      Setting("SHOULDER_MEMORY_URL"),
 		MemoryKey:      Setting("SHOULDER_MEMORY_KEY"),
-		Memory:         memoryBackend(Setting("SHOULDER_MEMORY")),
+		Memory:         MemoryBackend(Setting("SHOULDER_MEMORY")),
 		MemoryPath:     Env("SHOULDER_MEMORY_PATH", memory.DefaultLocalPath()),
 		GlobalDocs:     Env("SHOULDER_GLOBAL_DOCS", memory.DefaultGlobalDocsDir()),
 		DocsDir:        Env("SHOULDER_DOCS_DIR", memory.DefaultDocsDirName),
@@ -188,10 +188,10 @@ const (
 	MemoryDocs  = "docs"
 )
 
-// memoryBackend reads the store by name. An unrecognised value is the JSON
+// MemoryBackend reads the store by name. An unrecognised value is the JSON
 // file, for the reason a bad log level is info: the daemon is still useful
 // with it, and the startup line says which was chosen.
-func memoryBackend(s string) string {
+func MemoryBackend(s string) string {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case MemoryDocs:
 		return MemoryDocs

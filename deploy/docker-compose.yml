@@ -31,6 +31,10 @@ services:
       - path: ${SHOULDER_ENV_FILE:?set SHOULDER_ENV_FILE to the daemon env file, or run compose through make}
         required: false
     environment:
+      # Under compose the file's values reach the daemon as its environment.
+      # This says which file they came from, so the daemon reports them as the
+      # file's and doctor can tell a stale container from a deliberate export.
+      SHOULDER_ENV_FILE_LOADED: ${SHOULDER_ENV_FILE}
       # The hash of the file as it was when this container was created, which
       # `make up` compares with the file now; see scripts/up.sh.
       SHOULDER_ENV_HASH: ${SHOULDER_ENV_HASH:?run compose through make, which hashes the env file}

@@ -239,13 +239,30 @@ without the values; move any daemon setting among them to the env file and delet
 To check the relay itself rather than the hooks:
 
 ```bash
-./bin/shoulderd doctor            # relay, metrics, the store, and which hook events have ever fired
+./bin/shoulderd doctor            # relay, metrics, the store, the model, and which hook events have ever fired
 ./bin/shoulderd doctor --json     # the same, machine-readable
 ./bin/shoulderd doctor --liveness # only "is the process serving?", for container healthchecks
 ```
 
 `--liveness` exists because a correctly running relay has seen no hooks at all until somebody
 starts a coding session, so a healthcheck must ask the weaker question.
+
+Doctor also reads the env file and compares it with what the daemon runs: the provider, the model
+when the file names one with `SHOULDER_LLM_MODEL`, and the store. The daemon reports where each of
+its values came from - the env file, its process environment, `config set`, or nothing - and that
+decides what a difference means:
+
+- From the env file or from nothing: the daemon started before the file was last edited, or from
+  another file. Doctor fails with `MISMATCH`, names both files, and says to restart it (`make up`
+  for the container).
+- From the process environment or `config set`: somebody chose it over the file. Doctor prints a
+  `note:` and does not fail.
+
+It also fails when the daemon has no decision model (`llm: NONE`) - a triage on its own is a
+supported way to run and reads `llm: none (triage only: jev)` - and when the store failed to open
+at start (`memory: FAILED TO OPEN` with the reason), which is a broken store rather than the wrong
+one. `--liveness` checks none of this: restarting a container does not change the environment it
+was created with.
 
 ## 6. Where the facts go
 
@@ -522,7 +539,8 @@ providers in one don't share model ids either - the same restriction `SHOULDER_L
 can't supply one.
 
 None of it is written down. A restart returns to whatever the environment says, so the env file stays
-the single description of how the daemon is meant to run.
+the single description of how the daemon is meant to run. `shoulderd doctor` notes a provider or a
+model changed here that differs from the file, without failing.
 
 Both commands are a thin client over `GET /v1/cli/config` and `PATCH /v1/cli/config`, which honour
 `SHOULDER_TOKEN` like every other CLI route.

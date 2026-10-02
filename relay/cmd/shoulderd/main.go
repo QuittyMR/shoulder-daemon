@@ -88,6 +88,7 @@ func serve() error {
 	// default, because a daemon that cannot write is a daemon that watched a
 	// whole session and kept none of it.
 	var mem memory.Connector
+	var memErr string
 	switch {
 	case cfg.MemoryURL != "":
 		store := memory.NewMCPMemory(cfg.MemoryURL, cfg.MemoryKey, 15*time.Second)
@@ -126,7 +127,7 @@ func serve() error {
 			if derr != nil {
 				log.Error("the docs store could not be opened; nothing will be recalled or stored",
 					"global", cfg.GlobalDocs, "error", derr)
-				mem = memory.Nop{}
+				mem, memErr = memory.Nop{}, "the docs store: "+derr.Error()
 				break
 			}
 			// Closed on the way out, once serveUntil has let the requests and
@@ -151,7 +152,7 @@ func serve() error {
 		if lerr != nil {
 			log.Error("the local store could not be opened; nothing will be recalled or stored",
 				"path", cfg.MemoryPath, "error", lerr)
-			mem = memory.Nop{}
+			mem, memErr = memory.Nop{}, "the local store at "+cfg.MemoryPath+": "+lerr.Error()
 			break
 		}
 		defer func() { _ = local.Close() }()
@@ -185,7 +186,9 @@ func serve() error {
 	// and live in another package only because this one may not import the
 	// advisor or the store.
 	mux := srv.Handler()
-	cliapi.New(pipe, token).Mount(mux)
+	api := cliapi.New(pipe, token)
+	api.MemoryOpenError = memErr
+	api.Mount(mux)
 
 	hs := &http.Server{
 		Addr:              cfg.Addr,
@@ -361,6 +364,10 @@ func (c *cli) doctor(args []string) int {
 	} else {
 		out["memory_name"] = st.Name
 		switch {
+		case st.OpenError != "":
+			out["memory"] = "failed"
+			out["memory_error"] = st.OpenError
+			code = 1
 		case !st.Configured:
 			out["memory"] = "none"
 			code = 1
@@ -374,6 +381,17 @@ func (c *cli) doctor(args []string) int {
 		if st.Overridden != "" {
 			out["memory_overridden"] = st.Overridden
 		}
+		// A store that failed to open is not the wrong store, and saying it
+		// is would send somebody to edit a file that is already right.
+		if st.OpenError == "" {
+			out["memory_source"] = st.Source
+			if msg, stale := compare("store", st.Name, st.Source, st.EnvFile, wantMemory()); stale {
+				out["memory_mismatch"] = msg
+				code = 1
+			} else if msg != "" {
+				out["memory_note"] = msg
+			}
+		}
 		// The docs store keeps local facts with the checkout, so whether this
 		// directory has any is a question doctor can answer from where it was
 		// typed, and the daemon cannot.
@@ -382,6 +400,52 @@ func (c *cli) doctor(args []string) int {
 			if dir, files, ok := docsHere(st.DocsDir); ok {
 				out["memory_docs_here"] = dir
 				out["memory_docs_files"] = files
+			}
+		}
+	}
+
+	// The daemon reads its environment once, when it starts, and a container
+	// keeps the environment it was created with. Both mean the file a person
+	// edits and the daemon that is running can disagree for weeks without a
+	// single error, so what the file asks for is compared with what runs.
+	var running cliapi.ConfigResponse
+	if lerr := cliGet(*base, "/v1/cli/config", &running); lerr != nil {
+		out["llm"] = "unknown: " + lerr.Error()
+	} else {
+		out["llm"] = running.Provider
+		out["llm_source"] = running.ProviderSource
+		if running.Model != "" {
+			out["llm_model"] = running.Model
+			out["llm_model_source"] = running.ModelSource
+		}
+		// A triage with no decision model is a supported way to run: stored
+		// facts are still repeated, only none is deduced from a turn.
+		switch {
+		case running.Provider != providerName(nil):
+		case running.Triage != "" && running.Triage != "none":
+			out["llm_triage"] = running.Triage
+		default:
+			code = 1
+		}
+		names := llm.SpecNames(config.FileSetting("SHOULDER_LLM"))
+		want := providerName(nil)
+		if len(names) > 0 {
+			want = strings.Join(names, "→")
+		}
+		if msg, stale := compare("model provider", running.Provider, running.ProviderSource, running.EnvFile, want); stale {
+			out["llm_mismatch"] = msg
+			code = 1
+		} else if msg != "" {
+			out["llm_note"] = msg
+		}
+		// The model is compared only where the file names one: otherwise it is
+		// the preset's default, which this command has no business guessing.
+		if model := config.FileSetting("SHOULDER_LLM_MODEL"); model != "" && len(names) == 1 && running.Provider == want {
+			if msg, stale := compare("model", running.Model, running.ModelSource, running.EnvFile, model); stale {
+				out["llm_model_mismatch"] = msg
+				code = 1
+			} else if msg != "" {
+				out["llm_model_note"] = msg
 			}
 		}
 	}
@@ -466,6 +530,10 @@ func (c *cli) doctor(args []string) int {
 		fmt.Println("memory:  NONE: nothing is stored and nothing is recalled")
 		fmt.Println("         Start a store and give the daemon SHOULDER_MEMORY_URL; the two-line")
 		fmt.Println("         version is in the README, the rest in docs/INSTALL.md.")
+	case "failed":
+		fmt.Printf("memory:  FAILED TO OPEN: %v\n", out["memory_error"])
+		fmt.Println("         The daemon started on no store at all; nothing is stored or recalled")
+		fmt.Println("         until the cause is fixed and it is restarted.")
 	case "unreachable":
 		fmt.Printf("memory:  UNREACHABLE (%v): %v\n", out["memory_name"], out["memory_error"])
 		fmt.Println("         The daemon holds a store it cannot read. Sessions look normal and")
@@ -476,6 +544,20 @@ func (c *cli) doctor(args []string) int {
 	if why, ok := out["memory_overridden"].(string); ok {
 		fmt.Printf("         %s\n", why)
 	}
+	printFinding(out, "memory_mismatch", "memory_note")
+	switch name := out["llm"]; {
+	case name == providerName(nil) && out["llm_triage"] != nil:
+		fmt.Printf("llm:     none (triage only: %v); stored facts are repeated, none is deduced from a turn\n", out["llm_triage"])
+	case name == providerName(nil):
+		fmt.Println("llm:     NONE: no decision model; the daemon observes and stays silent")
+		fmt.Printf("         Set SHOULDER_LLM in %s to one of: %s\n", envFilePath(), strings.Join(llm.Presets(), ", "))
+	case out["llm_model"] != nil:
+		fmt.Printf("llm:     %v (%v)\n", name, out["llm_model"])
+	default:
+		fmt.Printf("llm:     %v\n", name)
+	}
+	printFinding(out, "llm_mismatch", "llm_note")
+	printFinding(out, "llm_model_mismatch", "llm_model_note")
 	if missing, ok := out["events_never_seen"].([]string); ok {
 		if len(missing) == 0 {
 			fmt.Println("hooks:   all expected events have fired at least once")
@@ -501,34 +583,87 @@ func docsHere(name string) (dir string, files int, ok bool) {
 	return dir, len(found), true
 }
 
+// compare weighs a value the daemon runs against the one the env file asks for
+// now. Only a value the daemon took from the file, or from nothing, is stale
+// when the two differ: the file was edited after it started, or it started
+// from another file. One from its own environment or from `config set` beat the
+// file on purpose, so it is reported and not failed.
+func compare(what, running, source, daemonFile, want string) (msg string, stale bool) {
+	if running == want {
+		return "", false
+	}
+	file := envFilePath()
+	switch source {
+	case cliapi.SourceConfigSet:
+		return fmt.Sprintf("note: the %s %s was set with `config set`; %s asks for %s, which a restart returns to",
+			what, running, file, want), false
+	case config.SourceEnvironment:
+		return fmt.Sprintf("note: the %s %s comes from the daemon's process environment, which wins over %s asking for %s",
+			what, running, file, want), false
+	}
+	from := "with nothing set"
+	switch {
+	case source == config.SourceFile && daemonFile != file:
+		from = "from " + daemonFile + ", not this file"
+	case source == config.SourceFile:
+		from = "from this file, since edited"
+	case source == "":
+		from = "from a source it does not report"
+	}
+	return fmt.Sprintf("MISMATCH: %s asks for the %s %s; the daemon started %s and runs %s. "+
+		"It reads its settings only at start: restart it, or `make up` for the container.",
+		file, what, want, from, running), true
+}
+
+// startLog is the file ensure-daemon.sh keeps the start command's output in,
+func printFinding(out map[string]any, mismatch, note string) {
+	for _, k := range []string{mismatch, note} {
+		if msg, ok := out[k].(string); ok {
+			fmt.Printf("         %s\n", msg)
+		}
+	}
+}
+
+// wantMemory is the store the env file asks for, by the precedence the daemon
+// applies: a memory service, when named, beats the rest.
+func wantMemory() string {
+	if config.FileSetting("SHOULDER_MEMORY_URL") != "" {
+		return (&memory.MCPMemory{}).Name()
+	}
+	return config.MemoryBackend(config.FileSetting("SHOULDER_MEMORY"))
+}
+
 // memoryStatus asks the daemon whether anything is being remembered. Only the
 // daemon can answer: the store is named in its environment, not in the shell
 // doctor was typed into, and reaching a URL proves nothing about a backend that
 // refuses every request behind it.
 func memoryStatus(base string) (cliapi.MemoryStatus, error) {
 	var st cliapi.MemoryStatus
-	req, err := http.NewRequest(http.MethodGet, strings.TrimSuffix(base, "/")+"/v1/cli/memory", nil)
+	err := cliGet(base, "/v1/cli/memory", &st)
+	return st, err
+}
+
+// cliGet reads one CLI route into out, with the token the daemon expects.
+func cliGet(base, path string, out any) error {
+	req, err := http.NewRequest(http.MethodGet, strings.TrimSuffix(base, "/")+path, nil)
 	if err != nil {
-		return st, err
+		return err
 	}
 	if token := setting("SHOULDER_TOKEN"); token != "" {
 		req.Header.Set("X-Shoulder-Token", token)
 	}
 	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
 	if err != nil {
-		return st, err
+		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		// A daemon older than this CLI has never heard of the route, and a
 		// token mismatch is already reported on its own line. Neither is a
-		// verdict on the store, so neither becomes one.
-		return st, fmt.Errorf("the daemon answered %s", resp.Status)
+		// verdict on what the route reports, so neither becomes one.
+		return fmt.Errorf("the daemon answered %s", resp.Status)
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxReplyBytes)).Decode(&st); err != nil {
-		return st, err
-	}
-	return st, nil
+	return json.NewDecoder(io.LimitReader(resp.Body, maxReplyBytes)).Decode(out)
 }
 
 // counterValue reads one Prometheus counter out of a scrape. It returns 0 when

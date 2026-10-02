@@ -1,6 +1,6 @@
 ---
 name: setup-shoulder-daemon
-description: Interview the user and configure shoulder-daemon on their behalf - decision model and its key, memory backend, ranking model, and the mcp-memory-service container when they want one - running every download and container start here, then restarting the daemon and proving it with doctor. Use when the plugin has just been installed, when someone asks to set up, configure, reconfigure, or fix shoulder-daemon, when they want to change its model, provider, pickiness or memory store, or when `shoulderd doctor` reports NONE, UNREACHABLE, STALE, REJECTED, or no decision model.
+description: Interview the user and configure shoulder-daemon on their behalf - decision model and its key, memory backend, ranking model, and the mcp-memory-service container when they want one - running every download and container start here, then restarting the daemon and proving it with doctor. Use when the plugin has just been installed, when someone asks to set up, configure, reconfigure, or fix shoulder-daemon, when they want to change its model, provider, pickiness or memory store, or when `shoulderd doctor` reports NONE, UNREACHABLE, FAILED TO OPEN, MISMATCH, STALE, REJECTED, or no decision model.
 allowed-tools: Bash, Read, Write, AskUserQuestion
 ---
 
@@ -60,10 +60,24 @@ Read the report:
   restart.
 - `memory: UNREACHABLE` - a store is configured that cannot be read. That is
   question 2 below, and it is urgent: sessions look normal while nothing is kept.
+- `memory: FAILED TO OPEN` - the built-in store could not be opened at start,
+  for the reason printed. The file is not the problem; fix the cause (usually
+  ownership of the store's directory or volume) and restart.
+- `llm: NONE` - no decision model. That is question 1. `llm: none (triage
+  only: jev)` is a triage running without one, which is supported; ask whether
+  the user wants a decision model as well rather than treating it as broken.
 - A `make up` warning that `deploy/.env` still sets some names - move any
   daemon setting among them into the env file with `"$S" copy NAME` after the
   user exports it, or `"$S" set NAME VALUE` for a non-secret, then have the
   user delete those lines from `deploy/.env`. Never read that file yourself.
+- `MISMATCH` under `memory:` or `llm:` - the env file asks for something other
+  than what the daemon runs, and the daemon took its value from that file or
+  from nothing: it started before the file was edited, or from another file,
+  which the line names. Restart it (section 5) before asking anything; the file
+  may already say what the user wants.
+- `note:` under the same lines - the daemon runs a value from its own process
+  environment or from `config set`, chosen over the file. Not a failure; ask
+  whether the file should say the same.
 
 ## 2. The interview
 
@@ -203,12 +217,17 @@ shoulderd doctor
 
 `shoulderd config set --provider=... --model=... --pickiness=...` changes a
 running daemon without a restart, but writes nothing down, so it is for trying a
-setting out - not a substitute for the file.
+setting out - not a substitute for the file. While a tried value differs from
+the file, doctor prints a `note:` for it and does not fail; write the value with
+the helper and restart once the user settles on it.
 
 Then verify, and treat the verification as the deliverable:
 
-- `shoulderd doctor` must show `memory: ok (...)` and the provider the user
-  chose. `memory: NONE` or `UNREACHABLE` means the work is not done.
+- `shoulderd doctor` must show `memory: ok (...)` and `llm: <provider> (<model>)`
+  with the provider the user chose, and no `MISMATCH` line. `memory: NONE`,
+  `UNREACHABLE` or `FAILED TO OPEN`, `llm: NONE`, or a `MISMATCH` means the work
+  is not done. Doctor exits 1 for any of these, and also for hook events it has
+  not seen yet, so read the lines rather than the exit code.
 - `doctor` also reports hook events it has never seen. Some only appear after
   the user's next turn, so say which ones are still outstanding rather than
   claiming a clean result you have not seen.

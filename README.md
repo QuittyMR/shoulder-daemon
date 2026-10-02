@@ -138,6 +138,9 @@ manager or an editor - which is what stops a key that is set in your login shell
 from being invisible to the process that needs it.
 
 Use `shoulderd doctor` to verify the validity of your installation and setup.
+It fails when the daemon has no decision model (a triage on its own passes),
+when its store failed to open, and when it runs another model or store than this file asks for because it
+started before the file was edited or from another file.
 
 Running from a checkout, a container or a service manager is covered in
 [docs/INSTALL.md](docs/INSTALL.md), along with every setting.

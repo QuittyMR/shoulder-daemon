@@ -76,6 +76,41 @@ func Setting(name string) string {
 	return envFile()[name]
 }
 
+// Where a setting came from, as Source reports it.
+const (
+	SourceEnvironment = "process environment"
+	SourceFile        = "env file"
+	SourceDefault     = "default"
+)
+
+// EnvFileLoaded names the file a container runtime read into this process's
+// environment. A daemon under compose finds its env file's values among its
+// own variables, and without this would report a value the file set as one
+// somebody exported, which is the one distinction doctor needs.
+const EnvFileLoaded = "SHOULDER_ENV_FILE_LOADED"
+
+// Source says where Setting finds name.
+func Source(name string) string {
+	switch {
+	case os.Getenv(name) != "" && os.Getenv(EnvFileLoaded) != "":
+		return SourceFile
+	case os.Getenv(name) != "":
+		return SourceEnvironment
+	case envFile()[name] != "":
+		return SourceFile
+	}
+	return SourceDefault
+}
+
+// LoadedFile is the env file this process's settings came from: the one the
+// container runtime read for it, or the one it reads itself.
+func LoadedFile() string {
+	if path := os.Getenv(EnvFileLoaded); path != "" {
+		return path
+	}
+	return EnvFilePath()
+}
+
 // FileSetting reads one variable from the env file alone. It is what the file
 // asks for now, which a daemon started before the last edit does not know.
 func FileSetting(name string) string {
