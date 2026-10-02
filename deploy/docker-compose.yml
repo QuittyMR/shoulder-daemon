@@ -22,12 +22,18 @@ services:
     # relay reachable off-box would let anything on the network inject text
     # into a live coding session.
     network_mode: host
-    # Resolved relative to this file, so a fresh clone works wherever it sits.
-    # Copy .env.example to .env and put your keys there, or point
-    # SHOULDER_ENV_FILE at a file you keep outside the repository.
+    # The one file the daemon, the CLI and the adapters read:
+    # $SHOULDER_ENV_FILE, or ${XDG_CONFIG_HOME:-~/.config}/shoulder-daemon/env.
+    # Compose cannot spell that fallback, so the Makefile resolves it and passes
+    # the result; run compose by hand and you name the file yourself. Nothing
+    # else is read, so there is no second file to win over the first.
     env_file:
-      - ${SHOULDER_ENV_FILE:-.env}
+      - path: ${SHOULDER_ENV_FILE:?set SHOULDER_ENV_FILE to the daemon env file, or run compose through make}
+        required: false
     environment:
+      # The hash of the file as it was when this container was created, which
+      # `make up` compares with the file now; see scripts/up.sh.
+      SHOULDER_ENV_HASH: ${SHOULDER_ENV_HASH:?run compose through make, which hashes the env file}
       SHOULDER_ADDR: "127.0.0.1:8787"
       # The store the daemon keeps itself, on a volume rather than in the
       # container: the point of the built-in one is that nothing else has to be

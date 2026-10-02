@@ -1,31 +1,32 @@
 SHELL := /bin/bash
 BIN := bin
-DOCKER := docker
-COMPOSE := $(DOCKER) compose -f deploy/docker-compose.yml
-
-# The memory service is behind a profile so that an install that never asked
-# for it never gets it. Once an install has asked for it, though, every command
-# that brings the stack up has to go on selecting it: compose acts only on the
-# services its profiles name, so without this an `up` or an `update` starts the
-# relay and leaves it pointing at a store that is not there - and the daemon
-# calls that healthy, one failed search at a time. `up` is what
-# SHOULDER_START_CMD runs, so that mistake repeats on every session and stays
-# quiet for days.
-#
-# What is tested is the volume rather than the container, because `make down`
-# removes the container and keeps the volume. Asking after the container means
-# answering no for the whole time that matters - the first `up` after a `down`,
-# when the store is exactly what is missing - and the store would never come
-# back on its own. The volume is created the first time the memory service
-# starts and not before, so a checkout that only ever wanted the built-in store
-# still gets the relay alone. The name is the one compose derives from `name:`
-# in deploy/docker-compose.yml; an install that overrides the project name
-# falls back to relay-only, which is the safe direction to be wrong in.
-MEMORY_PROFILE = $(shell $(DOCKER) volume ls --format '{{.Name}}' 2>/dev/null | grep -qx 'shoulder-daemon_memory-data' && echo --profile memory)
+# The stack is podman's: the relay runs as the user who owns the transcripts
+# through userns keep-id, which docker does not have. podman-compose is named
+# rather than reached through `podman compose`, which picks docker-compose first
+# when it is installed.
+DOCKER := podman
+COMPOSE_BIN := podman-compose
+PROJECT := shoulder-daemon
+COMPOSE_FILES := deploy/docker-compose.yml
+# The daemon's one env file, resolved as the daemon, the CLI and the adapters
+# resolve it, a leading ~/ included. Compose cannot spell the fallback itself -
+# podman-compose has no nested defaults - so it is resolved here and handed to
+# every compose command, with the hash of what it holds: scripts/up.sh compares
+# that with the relay's to tell whether the relay is running on an older file.
+ENV_FILE := $(shell f="$$SHOULDER_ENV_FILE"; case "$$f" in ("~/"*) f="$$HOME/$${f#??}";; esac; printf '%s' "$${f:-$${XDG_CONFIG_HOME:-$$HOME/.config}/shoulder-daemon/env}")
+ENV_HASH := $(shell f='$(ENV_FILE)'; if [ ! -e "$$f" ]; then echo absent; elif command -v sha256sum >/dev/null 2>&1; then sha256sum <"$$f" | cut -c1-64; elif command -v shasum >/dev/null 2>&1; then shasum -a 256 <"$$f" | cut -c1-64; fi)
+ifeq ($(ENV_HASH),)
+$(error cannot hash $(ENV_FILE): it is unreadable, or neither sha256sum nor shasum is installed)
+endif
+LEGACY_ENV := deploy/.env
+STATE_DIR := $(or $(XDG_STATE_HOME),$(HOME)/.local/state)/shoulder-daemon
+COMPOSE = SHOULDER_ENV_FILE='$(ENV_FILE)' SHOULDER_ENV_HASH='$(ENV_HASH)' $(COMPOSE_BIN) -p '$(PROJECT)' $(addprefix -f ,$(COMPOSE_FILES))
+UP = DOCKER='$(DOCKER)' COMPOSE_BIN='$(COMPOSE_BIN)' PROJECT='$(PROJECT)' COMPOSE_FILES='$(COMPOSE_FILES)' \
+	ENV_FILE='$(ENV_FILE)' ENV_HASH='$(ENV_HASH)' LEGACY_ENV='$(LEGACY_ENV)' STATE_DIR='$(STATE_DIR)' scripts/up.sh
 
 GOLANGCI := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
 
-.PHONY: build test adapter-test cover bench lint vulncheck release-check release docker-build up down logs memory doctor e2e clean install-plugins update
+.PHONY: build test adapter-test cover bench lint vulncheck release-check release docker-build up down logs memory doctor e2e clean install-plugins update up-check
 
 build:
 	@mkdir -p $(BIN)
@@ -82,7 +83,7 @@ install-plugins: build
 
 # Everything an update needs, in the order it needs it.
 update: build docker-build install-plugins
-	@$(COMPOSE) $(MEMORY_PROFILE) up -d --force-recreate >/dev/null 2>&1 || true
+	@$(UP) update
 	@echo
 	@echo "Daemon rebuilt and restarted, adapters reinstalled."
 	@echo "Restart your editor so it reloads the plugin, then: ./$(BIN)/shoulderd doctor"
@@ -90,15 +91,16 @@ update: build docker-build install-plugins
 docker-build:
 	$(COMPOSE) build
 
-# --no-recreate because this is what SHOULDER_START_CMD runs, every time the
-# daemon idles out and a session brings it back: podman-compose recreates
-# whatever `up` selects even when it is already healthy, so without it a
-# session start bounces the relay out from under itself and makes the store pay
-# its model load, and its 300-second start period, once an hour for nothing.
-# No service is named so that the profile above decides: an install with the
-# store gets both, one without gets the relay.
+# What SHOULDER_START_CMD runs every time the daemon idles out and a session
+# brings it back: starts what is not running, recreates the relay alone when its
+# env file changed, and leaves everything else as it is. scripts/up.sh says why
+# each of those matters.
 up:
-	$(COMPOSE) $(MEMORY_PROFILE) up -d --no-recreate
+	@$(UP) up
+
+# What `up` would decide about the relay, and why, without doing it.
+up-check:
+	@$(UP) check
 
 # mcp-memory-service, for an install that wants it instead of the store the
 # daemon keeps itself. First start pulls an embedding model and takes a few

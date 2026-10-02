@@ -15,11 +15,8 @@ import (
 )
 
 type Config struct {
-	Addr           string
-	Token          string
-	AdvisorBaseURL string
-	AdvisorModel   string
-	AdvisorAPIKey  string
+	Addr  string
+	Token string
 	// AdvisorTimeout bounds the decision pass end to end, not one request to
 	// the model. That pass is a tool loop, so the budget has to cover every
 	// model round trip the pipeline's step cap allows plus the lookup that
@@ -27,7 +24,6 @@ type Config struct {
 	// model that actually uses the tools it was given is exactly the one that
 	// gets cut off. Raising the step cap or the recall timeout moves this.
 	AdvisorTimeout time.Duration
-	SystemPrompt   string
 
 	// MessageTimeout and DigestTimeout bound the two CLI operations. They are
 	// separate from AdvisorTimeout because that one is sized for a background
@@ -94,11 +90,7 @@ func Load() Config {
 	c := Config{
 		Addr:           Env("SHOULDER_ADDR", "127.0.0.1:8787"),
 		Token:          Setting("SHOULDER_TOKEN"),
-		AdvisorBaseURL: Env("ADVISOR_BASE_URL", "http://127.0.0.1:9090"),
-		AdvisorModel:   Env("ADVISOR_MODEL", "shoulder"),
-		AdvisorAPIKey:  Setting("ADVISOR_API_KEY"),
 		AdvisorTimeout: time.Duration(envInt("ADVISOR_TIMEOUT_SECONDS", 90)) * time.Second,
-		SystemPrompt:   Env("ADVISOR_SYSTEM_PROMPT", prompts.Advisor),
 		MessageTimeout: time.Duration(envInt("MESSAGE_TIMEOUT_SECONDS", 60)) * time.Second,
 		DigestTimeout:  time.Duration(envInt("DIGEST_TIMEOUT_SECONDS", 120)) * time.Second,
 		LearnTimeout:   time.Duration(envInt("LEARN_TIMEOUT_SECONDS", 1800)) * time.Second,

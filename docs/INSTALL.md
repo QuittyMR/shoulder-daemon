@@ -194,6 +194,10 @@ unset the relay logs a warning naming the available presets and never speaks; wi
 neither affects your coding session. The full variable table is in
 the repository README; `docs/ADVISOR.md` covers the model side in detail.
 
+`make up` needs podman and podman-compose, called by those names: the relay runs as you through
+`userns_mode: keep-id`, which docker does not have, and `podman compose` is not used because it
+prefers docker-compose when that is installed.
+
 `make up` runs the same binary under `deploy/docker-compose.yml` with host networking, which is
 what keeps the listener on loopback with no port published to any other interface. It also mounts
 `~/.claude/projects` read-only, where Claude Code writes each session's transcript: the Stop hook
@@ -214,9 +218,23 @@ unreadable and sees only the last message of each turn.
 `make up` brings up everything this checkout runs and not only the relay: if the memory service
 has ever been started here, the volume it keeps its database on is still there, and `up` reads
 that as the install having asked for a store and starts it again. It recreates nothing that is
-already running, so it is safe against a healthy stack - which is what a command the editor runs
-at every session start has to be. A relay started without its store answers `/healthz` with
+already running and current, so it is safe against a healthy stack - which is what a command the
+editor runs at every session start has to be. A relay started without its store answers `/healthz` with
 `{"ok":true}` and then fails every recall behind it, quietly, for as long as nobody looks.
+
+The one exception is a relay whose env file has changed since it was created. A container keeps
+the environment it was created with, so without this an edited env file would never reach the
+daemon. The Makefile hashes the file (with `sha256sum`, or `shasum -a 256`) and compose puts the
+hash in the relay's environment as `SHOULDER_ENV_HASH`; when the relay's hash is not the file's -
+or it has none, being older than this - `up` recreates the relay alone, with `--no-deps`, and the
+memory service keeps running. `make up-check` prints the same decision, `current`, `stale` or
+`absent`, and changes nothing. Two sessions starting at once are kept apart with `flock` where it
+is installed. A `${NAME}` in the file takes its value from the environment of whoever runs `make
+up`, so after changing such a variable, run `make down && make up` yourself.
+
+`deploy/.env` is no longer read for the relay. While it sets anything besides `SHOULDER_IMAGE` and
+`SHOULDER_MEMORY_IMAGE`, `make up` and `make update` say so on every run, naming what it sets
+without the values; move any daemon setting among them to the env file and delete the rest.
 
 To check the relay itself rather than the hooks:
 
@@ -566,12 +584,16 @@ whitespace followed by `#`; a `#` inside quotes is part of the value; double quo
 value. `$NAME` without braces is left as it is. docker compose reads some of this differently and is
 not supported.
 
-`deploy/docker-compose.yml` reads `${SHOULDER_ENV_FILE:-.env}`, so with that
-variable set `make up` uses your file, and without it falls back to `deploy/.env`
-next to the compose file. Both are gitignored. If you have an old `deploy/.env`
-lying around from an earlier experiment, the fallback will find it and use it in
-preference to nothing, which is how a daemon ends up running on settings you
-forgot you wrote.
+The container reads the same file and nothing else: `$SHOULDER_ENV_FILE`, or
+`${XDG_CONFIG_HOME:-~/.config}/shoulder-daemon/env`. Compose cannot express that
+fallback, so the Makefile resolves it and passes it to every compose command;
+running compose by hand means setting `SHOULDER_ENV_FILE` yourself, and compose
+refuses to start without it. `deploy/.env` is no longer read for the daemon's
+settings; compose still reads it, as it reads any `.env` beside a compose file,
+for the variables in the compose file itself such as `SHOULDER_IMAGE`. Move the
+daemon's settings out of an old one into the env file, so nobody edits it
+expecting an effect. `make up` recreates the relay when
+the file changes.
 
 `SHOULDER_TOKEN` has to match on both sides: the daemon checks it, and the
 adapter sends it as `X-Shoulder-Token`. The daemon keeps them in step by
@@ -635,14 +657,16 @@ one, so none of these is ever second-guessed by the plugin.
 
 ```bash
 git clone https://gitlab.com/quittymr/shoulder-daemon && cd shoulder-daemon
-cp deploy/.env.example deploy/.env      # add SHOULDER_LLM and a key
+mkdir -p ~/.config/shoulder-daemon     # then add SHOULDER_LLM and a key to
+$EDITOR ~/.config/shoulder-daemon/env  # the env file, see "Where configuration lives"
 make up                                 # container; or: make build && ./bin/shoulderd
 ```
 
 With a container or a systemd unit, point the plugin at it:
 `export SHOULDER_START_CMD="cd /path/to/shoulder-daemon && make up"`. That is the whole stack: an
 install that has added the memory service further down gets it back too, and an `up` against a
-stack that is already healthy leaves it alone.
+healthy stack leaves it alone unless the env file changed since the relay was created.
+
 
 ## Every setting
 

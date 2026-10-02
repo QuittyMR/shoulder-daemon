@@ -15,9 +15,26 @@ Notable changes to shoulder-daemon. The format follows
   the token the daemon generates is written single-quoted, so every value they
   write reads back as itself. A leading `~/` in `SHOULDER_ENV_FILE` is home
   everywhere the file is resolved.
+- `make up-check` prints whether `make up` would recreate the relay, and the
+  names of the variables behind the answer, without doing anything.
 
 ### Fixed
 
+- The container reads the daemon's one env file, `$SHOULDER_ENV_FILE` or
+  `${XDG_CONFIG_HOME:-~/.config}/shoulder-daemon/env`, the file the docs tell
+  you to write and the CLI and the adapters read, and no other. It used to read
+  `deploy/.env` instead, so an install configured as documented ran with no
+  model and the built-in store, silently. `deploy/.env` is no longer read for
+  the daemon's settings: move them into the env file. The Makefile resolves
+  the path; compose run by hand needs `SHOULDER_ENV_FILE` set and refuses to
+  start without it. `make up` and `make update` name, without values,
+  whatever `deploy/.env` still sets, so a setting left there is not lost
+  unannounced. `ADVISOR_BASE_URL`, `ADVISOR_MODEL`,
+  `ADVISOR_API_KEY` and `ADVISOR_SYSTEM_PROMPT`, which had no effect, are no
+  longer read at all.
+- The stack is run with podman and podman-compose by name. It needed podman
+  already, for `userns_mode: keep-id`; `docker compose` and `podman compose`,
+  which picks docker-compose when it is installed, are no longer used.
 - The daemon, the CLI and the OpenCode adapter read the env file with the
   grammar podman-compose reads it with, python-dotenv's: a ` # comment` after
   an unquoted value is dropped, a `#` inside quotes is kept, double quotes take
@@ -25,6 +42,15 @@ Notable changes to shoulder-daemon. The format follows
   `${NAME}` and `${NAME:-default}` are expanded. They used to keep the comment
   and the backslashes and leave `${...}` alone, so a containerised daemon and
   doctor, or a bare daemon and compose, could read one line two ways.
+- `make up` recreates the relay when its env file changed since the relay was
+  created, by the file's hash, which compose puts in the relay's environment.
+  It passes `--no-recreate`, so an edited file used to reach a running install
+  only after a `make down`. The relay is recreated alone, with `--no-deps`; the
+  memory service is not restarted. A relay created before this release is
+  recreated once, and two sessions starting together are kept apart with
+  `flock`.
+- `make update` fails when a relay exists and could not be recreated, rather
+  than reporting success; an install with no stack is still skipped.
 
 ## [0.4.1] - 2026-09-24
 

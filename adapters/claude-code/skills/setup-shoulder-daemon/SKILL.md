@@ -60,6 +60,10 @@ Read the report:
   restart.
 - `memory: UNREACHABLE` - a store is configured that cannot be read. That is
   question 2 below, and it is urgent: sessions look normal while nothing is kept.
+- A `make up` warning that `deploy/.env` still sets some names - move any
+  daemon setting among them into the env file with `"$S" copy NAME` after the
+  user exports it, or `"$S" set NAME VALUE` for a non-secret, then have the
+  user delete those lines from `deploy/.env`. Never read that file yourself.
 
 ## 2. The interview
 
@@ -143,8 +147,9 @@ Then tell the user two things they will otherwise discover the hard way:
   (`loginctl enable-linger`), or the store is gone after a reboot and the daemon
   goes on reporting it as configured. Check both and offer to enable them.
 - `make down` removes the store along with the relay, and `make memory` is what
-  brings it back. `make up` restarts the relay alone and leaves a running store
-  untouched; `make update` selects it, so an update keeps it.
+  brings it back. `make up` starts what is not running and recreates the relay
+  alone when its env file changed, leaving a running store untouched; `make
+  update` selects it, so an update keeps it.
 
 `SHOULDER_MEMORY_KEY` carries the service's API key if it demands one.
 `SHOULDER_MEMORY_URL` wins over `SHOULDER_MEMORY`, so do not set both and expect
@@ -190,7 +195,7 @@ start command; the plugin's script holds the lock, finds the right binary,
 prefers a `shoulderd` on `PATH`, and honours `SHOULDER_START_CMD`:
 
 ```bash
-pkill -x shoulderd || true                       # or: make up, for a container install
+pkill -x shoulderd || true                       # or: make up, which recreates a container whose file changed
 "$CLAUDE_PLUGIN_ROOT"/scripts/ensure-daemon.sh --fetch
 until curl -sf --max-time 1 http://127.0.0.1:8787/healthz >/dev/null; do sleep 1; done
 shoulderd doctor
