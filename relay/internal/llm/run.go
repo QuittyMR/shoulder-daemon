@@ -7,7 +7,7 @@ import (
 )
 
 // Run drives the tool loop and returns the model's final text. A model that
-// keeps calling tools must not take the turn down with it, so the step cap
+// keeps calling tools must not take the consult down with it, so the step cap
 // returns the last text seen instead of an error.
 //
 // The same rule holds for a provider that fails part way through: text already

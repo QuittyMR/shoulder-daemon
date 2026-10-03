@@ -229,7 +229,7 @@ func (c *cli) printMovement(line []byte, asJSON bool) {
 	fmt.Fprintln(c.out, renderMovement(line))
 }
 
-// renderMovement turns one record into one line: the time, the verb, where
+// renderMovement converts one record into one line: the time, the verb, where
 // it happened, and what moved.
 func renderMovement(line []byte) string {
 	var rec record
@@ -256,15 +256,15 @@ func renderMovement(line []byte) string {
 		delete(attrs, "project")
 	} else if s, ok := attrs["session"]; ok {
 		where := "session " + short(fmt.Sprint(s))
-		if t, ok := attrs["turn"]; ok {
-			where += fmt.Sprintf(" turn %v", t)
+		if t, ok := attrs["main_events"]; ok {
+			where += fmt.Sprintf(" event %v", t)
 		}
 		if e, ok := attrs["event"]; ok {
 			where += " " + fmt.Sprint(e)
 		}
 		fmt.Fprintf(&b, " %-24s", where)
 		delete(attrs, "session")
-		delete(attrs, "turn")
+		delete(attrs, "main_events")
 		delete(attrs, "event")
 	}
 	// The origin is a session id or "cli"; only the latter says anything.

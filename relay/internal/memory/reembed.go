@@ -45,7 +45,7 @@ func (l *Local) watch(ctx context.Context) {
 // Reembed gives every record whose vector is missing or came from another
 // model a vector from the current one, and reports how many it rewrote. It is
 // safe beside reads and writes: a record is scored on words in common until
-// its turn comes, and one that was replaced or forgotten meanwhile is left
+// it is reached, and one that was replaced or forgotten meanwhile is left
 // alone.
 //
 // It stops, rather than failing, when the model changes under it or is not

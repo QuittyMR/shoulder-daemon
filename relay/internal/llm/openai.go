@@ -20,7 +20,7 @@ const maxResponseBytes = 1 << 20
 // silently dropped HTTP/2 connection: every later request queues on the dead
 // stream and burns the whole client timeout, one after another, until the
 // process restarts. Pinging an idle connection and closing it when the ping
-// goes unanswered turns that into one failed call and a fresh dial.
+// goes unanswered converts that into one failed call and a fresh dial.
 var defaultClient = &http.Client{
 	Timeout: 20 * time.Second,
 	Transport: &http.Transport{
@@ -82,7 +82,7 @@ type wireToolCall struct {
 	// Extra is whatever the provider hangs off a tool call that is not part of
 	// the OpenAI shape, kept opaque and echoed back untouched. Gemini puts a
 	// thought signature here and rejects the next request with 400 if it does
-	// not come back, so dropping it makes every tool-using turn fail on the
+	// not come back, so dropping it makes every tool-using decision fail on the
 	// second step and only there.
 	Extra json.RawMessage `json:"extra_content,omitempty"`
 }

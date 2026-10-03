@@ -84,7 +84,7 @@ func hookSettings(t *testing.T, addr, token string) string {
 	return path
 }
 
-// runClaude drives one non-interactive turn with those hooks in place.
+// runClaude drives one non-interactive prompt with those hooks in place.
 func runClaude(t *testing.T, settings, dir, prompt string) {
 	t.Helper()
 	bin := claudeOrSkip(t)
@@ -182,7 +182,7 @@ func TestClaudeCodeHooksCarryTheToken(t *testing.T) {
 
 // The daemon stops when the last session it knows about ends, which it can do
 // under an editor that is still open. The boot script runs before every prompt
-// for exactly that reason, so a dead daemon is back by the next turn.
+// for exactly that reason, so a dead daemon is back by the next prompt.
 func TestClaudeCodeRevivesADeadDaemon(t *testing.T) {
 	claudeOrSkip(t)
 	d := startDaemon(t)

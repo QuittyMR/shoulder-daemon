@@ -571,7 +571,7 @@ func TestWritesCarryTheKindTagOnlyForSessionRecords(t *testing.T) {
 		}
 	})
 
-	// The running note is rewritten every turn, so a supersede that dropped the
+	// The running note is rewritten every event, so a supersede that dropped the
 	// kind tag would promote it to a fact and put keyword soup in the digest.
 	t.Run("supersede keeps the kind tag", func(t *testing.T) {
 		c, seen := serve(t, func(string, map[string]any) (int, string) {
@@ -722,7 +722,7 @@ func (s *sink) get(name string) int {
 
 // sessionPage serves a ranking whose first rows are all working notes, which is
 // what a project accumulates: one per session, forever, worded out of that
-// project's own turns, so they rank alongside its facts.
+// project's own events, so they rank alongside its facts.
 func sessionPage(notes int, facts ...string) func(string, map[string]any) (int, string) {
 	return func(_ string, body map[string]any) (int, string) {
 		n := int(body["n_results"].(float64))

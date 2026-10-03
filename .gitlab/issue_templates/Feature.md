@@ -13,8 +13,7 @@ know, or know wrongly?
 ## What you would like it to do
 
 If this is a connector or a backend, name the endpoint or the product and say what it
-costs to call. Latency decides most of these: the decision pass runs while the user's turn
-is open, so a flash-tier model beats a better one that thinks for twenty seconds.
+costs to call. Latency decides most of these: the decision pass runs while the user's prompt is being answered, so a flash-tier model beats a better one that thinks for twenty seconds.
 
 ## Dependency budget
 

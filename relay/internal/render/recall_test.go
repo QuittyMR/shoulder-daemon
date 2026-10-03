@@ -13,12 +13,12 @@ import (
 func TestRecallQueryIsTheLastFewThingsSaidInOrder(t *testing.T) {
 	events := []session.Event{
 		{Kind: session.KindUserPrompt, Prompt: "one"},
-		{Kind: session.KindTurnEnd, Assistant: "two"},
+		{Kind: session.KindAnswerEnd, Assistant: "two"},
 		{Kind: session.KindToolCall, ToolName: "Bash", ToolInput: json.RawMessage(`{"command":"rm -rf build"}`)},
 		{Kind: session.KindToolResult, ToolName: "Bash", ToolResult: "removed"},
 		{Kind: session.KindUserPrompt, Prompt: "  three  "},
 		{Kind: session.KindAssistantMessage, Assistant: ""},
-		{Kind: session.KindTurnEnd, Assistant: "four"},
+		{Kind: session.KindAnswerEnd, Assistant: "four"},
 		{Kind: session.KindUserPrompt, Prompt: "five"},
 	}
 	got := RecallQuery(events)
@@ -56,7 +56,7 @@ func TestEveryEventKindRendersAsItsOwnTag(t *testing.T) {
 	}{
 		{"prompt", session.Event{Kind: session.KindUserPrompt, Prompt: " hi "}, "<user>hi</user>"},
 		{"silent assistant", session.Event{Kind: session.KindAssistantMessage, Assistant: "  "}, ""},
-		{"thinking precedes the answer", session.Event{Kind: session.KindTurnEnd, Assistant: "done", Thinking: "hmm"}, "<thinking>hmm</thinking>\n<assistant>done</assistant>"},
+		{"thinking precedes the answer", session.Event{Kind: session.KindAnswerEnd, Assistant: "done", Thinking: "hmm"}, "<thinking>hmm</thinking>\n<assistant>done</assistant>"},
 		{"tool call", session.Event{Kind: session.KindToolCall, ToolName: "Read", ToolInput: json.RawMessage(`{"file_path":"/a"}`)}, `<tool name="Read">/a</tool>`},
 		{"tool result", session.Event{Kind: session.KindToolResult, ToolName: "Bash", ToolResult: "ok"}, `<result name="Bash">ok</result>`},
 		{"tool failure is marked", session.Event{Kind: session.KindToolFailure, ToolName: "Bash", ToolResult: "boom"}, `<result name="Bash" error="true">boom</result>`},
@@ -78,7 +78,7 @@ func TestRecallQueryHearsSubagentsAsProse(t *testing.T) {
 		{Kind: session.KindUserPrompt, Prompt: "find the leak"},
 		{Kind: session.KindToolCall, ToolName: "Agent", ToolInput: json.RawMessage(`{"prompt":"search for the leak","subagent_type":"explore"}`)},
 		{Kind: session.KindUserPrompt, Origin: session.OriginAgent, AgentType: "explore", Prompt: "search for the leak"},
-		{Kind: session.KindTurnEnd, Origin: session.OriginAgent, AgentID: "a1", AgentType: "explore", Assistant: "it is in the pool"},
+		{Kind: session.KindAnswerEnd, Origin: session.OriginAgent, AgentID: "a1", AgentType: "explore", Assistant: "it is in the pool"},
 	}
 	if got := RecallQuery(events); got != "find the leak\nsearch for the leak\nit is in the pool" {
 		t.Fatalf("RecallQuery = %q", got)
@@ -92,8 +92,8 @@ func TestSubagentLinesRenderAsAgentTags(t *testing.T) {
 		want string
 	}{
 		{"agent prompt", session.Event{Kind: session.KindUserPrompt, Origin: session.OriginAgent, AgentType: "explore", Prompt: " look "}, `<agent type="explore">look</agent>`},
-		{"agent answer", session.Event{Kind: session.KindTurnEnd, Origin: session.OriginAgent, AgentID: "a1", AgentType: "explore", Assistant: "found"}, `<agent-result type="explore">found</agent-result>`},
-		{"silent agent answer", session.Event{Kind: session.KindTurnEnd, Origin: session.OriginAgent, AgentType: "explore", Assistant: " "}, ""},
+		{"agent answer", session.Event{Kind: session.KindAnswerEnd, Origin: session.OriginAgent, AgentID: "a1", AgentType: "explore", Assistant: "found"}, `<agent-result type="explore">found</agent-result>`},
+		{"silent agent answer", session.Event{Kind: session.KindAnswerEnd, Origin: session.OriginAgent, AgentType: "explore", Assistant: " "}, ""},
 		{"a user prompt is still the user's", session.Event{Kind: session.KindUserPrompt, Prompt: "hi"}, "<user>hi</user>"},
 	}
 	for _, tc := range cases {

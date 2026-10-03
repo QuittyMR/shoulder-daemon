@@ -27,7 +27,7 @@ func TestDeliversMatchesLevelToKind(t *testing.T) {
 		{KindToolResult, LevelPlan, false},
 		{KindToolFailure, LevelAction, false},
 		{KindAssistantMessage, LevelPlan, false},
-		{KindTurnEnd, LevelPlan, false},
+		{KindAnswerEnd, LevelPlan, false},
 		{KindCompact, LevelAction, false},
 		{KindSessionEnd, LevelPlan, false},
 		{KindAgentStart, LevelPlan, true},
@@ -43,30 +43,30 @@ func TestDeliversMatchesLevelToKind(t *testing.T) {
 	}
 }
 
-func TestTurnCountsPromptsAndAnswerEnds(t *testing.T) {
+func TestMainEventsCountsPromptsAndAnswerEnds(t *testing.T) {
 	r := NewRegistry(10)
 	now := time.Now()
-	if got := r.Turn("nobody"); got != 0 {
+	if got := r.MainEvents("nobody"); got != 0 {
 		t.Fatalf("an unknown session is at %d", got)
 	}
 	seen(r, "s1", KindUserPrompt, now)
-	if got := r.Turn("s1"); got != 1 {
+	if got := r.MainEvents("s1"); got != 1 {
 		t.Fatalf("%d after one prompt, want 1", got)
 	}
 	for _, kind := range []Kind{KindToolCall, KindToolResult, KindToolFailure, KindAssistantMessage, KindAgentStart, KindCompact} {
 		seen(r, "s1", kind, now)
 	}
-	if got := r.Turn("s1"); got != 1 {
+	if got := r.MainEvents("s1"); got != 1 {
 		t.Fatalf("%d after events that are neither a prompt nor an answer end, want 1", got)
 	}
-	seen(r, "s1", KindTurnEnd, now)
-	if got := r.Turn("s1"); got != 2 {
+	seen(r, "s1", KindAnswerEnd, now)
+	if got := r.MainEvents("s1"); got != 2 {
 		t.Fatalf("%d after a prompt and its answer, want 2", got)
 	}
 	// An interrupted answer has no end; the next prompt still counts.
 	seen(r, "s1", KindUserPrompt, now)
 	seen(r, "s1", KindUserPrompt, now)
-	if got := r.Turn("s1"); got != 4 {
+	if got := r.MainEvents("s1"); got != 4 {
 		t.Fatalf("%d after two more prompts, want 4", got)
 	}
 }
@@ -82,12 +82,12 @@ func TestConsolidationIsDueOncePerSpanOfTheCount(t *testing.T) {
 	}
 	seen(r, "s1", KindUserPrompt, now)
 	seen(r, "s1", KindUserPrompt, now)
-	seen(r, "s1", KindTurnEnd, now)
+	seen(r, "s1", KindAnswerEnd, now)
 	if r.ConsolidationDue("s1", 4) {
 		t.Fatal("due at 3 of 4")
 	}
 	seen(r, "s1", KindUserPrompt, now)
-	seen(r, "s1", KindTurnEnd, now)
+	seen(r, "s1", KindAnswerEnd, now)
 	if !r.ConsolidationDue("s1", 4) {
 		t.Fatal("not due at 5, the first answer end past 4")
 	}
@@ -95,12 +95,12 @@ func TestConsolidationIsDueOncePerSpanOfTheCount(t *testing.T) {
 		t.Fatal("due twice in one span")
 	}
 	seen(r, "s1", KindUserPrompt, now)
-	seen(r, "s1", KindTurnEnd, now)
+	seen(r, "s1", KindAnswerEnd, now)
 	if r.ConsolidationDue("s1", 4) {
 		t.Fatal("due at 7, inside the span that already had its tidy")
 	}
 	seen(r, "s1", KindUserPrompt, now)
-	seen(r, "s1", KindTurnEnd, now)
+	seen(r, "s1", KindAnswerEnd, now)
 	if !r.ConsolidationDue("s1", 4) {
 		t.Fatal("not due at 9, in the span after")
 	}
@@ -153,11 +153,11 @@ func TestSnapshotCopiesTheWindow(t *testing.T) {
 	r := NewRegistry(10)
 	now := time.Now()
 	seen(r, "s1", KindUserPrompt, now)
-	seen(r, "s1", KindTurnEnd, now)
+	seen(r, "s1", KindAnswerEnd, now)
 
-	events, turn, ok := r.Snapshot("s1")
-	if !ok || len(events) != 2 || turn != 2 {
-		t.Fatalf("snapshot: %d events, turn %d, ok %v", len(events), turn, ok)
+	events, count, ok := r.Snapshot("s1")
+	if !ok || len(events) != 2 || count != 2 {
+		t.Fatalf("snapshot: %d events, count %d, ok %v", len(events), count, ok)
 	}
 	// Mutating the copy must not reach the registry, which the advisor reads
 	// off the hook path while new events keep arriving.
@@ -257,26 +257,26 @@ func TestBudgetStateFollowsInjections(t *testing.T) {
 		t.Fatalf("an unknown session has budget state %+v", got)
 	}
 
-	r.RecordInjection("s1", 3, "", Advice{ID: "a", Text: "twelve chars", TTLTurns: 4})
+	r.RecordInjection("s1", 3, "", Advice{ID: "a", Text: "twelve chars", TTLEvents: 4})
 	got := r.BudgetState("s1", "")
-	if got.LastInjectTurn != 3 || got.CharsUsed == 0 {
+	if got.LastInjectEvent != 3 || got.CharsUsed == 0 {
 		t.Fatalf("the injection was not recorded: %+v", got)
 	}
 }
 
 // A subagent shares the session's characters and nothing else: what it is
-// handed does not open the main thread's turn gap, and the main thread's gap
+// handed does not open the main thread's event gap, and the main thread's gap
 // does not close the agent's.
-func TestASubagentsInjectionIsChargedToTheSessionNotToTheTurnGap(t *testing.T) {
+func TestASubagentsInjectionIsChargedToTheSessionNotToTheEventGap(t *testing.T) {
 	r := NewRegistry(10)
 	seen(r, "s1", KindUserPrompt, time.Now())
 
-	r.RecordInjection("s1", 3, "agent-1", Advice{ID: "a", Text: "twelve chars", TTLTurns: 4})
-	if got := r.BudgetState("s1", ""); got.LastInjectTurn != 0 || got.CharsUsed != len("twelve chars") {
+	r.RecordInjection("s1", 3, "agent-1", Advice{ID: "a", Text: "twelve chars", TTLEvents: 4})
+	if got := r.BudgetState("s1", ""); got.LastInjectEvent != 0 || got.CharsUsed != len("twelve chars") {
 		t.Fatalf("the main thread's state after an agent's injection: %+v", got)
 	}
-	r.RecordInjection("s1", 3, "", Advice{ID: "b", Text: "twelve chars", TTLTurns: 4})
-	if got := r.BudgetState("s1", "agent-1"); got.LastInjectTurn != 0 || got.CharsUsed != 2*len("twelve chars") {
+	r.RecordInjection("s1", 3, "", Advice{ID: "b", Text: "twelve chars", TTLEvents: 4})
+	if got := r.BudgetState("s1", "agent-1"); got.LastInjectEvent != 0 || got.CharsUsed != 2*len("twelve chars") {
 		t.Fatalf("the agent's state after the main thread's injection: %+v", got)
 	}
 }
@@ -311,7 +311,7 @@ func TestSpawnsAreBoundToAgentIdsInOrderOfType(t *testing.T) {
 		t.Fatalf("SpawnOf(agent-b) = %q", got)
 	}
 
-	r.Observe(Event{SessionID: "s1", Kind: KindTurnEnd, Origin: OriginAgent, AgentID: "agent-a", AgentType: "explore", Assistant: "done"})
+	r.Observe(Event{SessionID: "s1", Kind: KindAnswerEnd, Origin: OriginAgent, AgentID: "agent-a", AgentType: "explore", Assistant: "done"})
 	if got := r.SpawnOf("s1", "agent-a"); got != "" {
 		t.Fatalf("a stopped agent is still bound: %q", got)
 	}

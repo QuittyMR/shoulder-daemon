@@ -18,7 +18,7 @@ const (
 	KindToolResult       Kind = "tool_result"
 	KindToolFailure      Kind = "tool_failure"
 	KindAssistantMessage Kind = "assistant_message"
-	KindTurnEnd          Kind = "turn_end"
+	KindAnswerEnd        Kind = "answer_end"
 	// KindAgentStart is a subagent beginning its run, the first event that
 	// carries the id the harness gave it.
 	KindAgentStart Kind = "agent_start"
@@ -26,7 +26,7 @@ const (
 	KindSessionEnd Kind = "session_end"
 )
 
-// AdviceLevel says where in a turn a piece of advice is still worth delivering.
+// AdviceLevel says where between a prompt and the end of its answer a piece of advice is still worth delivering.
 type AdviceLevel string
 
 const (
@@ -50,7 +50,7 @@ const (
 // flight. Where a note lands has to follow what the note is for: context is
 // only actionable before the assistant has committed to anything, and a warning
 // about an operation is only actionable at the operation. Everything else - a
-// tool result, an assistant message, a turn end - is after the fact, and
+// tool result, an assistant message, an answer end - is after the fact, and
 // spending a note there is the same as discarding it. A subagent's start is
 // before anything at all, so either level is still actionable there.
 func (k Kind) Delivers(level AdviceLevel) bool {
@@ -119,14 +119,14 @@ const (
 
 // Advice is one pending advisory message for a session.
 type Advice struct {
-	ID          string      `json:"id"`
-	SessionID   string      `json:"session_id"`
-	Kind        AdviceKind  `json:"kind"`
-	Level       AdviceLevel `json:"level,omitempty"`
-	Text        string      `json:"text"`
-	CreatedTurn uint64      `json:"created_turn"`
-	TTLTurns    int         `json:"ttl_turns"`
-	CreatedAt   time.Time   `json:"created_at"`
+	ID           string      `json:"id"`
+	SessionID    string      `json:"session_id"`
+	Kind         AdviceKind  `json:"kind"`
+	Level        AdviceLevel `json:"level,omitempty"`
+	Text         string      `json:"text"`
+	CreatedEvent uint64      `json:"created_event"`
+	TTLEvents    int         `json:"ttl_events"`
+	CreatedAt    time.Time   `json:"created_at"`
 
 	// AgentID restricts the advice to one subagent. With it empty, SpawnID
 	// or AgentType restrict it to subagents: SpawnID names the tool call
@@ -154,14 +154,14 @@ func (a Advice) For(agentID, agentType string) bool {
 // Stale observations are dropped rather than injected late. It defers to the
 // budget gate's rule so the outbox and the gate cannot disagree about what has
 // gone stale.
-func (a Advice) Expired(turn uint64) bool { return a.Candidate().Expired(turn) }
+func (a Advice) Expired(event uint64) bool { return a.Candidate().Expired(event) }
 
 // Candidate projects the advice onto the flat shape the budget gate evaluates.
 func (a Advice) Candidate() budget.Candidate {
 	return budget.Candidate{
-		Kind:        string(a.Kind),
-		Len:         len(a.Text),
-		CreatedTurn: a.CreatedTurn,
-		TTLTurns:    a.TTLTurns,
+		Kind:         string(a.Kind),
+		Len:          len(a.Text),
+		CreatedEvent: a.CreatedEvent,
+		TTLEvents:    a.TTLEvents,
 	}
 }

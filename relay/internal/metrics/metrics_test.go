@@ -106,7 +106,7 @@ func TestAdvisorLatencyIsItsOwnSeries(t *testing.T) {
 	}
 }
 
-// Triage is a second call on every turn, so it is timed as its own series
+// Triage is a second call on every consult, so it is timed as its own series
 // beside the advisor rather than folded into it.
 func TestTriageLatencyIsItsOwnSeries(t *testing.T) {
 	m := New()

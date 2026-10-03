@@ -1,4 +1,4 @@
-// Package render turns a window of session events into the text the advisor
+// Package render converts a window of session events into the text the advisor
 // reads. It is deliberately lossy: tool inputs are summarised and results are
 // clipped, because the advisor needs the shape of the work, not a transcript.
 package render
@@ -63,7 +63,7 @@ func line(e session.Event) string {
 			return fmt.Sprintf("<agent type=%q>%s</agent>", e.AgentType, clip(e.Prompt, proseClip))
 		}
 		return "<user>" + clip(e.Prompt, proseClip) + "</user>"
-	case session.KindAssistantMessage, session.KindTurnEnd:
+	case session.KindAssistantMessage, session.KindAnswerEnd:
 		if strings.TrimSpace(e.Assistant) == "" {
 			return ""
 		}
@@ -151,7 +151,7 @@ func RecallQuery(events []session.Event) string {
 			if s := strings.TrimSpace(e.Prompt); s != "" {
 				parts = append(parts, clip(s, recallClip))
 			}
-		case session.KindTurnEnd, session.KindAssistantMessage:
+		case session.KindAnswerEnd, session.KindAssistantMessage:
 			if s := strings.TrimSpace(e.Assistant); s != "" {
 				parts = append(parts, clip(s, recallClip))
 			}

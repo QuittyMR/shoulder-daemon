@@ -466,7 +466,7 @@ func TestSupersedeCannotPublishAPrivateRecord(t *testing.T) {
 	}
 }
 
-// A working note is the last few turns' keywords, rewritten every turn and
+// A working note is the last few events' keywords, rewritten at every event and
 // dropped when the session goes quiet. A backend that files private records
 // separately - out of the repository, and out of what the person prunes - would
 // be handed that churn to keep, so the boundary refuses the combination rather

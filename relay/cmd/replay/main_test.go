@@ -59,11 +59,11 @@ func TestSendIsSilentWhenThereIsNoAdviceOrNoDaemon(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := &client{base: srv.URL, sessionID: "s", http: http.Client{Timeout: time.Second}}
-	if adv := c.send(session.Event{Kind: session.KindTurnEnd}); adv != "" {
+	if adv := c.send(session.Event{Kind: session.KindAnswerEnd}); adv != "" {
 		t.Fatalf("no advice must be an empty string, got %q", adv)
 	}
 	srv.Close()
-	if adv := c.send(session.Event{Kind: session.KindTurnEnd}); adv != "" {
+	if adv := c.send(session.Event{Kind: session.KindAnswerEnd}); adv != "" {
 		t.Fatalf("a dead daemon must be an empty string, got %q", adv)
 	}
 }

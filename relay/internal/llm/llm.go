@@ -35,7 +35,7 @@ type Message struct {
 }
 
 // Provider keeps Complete because the digest and the CLI message path ask one
-// question and want one answer; Chat is for the turn that may need to look
+// question and want one answer; Chat is for the decision that may need to look
 // things up before it can answer.
 type Provider interface {
 	Name() string

@@ -82,7 +82,7 @@ entries.)
 
 ## 3. Verify the install actually works
 
-Run a throwaway prompt with Claude Code's own hook debug logging turned on:
+Run a throwaway prompt with Claude Code's own hook debug logging switched on:
 
 ```bash
 claude -p 'say hello' --debug hooks --debug-file /tmp/shoulderd-hooks.log
@@ -178,7 +178,7 @@ Under a service manager, set the restart policy so a deliberate exit is not
 undone. `deploy/docker-compose.yml` uses `restart: on-failure` for that reason;
 `unless-stopped` would bring the daemon back seconds after every shutdown.
 
-Started with nothing else configured, the relay observes and stays silent. Two variables turn it
+Started with nothing else configured, the relay observes and stays silent. Two variables switch it
 into something that thinks:
 
 ```bash
@@ -201,7 +201,7 @@ prefers docker-compose when that is installed.
 `make up` runs the same binary under `deploy/docker-compose.yml` with host networking, which is
 what keeps the listener on loopback with no port published to any other interface. It also mounts
 `~/.claude/projects` read-only, where Claude Code writes each session's transcript: the Stop hook
-carries only the last thing the assistant said in a turn, and the transcript is where the rest of
+carries only the last thing the assistant said in an answer, and the transcript is where the rest of
 it is read from. Those files are mode 600, so the container runs its nonroot user as you
 (`userns_mode: keep-id`) and, because an SELinux host labels them as your home and refuses a
 confined container whatever its uid, with SELinux confinement off for this one container
@@ -213,7 +213,7 @@ podman unshare chown -R 0:0 "$(podman volume inspect shoulder-daemon_facts -f '{
 ```
 
 Without the mount the daemon still runs; it logs once per session that the transcript is
-unreadable and sees only the last message of each turn.
+unreadable and sees only the last message of each answer.
 
 `make up` brings up everything this checkout runs and not only the relay: if the memory service
 has ever been started here, the volume it keeps its database on is still there, and `up` reads
@@ -291,7 +291,7 @@ instead of being lost.
 What it is not is a transformer. Word order is lost and negation is invisible, so "releases ship on
 Fridays" and "releases never ship on Fridays" read as the same claim — which is why the second one
 collides with the first and supersedes it rather than being stored beside it. Sentences of three or
-four words are too short to place well; a turn's worth of text is not.
+four words are too short to place well; a prompt's worth of text is not.
 
 `shoulderd doctor` reports which store is in use on its `memory:` line, and the daemon names the
 table and its vocabulary size at startup.
@@ -525,7 +525,7 @@ you.
 ## 8. Change settings on a running daemon
 
 Four of the settings above don't need a restart: the log level, the pickiness, and the provider and
-model that answer. `shoulderd config` reads them; `shoulderd config set` turns them.
+model that answer. `shoulderd config` reads them; `shoulderd config set` changes them.
 
 ```bash
 shoulderd config                                  # log level, pickiness, provider, model in use
@@ -533,7 +533,7 @@ shoulderd config set --pickiness=strict
 shoulderd config set --provider=gemini --model=gemini-2.5-flash-lite
 ```
 
-`config set` changes only the flags it is given, takes effect on the next turn, and does not
+`config set` changes only the flags it is given, takes effect on the next event, and does not
 interrupt anything already in flight. It is all-or-nothing: a request naming a value that doesn't
 exist - an unknown level, an unknown pickiness, a provider with no key in the daemon's environment, a
 model its provider doesn't have - is refused with the reason, and every setting is left exactly as it
@@ -571,7 +571,7 @@ read; a container's log is `make logs` instead.
 Everything is environment driven, which used to raise an awkward question: whose
 environment. A daemon you start by hand inherits the shell you typed in; a daemon started by an
 editor adapter, a container or a service manager does not, and the failure is quiet - it comes up,
-reports itself healthy, observes every turn and has no model to ask, so it stays silent and looks
+reports itself healthy, observes every event and has no model to ask, so it stays silent and looks
 like it is simply never finding anything to say.
 
 So there is one file, and the daemon reads it itself. Nothing has to be exported for it to be found:
@@ -716,7 +716,7 @@ Everything is environment driven. The only two you need:
 Then `SHOULDER_TOKEN` (generated for you; set it only to override),
 `SHOULDER_ADDR`, `SHOULDER_MEMORY_KEY`, `SHOULDER_PICKINESS`, `SHOULDER_LOG` (the log file;
 `~/.local/share/shoulder-daemon/shoulderd.log`, or `stderr` for none), `LOG_LEVEL`,
-`SHOULDER_DRY_RUN`, `SHOULDER_IDLE_EXIT_MINUTES` (60; zero turns it off), `SHOULDER_TRIAGE`
+`SHOULDER_DRY_RUN`, `SHOULDER_IDLE_EXIT_MINUTES` (60; zero switches it off), `SHOULDER_TRIAGE`
 with `TYPESAFE_API_KEY`, `TYPESAFE_BASE_URL`, `SHOULDER_JEV_MODEL` and
 `SHOULDER_JEV_MIN_CONFIDENCE` (a Jev triage in front of the model, see docs/ADVISOR.md),
 `LEARN_TIMEOUT_SECONDS` (1800, what one `shoulderd learn` may take end to end) and the `WINDOW_*`,

@@ -28,7 +28,7 @@ func (b *Box) Push(a session.Advice) bool {
 	q := b.pending[a.SessionID]
 	for _, held := range q {
 		if held.Text == a.Text && held.AgentID == a.AgentID && held.SpawnID == a.SpawnID &&
-			held.AgentType == a.AgentType && !held.Expired(a.CreatedTurn) {
+			held.AgentType == a.AgentType && !held.Expired(a.CreatedEvent) {
 			return false
 		}
 	}
@@ -40,14 +40,14 @@ func (b *Box) Push(a session.Advice) bool {
 }
 
 // Take pops the first advice for the session that this event kind may carry,
-// that is meant for the asker and that has not expired at this turn. agentID
+// that is meant for the asker and that has not expired at this count. agentID
 // and agentType name the subagent asking, both empty for the main thread.
 //
 // Advice the kind cannot carry, or that is addressed to someone else, is left
 // in the queue rather than dropped: a note meant for the next prompt is passed
 // over by every tool call in between, and is still there when the prompt
 // arrives. Expired entries are discarded on the way past.
-func (b *Box) Take(sessionID string, turn uint64, kind session.Kind, agentID, agentType string) (session.Advice, bool) {
+func (b *Box) Take(sessionID string, event uint64, kind session.Kind, agentID, agentType string) (session.Advice, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	q := b.pending[sessionID]
@@ -58,7 +58,7 @@ func (b *Box) Take(sessionID string, turn uint64, kind session.Kind, agentID, ag
 		switch {
 		case ok:
 			kept = append(kept, a)
-		case a.Expired(turn):
+		case a.Expired(event):
 		case kind.Delivers(a.Level) && a.For(agentID, agentType):
 			found, ok = a, true
 		default:

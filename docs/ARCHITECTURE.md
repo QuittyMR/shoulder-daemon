@@ -35,7 +35,7 @@ were installed.
 
 Every adapter maps its harness's hooks onto one neutral vocabulary:
 `user_prompt`, `tool_call`, `tool_result`, `tool_failure`, `assistant_message`,
-`turn_end`, `compact` and `session_end`. The advisor reads a window of these
+`answer_end`, `compact` and `session_end`. The advisor reads a window of these
 rendered as `<user>`, `<assistant>`, `<tool>`, `<result>` and `<compact/>`
 lines; the recall query that searches memory is built from the prose among
 them, never from tool traffic.
@@ -45,18 +45,18 @@ same window. Its prompt is the input of the `Agent` tool call that spawns it,
 which the relay records as a `user_prompt` from the agent as well as the tool
 call; its start arrives on `SubagentStart`, recorded as an `agent_start`, and
 is the first event to carry the id the harness gave it; its answer arrives on
-`SubagentStop`, recorded as a `turn_end` from the agent. All carry
+`SubagentStop`, recorded as an `answer_end` from the agent. All carry
 `origin: agent` and the subagent's type, and the prompt and the answer render
 as `<agent type="…">` and `<agent-result type="…">`. They count as prose for
 recall and are advised like the main thread, except that the main thread's
-turn counter is not advanced by a subagent finishing. Advice from a subagent's
+event counter is not advanced by a subagent's prompt or stop. Advice from a subagent's
 prompt is addressed to the call that spawned it; the registry pairs that call
 with the id the start reports, oldest spawn of the type first, and the advice
 is handed only to hooks fired from inside that subagent - at its start, when
 it is ready by then, or at its next tool call. Until the id is known it may go
 to a subagent of the same type and never to the main thread. Advice with no
 address goes to whichever hook can carry it first. A subagent's injections
-count against the session's character cap and leave the main thread's turn
+count against the session's character cap and leave the main thread's event
 gap alone.
 
 Every prompt and every answer end starts a consult of its own, the main

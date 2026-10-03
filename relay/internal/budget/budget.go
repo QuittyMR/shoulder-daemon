@@ -11,38 +11,38 @@ import "fmt"
 const KindWarning = "warning"
 
 type Gate struct {
-	MinTurnGap      int  // minimum count of prompts and answer ends between note-kind injections
+	MinEventGap     int  // minimum main-thread events between note-kind injections
 	MaxChars        int  // per-injection cap
 	SessionMaxChars int  // whole-session cap
 	DryRun          bool // evaluate and record, inject nothing
 }
 
 func Default() Gate {
-	return Gate{MinTurnGap: 6, MaxChars: 800, SessionMaxChars: 4000}
+	return Gate{MinEventGap: 6, MaxChars: 800, SessionMaxChars: 4000}
 }
 
 // Candidate is the shape the gate reasons about.
 type Candidate struct {
-	Kind        string
-	Len         int
-	CreatedTurn uint64
-	TTLTurns    int
+	Kind         string
+	Len          int
+	CreatedEvent uint64
+	TTLEvents    int
 }
 
-func (c Candidate) Expired(turn uint64) bool {
-	if c.TTLTurns <= 0 {
+func (c Candidate) Expired(event uint64) bool {
+	if c.TTLEvents <= 0 {
 		return false
 	}
-	return turn > c.CreatedTurn+uint64(c.TTLTurns)
+	return event > c.CreatedEvent+uint64(c.TTLEvents)
 }
 
 // State is the counter set for one asker. The caller owns it; the gate is
-// pure. A zero LastInjectTurn means nothing has been injected for this asker
-// yet: the main thread's first injection lands at turn one or later, and a
-// subagent's state never carries a turn at all.
+// pure. A zero LastInjectEvent means nothing has been injected for this asker
+// yet: the main thread's first injection lands at count one or later, and a
+// subagent's state never carries a count at all.
 type State struct {
-	LastInjectTurn uint64
-	CharsUsed      int
+	LastInjectEvent uint64
+	CharsUsed       int
 }
 
 type Decision struct {
@@ -50,21 +50,21 @@ type Decision struct {
 	Reason string
 }
 
-// Allow evaluates one candidate. Warnings bypass the turn-gap rule but are
+// Allow evaluates one candidate. Warnings bypass the event-gap rule but are
 // still bound by the session character cap: a noisy advisor cannot escape the
 // budget by labelling everything urgent.
-func (g Gate) Allow(st State, turn uint64, c Candidate) Decision {
+func (g Gate) Allow(st State, event uint64, c Candidate) Decision {
 	if c.Len == 0 {
 		return Decision{false, "empty"}
 	}
-	if c.Expired(turn) {
+	if c.Expired(event) {
 		return Decision{false, "expired"}
 	}
 	if st.CharsUsed+c.Len > g.SessionMaxChars {
 		return Decision{false, fmt.Sprintf("session_cap:%d", g.SessionMaxChars)}
 	}
-	if c.Kind != KindWarning && st.LastInjectTurn > 0 && turn < st.LastInjectTurn+uint64(g.MinTurnGap) { //nolint:gosec // G115: a small positive setting, never near the bound
-		return Decision{false, fmt.Sprintf("turn_gap:%d", g.MinTurnGap)}
+	if c.Kind != KindWarning && st.LastInjectEvent > 0 && event < st.LastInjectEvent+uint64(g.MinEventGap) { //nolint:gosec // G115: a small positive setting, never near the bound
+		return Decision{false, fmt.Sprintf("event_gap:%d", g.MinEventGap)}
 	}
 	if g.DryRun {
 		return Decision{false, "dry_run"}
@@ -73,7 +73,7 @@ func (g Gate) Allow(st State, turn uint64, c Candidate) Decision {
 }
 
 // Record updates state after an injection actually happened.
-func (st *State) Record(turn uint64, c Candidate) {
-	st.LastInjectTurn = turn
+func (st *State) Record(event uint64, c Candidate) {
+	st.LastInjectEvent = event
 	st.CharsUsed += c.Len
 }

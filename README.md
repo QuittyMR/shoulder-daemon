@@ -116,18 +116,18 @@ model and endpoint.
 | `openai` | OpenAI | `gpt-5.2-mini` | `OPENAI_API_KEY` |
 | `local` | Ollama on `127.0.0.1:11434` | `qwen2.5-coder:7b` | none |
 
-Pick for speed. The decision pass runs while your turn is open, and advice that
+Pick for speed. The decision pass runs while your prompt is being answered, and advice that
 arrives after the assistant has chosen what to do is worth nothing, so a
 flash-tier model beats a better one that thinks for twenty seconds; deciding
-whether a turn contradicts a stored fact is classification, not authorship. On
+whether an event contradicts a stored fact is classification, not authorship. On
 one machine `gemini-3.5-flash-lite` answered in 0.9s and one coding-plan
 endpoint took 29s, so time your own choice - the `shoulder_hook_latency_seconds`
 metric with `event="advisor"` reports what the model call is costing you, and
 with a triage configured, `event="triage"` reports the call made before it;
-a turn the triage hands on costs the two together.
+an event the triage hands on costs the two together.
 
 `SHOULDER_TRIAGE=jev` with `TYPESAFE_API_KEY` adds TypeSafe's Jev as a triage
-in front of the model: turns it is sure need nothing, or need a stored fact
+in front of the model: events it is sure need nothing, or need a stored fact
 repeated before the next tool call, are settled by that one call without the
 model, and everything else goes to the model as before. [docs/ADVISOR.md](docs/ADVISOR.md) has the details and the
 other `SHOULDER_JEV_*` settings.
@@ -190,7 +190,7 @@ typing whoever runs it. A preference is private by default.
 ## Configuration and tweaking
 
 Every setting is a line in `~/.config/shoulder-daemon/env`, and the four that
-matter day to day can also be turned on a running daemon:
+matter day to day can also be changed on a running daemon:
 
 ```bash
 shoulderd config                        # log level, pickiness, provider and model in use
@@ -198,7 +198,7 @@ shoulderd config set --pickiness=careful
 shoulderd config set --provider=gemini --model=gemini-2.5-flash-lite
 ```
 
-`config set` takes effect on the next turn and writes nothing down; a restart
+`config set` takes effect on the next event and writes nothing down; a restart
 returns to what the env file says.
 
 ### Pickiness
@@ -211,16 +211,16 @@ either takes a name or the number behind it.
 
 | Level | Stores |
 |---|---|
-| `eager` (0) | anything the turn established, stated or not; when in doubt, store it |
+| `eager` (0) | anything the session established, stated or not; when in doubt, store it |
 | `open` (1) | rules you state, and ones you clearly imply |
 | `balanced` (2) | the default: rules stated or made plain, keeping only the part it is sure of |
 | `careful` (3) | only rules you state; when in doubt, nothing |
-| `strict` (4) | only a rule it could quote from the turn, in your words |
+| `strict` (4) | only a rule it could quote from what was said, in your words |
 
-Lower levels lean on the tidying pass, which the daemon runs every few turns
+Lower levels lean on the tidying pass, which the daemon runs every few events
 and when a session ends, and which `shoulderd consolidate` runs by hand. Higher
 levels keep the store clean and miss rules you only implied. If the monitor
-shows facts that are really history - what you did this turn rather than how
+shows facts that are really history - what you just did rather than how
 things are done - go up one; if a correction you gave never appears, go down one.
 
 ### Monitoring
@@ -237,7 +237,7 @@ records through.
 
 ```
 14:02:11  stored      local shoulder-daemon     (fact) "main branch is master"  id=mem_12
-14:09:40  queued      session 3f9a1c07 turn 6   "the branch is master, not main"  id=adv_4
+14:09:40  queued      session 3f9a1c07 event 6  "the branch is master, not main"  id=adv_4
 14:09:41  injected    session 3f9a1c07 UserPromptSubmit  "the branch is master, not main"  id=adv_4
 14:31:05  superseded  global                   [cli]  (preference) "terse answers, no preamble"  supersedes=mem_2
 14:40:00  merged      local shoulder-daemon     "integration tests need a live Postgres"  kept=mem_5  replaced=mem_7,mem_9
@@ -247,7 +247,7 @@ The log itself is `~/.local/share/shoulder-daemon/shoulderd.log`, JSON, one
 record per line, and the daemon writes it wherever it was started from. At the
 default `info` level it holds every movement above and nothing per hook;
 `config set --log-level=debug` adds each hook arrival. `SHOULDER_LOG` moves the
-file, and `SHOULDER_LOG=stderr` turns it off for a daemon whose output something
+file, and `SHOULDER_LOG=stderr` switches it off for a daemon whose output something
 else collects, which is also the one case `monitor` cannot watch. Counters for
 the same events are at `/metrics` on the daemon's address.
 
@@ -287,11 +287,11 @@ you use on
 
 | | What triggers it | Where it stores | Why we built this instead |
 |---|---|---|---|
-| **shoulder-daemon** | A small model reads each turn | a file it manages, embeddings included, or mcp-memory-service | - |
+| **shoulder-daemon** | A small model reads each prompt and each answer | a file it manages, embeddings included, or mcp-memory-service | - |
 | [Natural Memory Triggers](https://github.com/doobidoo/mcp-memory-service) | regex and keyword matches on your prompt | SQLite-vec, Cloudflare or Milvus | Triggers on preset keywords only |
 | [PowerContext](https://github.com/oceanbase/powercontext) | Every prompt | SQLite / OceanBase | Team-focused, no consolidation or supersession, and more invasive, but possibly the best alternative here |
 | [claude-code-semantic-memory](https://github.com/razor-ai/claude-code-semantic-memory) | Embedding similarity on your prompt | SQLite/Ollama | Read-only - no learning, no supersession |
-| [Letta Claude Subconscious](https://github.com/letta-ai/claude-subconscious) | A background agent reads each finished turn | Letta cloud | Paid option is the clear focus (currently broken for ClaudeCode/SQLite) and very heavy |
+| [Letta Claude Subconscious](https://github.com/letta-ai/claude-subconscious) | A background agent reads each finished answer | Letta cloud | Paid option is the clear focus (currently broken for ClaudeCode/SQLite) and very heavy |
 | [ContextStream](https://github.com/contextstream/mcp-server) | Tools the agent chooses to call, plus hooks | hosted | No injection, no self-hosting |
 
 ## Docs

@@ -47,6 +47,13 @@ func main() {
 	}
 }
 
+// logRenamed names the replacement of every setting read under an old name.
+func logRenamed(log *slog.Logger, renamed []config.Renamed) {
+	for _, r := range renamed {
+		log.Info("setting read under its old name; rename it in the env file", "key", r.Old, "replacement", r.New)
+	}
+}
+
 func serve() error {
 	cfg := config.Load()
 	// The level is a variable the handler reads per record rather than a value
@@ -55,12 +62,13 @@ func serve() error {
 	level := new(slog.LevelVar)
 	level.Set(cfg.LogLevel)
 	log := newLogger(cfg.LogPath, level)
+	logRenamed(log, cfg.Renamed)
 
 	// A generated token is one the harness has not necessarily been given yet:
 	// an editor reads its environment at launch, and the daemon it started may
 	// be the run that wrote the value into the editor's settings. Adopting
 	// tells the hook surface to let that session through until it sees the
-	// token once, rather than turning away every hook until somebody restarts
+	// token once, rather than refusing every hook until somebody restarts
 	// their editor.
 	token, adopting := ensureToken(log)
 	if token == "" {
@@ -426,7 +434,7 @@ func (c *cli) doctor(args []string) int {
 			out["llm_model_source"] = running.ModelSource
 		}
 		// A triage with no decision model is a supported way to run: stored
-		// facts are still repeated, only none is deduced from a turn.
+		// facts are still repeated, only none is deduced from the session.
 		switch {
 		case running.Provider != providerName(nil):
 		case running.Triage != "" && running.Triage != "none":
@@ -491,7 +499,7 @@ func (c *cli) doctor(args []string) int {
 
 		// A rejected hook is counted after its latency is observed, so it looks
 		// exactly like a hook that fired. Without this check doctor reports a
-		// healthy relay while every event is being turned away at the door.
+		// healthy relay while every event is being refused at the door.
 		if n := counterValue(metrics, "shoulder_unauthorised_total"); n > 0 {
 			out["unauthorised"] = n
 			code = 1
@@ -554,7 +562,7 @@ func (c *cli) doctor(args []string) int {
 	printFinding(out, "memory_mismatch", "memory_note")
 	switch name := out["llm"]; {
 	case name == providerName(nil) && out["llm_triage"] != nil:
-		fmt.Printf("llm:     none (triage only: %v); stored facts are repeated, none is deduced from a turn\n", out["llm_triage"])
+		fmt.Printf("llm:     none (triage only: %v); stored facts are repeated, none is deduced from the session\n", out["llm_triage"])
 	case name == providerName(nil):
 		fmt.Println("llm:     NONE: no decision model; the daemon observes and stays silent")
 		fmt.Printf("         Set SHOULDER_LLM in %s to one of: %s\n", envFilePath(), strings.Join(llm.Presets(), ", "))
@@ -769,7 +777,7 @@ func report(asJSON bool, v map[string]any, text string) {
 
 // warnMissingModel says what a daemon without a decision model can still do.
 // With a triage it is more than nothing: facts the agent records are written
-// and stored ones repeated, and only deducing one from the turn is lost.
+// and stored ones repeated, and only deducing one from the session is lost.
 func warnMissingModel(log *slog.Logger, provider llm.Provider, jev *llm.Jev) {
 	if provider != nil {
 		return
@@ -779,7 +787,7 @@ func warnMissingModel(log *slog.Logger, provider llm.Provider, jev *llm.Jev) {
 		log.Warn("no decision model configured; shoulder-daemon will observe and stay silent", "hint", hint)
 		return
 	}
-	log.Warn("triage without a decision model; stored facts can be repeated but no fact is deduced from the turn", "hint", hint)
+	log.Warn("triage without a decision model; stored facts can be repeated but no fact is deduced from the session", "hint", hint)
 }
 
 func triageName(j *llm.Jev) string {

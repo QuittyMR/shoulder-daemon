@@ -46,7 +46,7 @@ type LearnRequest struct {
 
 // LearnedFile is what one document yielded. Chunks is how many pieces it was
 // read in, which is the only number that says how much work was done when a
-// document turns out to hold no rules at all.
+// document proves to hold no rules at all.
 type LearnedFile struct {
 	Path    string
 	Chunks  int
@@ -71,7 +71,7 @@ type LearnResult struct {
 // It exists because a repository that has been worked in for years already
 // states most of what this daemon would spend months overhearing: the
 // decisions are in an architecture document, the conventions in a style guide,
-// the commands in a runbook. Learning a turn at a time from a session is how
+// the commands in a runbook. Learning an event at a time from a session is how
 // the store stays current, not how it starts.
 //
 // The scope is the caller's and is stamped on every fact. A document is
@@ -378,7 +378,7 @@ func markdown(name string) bool { return strings.EqualFold(filepath.Ext(name), "
 // would file every fact a second time in another store's words; the private
 // one among them is the file a backend deliberately keeps out of the
 // repository. The agent instruction files are orders to a harness, not
-// knowledge about a codebase, and they are already read on every turn.
+// knowledge about a codebase, and they are already read on every event.
 func protected(name string) bool {
 	lower := strings.ToLower(name)
 	if strings.HasSuffix(lower, ".shoulder.md") {

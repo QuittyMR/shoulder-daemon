@@ -64,7 +64,7 @@ type Local struct {
 	done chan struct{}
 }
 
-// Embedder turns text into a dense vector, so the store can rank by meaning
+// Embedder converts text into a dense vector, so the store can rank by meaning
 // rather than by words in common. It is an interface and it is allowed to be
 // nil: a daemon that has been given no embedding model still has to recall
 // things, and lexical scoring needs nothing installed and no network.
@@ -978,7 +978,7 @@ func set(tokens []string) map[string]struct{} {
 	return out
 }
 
-// weigh turns tokens into a term-frequency vector weighted by rarity.
+// weigh converts tokens into a term-frequency vector weighted by rarity.
 func weigh(tokens []string, idf map[string]float64) map[string]float64 {
 	if len(tokens) == 0 {
 		return nil

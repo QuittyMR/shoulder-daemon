@@ -58,19 +58,19 @@ func TestWindowKeepsMostRecentAndRespectsCharBudget(t *testing.T) {
 	}
 }
 
-func TestWindowSkipsEmptyAssistantTurns(t *testing.T) {
+func TestWindowSkipsEmptyAssistantMessages(t *testing.T) {
 	out := Window([]session.Event{
-		{Kind: session.KindTurnEnd, Assistant: "   "},
+		{Kind: session.KindAnswerEnd, Assistant: "   "},
 		{Kind: session.KindUserPrompt, Prompt: "hello"},
 	}, 40, 4000)
 	if strings.Contains(out, "<assistant>") {
-		t.Fatalf("an empty assistant turn should not be rendered: %q", out)
+		t.Fatalf("an empty assistant message should not be rendered: %q", out)
 	}
 }
 
 func TestWindowRendersThinkingWhenPresent(t *testing.T) {
 	out := Window([]session.Event{
-		{Kind: session.KindTurnEnd, Assistant: "done", Thinking: "considered X then Y"},
+		{Kind: session.KindAnswerEnd, Assistant: "done", Thinking: "considered X then Y"},
 	}, 40, 4000)
 	if !strings.Contains(out, "considered X then Y") {
 		t.Fatalf("thinking should be rendered when an adapter supplies it: %q", out)

@@ -48,7 +48,7 @@ func TestEveryFactWritingPromptAsksForTheAffirmativeForm(t *testing.T) {
 				t.Fatal("the prompt does not ask for a rule to be stated as what is allowed or forbidden")
 			}
 			// The words the store's own polarity gate counts. Naming them is
-			// what turned "state it affirmatively" from a taste into a
+			// what made "state it affirmatively" a
 			// checkable property of the sentence that comes back.
 			for _, banned := range []string{`"not"`, `"never"`, `"don't"`, `"must not"`, `"no longer"`} {
 				if !strings.Contains(flat, banned) {

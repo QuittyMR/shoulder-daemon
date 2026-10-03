@@ -682,7 +682,7 @@ func TestCompareAffirmativeForm(t *testing.T) {
 	var rows []row
 
 	// refusedAs writes probe into a store holding the corpus and this one
-	// rule, and reports whether the store turned it away as a restatement.
+	// rule, and reports whether the store refused it as a restatement.
 	refusedAs := func(project, rule, probe string) verdict {
 		c, stored := loadedStore(ctx, t, emb, project, append(append([]string{}, corpus...), rule))
 		if !stored[rule] {

@@ -10,8 +10,8 @@ import (
 
 const fixture = "testdata/session.jsonl"
 
-func TestTurnAssistantTextCollectsWholeTurn(t *testing.T) {
-	got, err := TurnAssistantText(fixture, DefaultTail)
+func TestAnswerTextCollectsWholeAnswer(t *testing.T) {
+	got, err := AnswerText(fixture, DefaultTail)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -20,14 +20,14 @@ func TestTurnAssistantTextCollectsWholeTurn(t *testing.T) {
 		t.Fatalf("got %q\nwant %q", got, want)
 	}
 	if strings.Contains(got, "first") && strings.Contains(got, "Answer to the first") {
-		t.Fatal("earlier turn leaked in")
+		t.Fatal("earlier answer leaked in")
 	}
 }
 
 // A tool result sits in a user entry but is not a prompt; text before it
-// belongs to the same turn. A subagent's text is a different conversation.
-func TestTurnAssistantTextBoundaries(t *testing.T) {
-	got, err := TurnAssistantText(fixture, DefaultTail)
+// belongs to the same answer. A subagent's text is a different conversation.
+func TestAnswerTextBoundaries(t *testing.T) {
+	got, err := AnswerText(fixture, DefaultTail)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +39,7 @@ func TestTurnAssistantTextBoundaries(t *testing.T) {
 	}
 }
 
-func TestTurnAssistantTextTailDropsPartialLine(t *testing.T) {
+func TestAnswerTextTailDropsPartialLine(t *testing.T) {
 	raw, err := os.ReadFile(fixture)
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +47,7 @@ func TestTurnAssistantTextTailDropsPartialLine(t *testing.T) {
 	// A tail that starts inside the second prompt's line: the cut line is
 	// dropped, so the boundary is lost and the tail yields the rest whole.
 	cut := strings.Index(string(raw), "second question") + 3
-	got, err := TurnAssistantText(fixture, len(raw)-cut)
+	got, err := AnswerText(fixture, len(raw)-cut)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,15 +59,15 @@ func TestTurnAssistantTextTailDropsPartialLine(t *testing.T) {
 	}
 }
 
-func TestTurnAssistantTextEmptyAndMissing(t *testing.T) {
-	if _, err := TurnAssistantText(filepath.Join(t.TempDir(), "none.jsonl"), DefaultTail); err == nil {
+func TestAnswerTextEmptyAndMissing(t *testing.T) {
+	if _, err := AnswerText(filepath.Join(t.TempDir(), "none.jsonl"), DefaultTail); err == nil {
 		t.Fatal("missing file did not error")
 	}
 	p := filepath.Join(t.TempDir(), "empty.jsonl")
 	if err := os.WriteFile(p, []byte(`{"type":"user","message":{"role":"user","content":"hi"}}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, err := TurnAssistantText(p, DefaultTail)
+	got, err := AnswerText(p, DefaultTail)
 	if err != nil || got != "" {
 		t.Fatalf("got %q, %v", got, err)
 	}
@@ -118,7 +118,7 @@ func TestBlocksTolerateAContentThatIsNotAList(t *testing.T) {
 	}
 }
 
-// Harness housekeeping is written into the transcript as user turns. Replaying
+// Harness housekeeping is written into the transcript as user entries. Replaying
 // it as prompts would have the advisor judging text nobody typed.
 func TestNoiseIsWhatTheHarnessWroteNotWhatTheUserSaid(t *testing.T) {
 	noise := []string{

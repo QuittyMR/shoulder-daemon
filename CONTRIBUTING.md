@@ -39,7 +39,7 @@ from the published file in minutes, so it is data with a recipe rather than a bl
 nobody can account for.
 
 **Nothing new goes on the hook path.** The relay answers a harness hook while the user's
-turn is open. Network calls and synchronous disk I/O there are the one thing that breaks
+prompt is being answered. Network calls and synchronous disk I/O there are the one thing that breaks
 the design, and `make bench` is the check - it runs `BenchmarkHookRoundTrip`, and a
 change that moves that number needs to say why in the merge request.
 
@@ -61,8 +61,8 @@ SHOULDER_MEMORY_URL=… go test -tags compare ./internal/memory/ -v  # both stor
 
 The **integration** suite drives a real Claude Code or OpenCode through the adapters and
 asserts on what the daemon saw: sessions observed, hooks authenticated, the daemon
-started and stopped, and — in `integration/memory_test.go` — that a fact learned in one
-turn is recalled for a later one worded differently, that facts survive the daemon
+started and stopped, and — in `integration/memory_test.go` — that a fact learned at one
+prompt is recalled for a later one worded differently, that facts survive the daemon
 exiting between sessions, that a local fact never reaches another project's session,
 that an unreadable store costs the facts and nothing else, that two projects at once
 keep their own places, and that the generated token reaches the harness and is then
@@ -74,7 +74,7 @@ daemon gets a `HOME` and XDG directories of its own. OpenCode still uses your re
 OpenCode history. The OpenCode half drives
 a free model by default and skips itself when that endpoint is not answering, which it
 often is not; `SHOULDER_IT_MODEL` points it at one that is, and a run against a paid
-model costs a few one-word turns.
+model costs a few one-word prompts.
 
 The **live** tests exercise a connector against a running memory service, and skip
 without `SHOULDER_MEMORY_URL`.

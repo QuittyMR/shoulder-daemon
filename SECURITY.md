@@ -25,7 +25,7 @@ holds them in a memory backend. The parts that matter most:
   authentication, is in scope. Running without a token configured is a documented
   misconfiguration, not a vulnerability - see section 1 of [docs/INSTALL.md](docs/INSTALL.md).
 - **The hook path.** A harness hook that can be made to hang, crash the daemon, or block
-  the user's turn is in scope. The relay is designed to fail open.
+  the user's prompt is in scope. The relay is designed to fail open.
 - **Redaction.** `relay/internal/sanitize` exists to keep secrets out of what is stored
   and out of what is sent to a model provider. Anything it lets through - a credential,
   a token, a key - is in scope.

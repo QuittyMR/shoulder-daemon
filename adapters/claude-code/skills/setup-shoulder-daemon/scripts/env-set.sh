@@ -78,7 +78,7 @@ case "${1:-}" in
     ;;
   set)
     # An empty value removes the line: NAME= reads as set, and a key written
-    # that way reports as configured and fails on the first turn.
+    # that way reports as configured and fails on the first prompt.
     if [ -n "${3?usage: env-set.sh set NAME VALUE}" ]; then
       env_cmd set "${2:?usage: env-set.sh set NAME VALUE}" "$3"
     else

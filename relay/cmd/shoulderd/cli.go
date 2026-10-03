@@ -223,7 +223,7 @@ collapse several wordings of one rule into a single record.
   --global     what follows you into every project
   --addr URL   relay base URL (default http://127.0.0.1:8787)
 
-The daemon does this by itself when a session ends and every few turns. Running
+The daemon does this by itself when a session ends and every few events. Running
 it by hand is for watching what it removes.
 ` + projectIs
 
@@ -269,7 +269,7 @@ storing new facts, and which provider and model answer for it.
 var configSetUsage = `usage: shoulderd config set [--log-level=L] [--pickiness=P] [--provider=N] [--model=M] [--addr=URL] [--json]
 
 Change a running daemon without restarting it. Every flag takes effect on the
-next turn; nothing in flight is interrupted, and nothing is written down, so a
+next event; nothing in flight is interrupted, and nothing is written down, so a
 restart returns to what the environment says.
 
   --log-level L   debug, info, warn or error
@@ -796,7 +796,7 @@ func (s *scopeFlags) forReading() (scope.Scope, string, error) {
 }
 
 // cwd is the directory the command ran in, sent with every request beside the
-// project. The project is an identity the daemon cannot turn back into a
+// project. The project is an identity the daemon cannot convert back into a
 // path, and a backend that keeps facts with the checkout needs the path. An
 // unreadable one is sent as nothing: the daemon says what it cannot do
 // without it.
@@ -838,7 +838,7 @@ func (l *stringList) Set(v string) error {
 }
 
 // consolidate runs one tidying pass by hand. The daemon does this on its own at
-// the end of a session and every few turns; this is for looking at the result,
+// the end of a session and every few events; this is for looking at the result,
 // and for a store that has been collecting clutter since before it did.
 func (c *cli) consolidate(args []string) int {
 	fs := c.flags("consolidate", consolidateUsage)

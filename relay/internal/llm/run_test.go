@@ -119,7 +119,7 @@ func TestRunAnswersEveryCallInOneStep(t *testing.T) {
 }
 
 // A handler that fails tells the model something it can act on; it must not
-// end the turn.
+// end the run.
 func TestRunGivesHandlerErrorsBackToTheModel(t *testing.T) {
 	p := &scripted{replies: []Message{
 		{Role: "assistant", ToolCalls: []ToolCall{{ID: "c1", Name: "search_memory", Args: json.RawMessage(`{}`)}}},

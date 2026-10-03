@@ -139,7 +139,7 @@ func TestApplyMovesOnlyWhatTheChangeNames(t *testing.T) {
 // one: if the good half landed before the bad half was noticed, the daemon
 // would be left in a state nobody asked for, having reported an error about
 // something else entirely.
-func TestARefusedChangeTurnsNoKnobAtAll(t *testing.T) {
+func TestARefusedChangeChangesNoKnobAtAll(t *testing.T) {
 	cases := []struct {
 		name   string
 		change Change
@@ -383,7 +383,7 @@ func TestEveryOfferedSpellingIsAccepted(t *testing.T) {
 }
 
 // Doctor reports a model set at the terminal as such rather than as a daemon
-// that disagrees with its env file, so Live remembers which knobs were turned.
+// that disagrees with its env file, so Live remembers which knobs were changed.
 func TestSetAtRuntimeRemembersWhatTheTerminalChanged(t *testing.T) {
 	keys(t)
 	live := New(new(slog.LevelVar), prompts.Eager, "gemini", "", provider(t, "gemini", ""))

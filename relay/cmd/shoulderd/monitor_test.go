@@ -13,7 +13,7 @@ import (
 const sampleLog = `{"time":"2026-09-05T10:00:00.000Z","level":"INFO","msg":"shoulderd listening","addr":"127.0.0.1:8787"}
 {"time":"2026-09-05T10:00:01.000Z","level":"DEBUG","msg":"hook received","event":"UserPromptSubmit"}
 {"time":"2026-09-05T10:00:02.000Z","level":"INFO","msg":"fact stored","id":"mem_1","origin":"s1","scope":"local","project":"repo","category":"structure","content":"main branch is master"}
-{"time":"2026-09-05T10:00:03.000Z","level":"INFO","msg":"advice queued","id":"adv_1","session":"0123456789abcdef","turn":4,"text":"the branch is master"}
+{"time":"2026-09-05T10:00:03.000Z","level":"INFO","msg":"advice queued","id":"adv_1","session":"0123456789abcdef","main_events":4,"text":"the branch is master"}
 {"time":"2026-09-05T10:00:04.000Z","level":"INFO","msg":"advice injected","id":"adv_1","session":"0123456789abcdef","event":"UserPromptSubmit","text":"the branch is master"}
 {"time":"2026-09-05T10:00:05.000Z","level":"INFO","msg":"fact superseded","origin":"cli","scope":"global","project":"","supersedes":"mem_2","category":"preference","content":"terse answers"}
 {"time":"2026-09-05T10:00:06.000Z","level":"INFO","msg":"facts merged","scope":"local","project":"repo","kept":"mem_5","replaced":"mem_7,mem_9","content":"one rule"}
@@ -43,7 +43,7 @@ func TestMonitorFiltersToMovements(t *testing.T) {
 	}
 	for i, want := range []string{
 		`stored      local repo                (structure) "main branch is master"  id=mem_1`,
-		`queued      session 01234567 turn 4   "the branch is master"  id=adv_1`,
+		`queued      session 01234567 event 4  "the branch is master"  id=adv_1`,
 		`injected    session 01234567 UserPromptSubmit  "the branch is master"  id=adv_1`,
 		`superseded  global                   [cli]  (preference) "terse answers"  supersedes=mem_2`,
 		`merged      local repo                "one rule"  kept=mem_5  replaced=mem_7,mem_9`,

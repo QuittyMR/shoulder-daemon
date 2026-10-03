@@ -66,15 +66,15 @@ func TestANeutralEventIsRecordedWithDefaultsFilledIn(t *testing.T) {
 }
 
 // An adapter that names the agent has said where the event came from, whether
-// or not it also sent origin: without it the agent's turn end would count as
+// or not it also sent origin: without it the agent's answer end would count as
 // the user's and its prompt would read as the user's words.
 func TestANeutralEventWithAnAgentIdComesFromTheAgent(t *testing.T) {
 	s, box := newTestServer(t)
 	h := s.Handler()
 
 	postNeutral(h, `{"session_id":"n3","event":"user_prompt","prompt":"find the leak","agent_id":"agent-1","agent_type":"explore"}`)
-	postNeutral(h, `{"session_id":"n3","event":"turn_end","assistant":"found it","agent_id":"agent-1","agent_type":"explore"}`)
-	events, turn, ok := s.Registry.Snapshot("n3")
+	postNeutral(h, `{"session_id":"n3","event":"answer_end","assistant":"found it","agent_id":"agent-1","agent_type":"explore"}`)
+	events, count, ok := s.Registry.Snapshot("n3")
 	if !ok || len(events) != 2 {
 		t.Fatalf("got %+v", events)
 	}
@@ -83,11 +83,11 @@ func TestANeutralEventWithAnAgentIdComesFromTheAgent(t *testing.T) {
 			t.Fatalf("an event naming an agent was recorded as the user's: %+v", ev)
 		}
 	}
-	if turn != 0 {
-		t.Fatalf("an agent's turn end advanced the user's turn to %d", turn)
+	if count != 0 {
+		t.Fatalf("an agent's answer end advanced the main thread's count to %d", count)
 	}
 
-	box.Push(session.Advice{ID: "a1", SessionID: "n3", Kind: session.AdviceNote, Level: session.LevelAction, Text: "for agent-1", AgentID: "agent-1", TTLTurns: 5})
+	box.Push(session.Advice{ID: "a1", SessionID: "n3", Kind: session.AdviceNote, Level: session.LevelAction, Text: "for agent-1", AgentID: "agent-1", TTLEvents: 5})
 	if rec := postNeutral(h, `{"session_id":"n3","event":"tool_call","tool_name":"read"}`); strings.Contains(rec.Body.String(), "for agent-1") {
 		t.Fatal("the main thread was handed a subagent's note")
 	}
@@ -116,7 +116,7 @@ func TestANeutralPromptCollectsPendingAdvice(t *testing.T) {
 	h := s.Handler()
 	postNeutral(h, `{"session_id":"n2","event":"user_prompt","prompt":"first"}`)
 
-	box.Push(session.Advice{ID: "a1", SessionID: "n2", Kind: session.AdviceNote, Level: session.LevelPlan, Text: "the branch is master", CreatedTurn: 1, TTLTurns: 5})
+	box.Push(session.Advice{ID: "a1", SessionID: "n2", Kind: session.AdviceNote, Level: session.LevelPlan, Text: "the branch is master", CreatedEvent: 1, TTLEvents: 5})
 
 	rec := postNeutral(h, `{"session_id":"n2","event":"user_prompt","prompt":"rebase onto main"}`)
 	var out struct {
@@ -178,7 +178,7 @@ func TestHealthAndMetricsNeedNoToken(t *testing.T) {
 }
 
 func TestSuppressLabelKeepsTheReasonNotTheNumber(t *testing.T) {
-	for in, want := range map[string]string{"turn_gap:6": "turn_gap", "session_cap:4000": "session_cap", "expired": "expired"} {
+	for in, want := range map[string]string{"event_gap:6": "event_gap", "session_cap:4000": "session_cap", "expired": "expired"} {
 		if got := suppressLabel(in); got != want {
 			t.Errorf("suppressLabel(%q) = %q, want %q", in, got, want)
 		}
@@ -194,7 +194,7 @@ func TestWriteJSONFallsBackToSilenceWhenTheValueCannotBeEncoded(t *testing.T) {
 }
 
 // The daemon generates its own token, and the editor that started it read its
-// environment before that value existed. Enforcing immediately would turn away
+// environment before that value existed. Enforcing immediately would refuse
 // every hook of the session that started the daemon, silently, which is the
 // failure this whole mechanism exists to remove.
 func TestAGeneratedTokenIsNotEnforcedUntilTheHarnessHasIt(t *testing.T) {
@@ -204,7 +204,7 @@ func TestAGeneratedTokenIsNotEnforcedUntilTheHarnessHasIt(t *testing.T) {
 	h := s.Handler()
 
 	if rec := postNeutral(h, `{"session_id":"a1","event":"user_prompt"}`); rec.Code != http.StatusOK {
-		t.Fatalf("a hook with no token was turned away during adoption: %d", rec.Code)
+		t.Fatalf("a hook with no token was refused during adoption: %d", rec.Code)
 	}
 	if _, _, ok := s.Registry.Snapshot("a1"); !ok {
 		t.Fatal("the event was not observed")
@@ -234,11 +234,11 @@ func TestATokenGivenToTheDaemonIsEnforcedImmediately(t *testing.T) {
 	}
 }
 
-// exchange posts a prompt and the end of its answer, and returns what the
-// prompt was answered with.
-func exchange(h http.Handler, sid string) string {
+// promptAndAnswer posts a prompt and the end of its answer, and returns what
+// the prompt was answered with.
+func promptAndAnswer(h http.Handler, sid string) string {
 	body := postNeutral(h, `{"session_id":"`+sid+`","event":"user_prompt","prompt":"go on"}`).Body.String()
-	postNeutral(h, `{"session_id":"`+sid+`","event":"turn_end","assistant":"done"}`)
+	postNeutral(h, `{"session_id":"`+sid+`","event":"answer_end","assistant":"done"}`)
 	return body
 }
 
@@ -250,26 +250,26 @@ func TestTheDefaultGapKeepsTwoPromptsFreeOfNotesAfterOne(t *testing.T) {
 	queue := func(id string) {
 		box.Push(session.Advice{
 			ID: id, SessionID: "g1", Kind: session.AdviceNote, Level: session.LevelPlan,
-			Text: id, CreatedTurn: s.Registry.Turn("g1"), TTLTurns: 4,
+			Text: id, CreatedEvent: s.Registry.MainEvents("g1"), TTLEvents: 4,
 		})
 	}
 
-	exchange(h, "g1")
+	promptAndAnswer(h, "g1")
 	queue("first")
-	if got := exchange(h, "g1"); !strings.Contains(got, "first") {
+	if got := promptAndAnswer(h, "g1"); !strings.Contains(got, "first") {
 		t.Fatalf("the note was not delivered at the prompt after it was written: %s", got)
 	}
 	for _, id := range []string{"second", "third"} {
 		queue(id)
-		if got := exchange(h, "g1"); got != string(noAdviceJSON) {
+		if got := promptAndAnswer(h, "g1"); got != string(noAdviceJSON) {
 			t.Fatalf("%q was delivered inside the gap: %s", id, got)
 		}
 	}
-	if n := s.Metrics.Get("shoulder_advice_suppressed_turn_gap_total"); n != 2 {
+	if n := s.Metrics.Get("shoulder_advice_suppressed_event_gap_total"); n != 2 {
 		t.Fatalf("%d notes counted as suppressed by the gap, want 2", n)
 	}
 	queue("fourth")
-	if got := exchange(h, "g1"); !strings.Contains(got, "fourth") {
+	if got := promptAndAnswer(h, "g1"); !strings.Contains(got, "fourth") {
 		t.Fatalf("the note at the third prompt after the last one was not delivered: %s", got)
 	}
 }
@@ -279,7 +279,7 @@ func TestTheDefaultGapKeepsTwoPromptsFreeOfNotesAfterOne(t *testing.T) {
 func TestANoteOutlivesTwoFurtherPromptsAndNoMore(t *testing.T) {
 	for _, tc := range []struct {
 		sid       string
-		exchanges int
+		prompts   int
 		delivered bool
 	}{
 		{"t1", 2, true},
@@ -290,16 +290,42 @@ func TestANoteOutlivesTwoFurtherPromptsAndNoMore(t *testing.T) {
 		postNeutral(h, `{"session_id":"`+tc.sid+`","event":"user_prompt","prompt":"start"}`)
 		box.Push(session.Advice{
 			ID: "a", SessionID: tc.sid, Kind: session.AdviceNote, Level: session.LevelAction,
-			Text: "mind the lock", CreatedTurn: s.Registry.Turn(tc.sid), TTLTurns: 4,
+			Text: "mind the lock", CreatedEvent: s.Registry.MainEvents(tc.sid), TTLEvents: 4,
 		})
-		postNeutral(h, `{"session_id":"`+tc.sid+`","event":"turn_end","assistant":"done"}`)
-		for i := 1; i < tc.exchanges; i++ {
-			exchange(h, tc.sid)
+		postNeutral(h, `{"session_id":"`+tc.sid+`","event":"answer_end","assistant":"done"}`)
+		for i := 1; i < tc.prompts; i++ {
+			promptAndAnswer(h, tc.sid)
 		}
 		postNeutral(h, `{"session_id":"`+tc.sid+`","event":"user_prompt","prompt":"go on"}`)
 		got := postNeutral(h, `{"session_id":"`+tc.sid+`","event":"tool_call","tool_name":"Bash"}`).Body.String()
 		if strings.Contains(got, "mind the lock") != tc.delivered {
-			t.Fatalf("%d prompts after the note was written, delivered = %v: %s", tc.exchanges, !tc.delivered, got)
+			t.Fatalf("%d prompts after the note was written, delivered = %v: %s", tc.prompts, !tc.delivered, got)
+		}
+	}
+}
+
+// An adapter installed before the kind was renamed still sends the old name,
+// and its answer end is recorded and counted as one.
+func TestTheNeutralEndpointAcceptsTheOldNameOfAnAnswerEnd(t *testing.T) {
+	s, _ := newTestServer(t)
+	h := s.Handler()
+	postNeutral(h, `{"session_id":"old","event":"user_prompt","prompt":"hello"}`)
+	postNeutral(h, `{"session_id":"old","event":"turn_end","assistant":"hi"}`)
+	postNeutral(h, `{"session_id":"old","event":"answer_end","assistant":"hi again"}`)
+
+	events, count, ok := s.Registry.Snapshot("old")
+	if !ok || len(events) != 3 {
+		t.Fatalf("recorded %d events, ok=%v", len(events), ok)
+	}
+	if events[1].Kind != session.KindAnswerEnd || events[2].Kind != session.KindAnswerEnd {
+		t.Fatalf("kinds %q and %q, want both recorded as an answer end", events[1].Kind, events[2].Kind)
+	}
+	if count != 3 {
+		t.Fatalf("the session counted %d main-thread events, want the prompt and both answer ends", count)
+	}
+	for i := range events {
+		if queued := <-s.Queue; queued.Kind != events[i].Kind {
+			t.Fatalf("the pipeline was handed %q for event %d, want %q", queued.Kind, i, events[i].Kind)
 		}
 	}
 }

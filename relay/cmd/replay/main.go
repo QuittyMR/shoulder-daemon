@@ -1,5 +1,5 @@
 // Command replay feeds a recorded Claude Code transcript through a running
-// shoulder-daemon relay, turn by turn, as if the session were happening live.
+// shoulder-daemon relay, answer by answer, as if the session were happening live.
 //
 // It exists to answer "what would shoulder-daemon have remembered from this
 // work?" without re-running the work.
@@ -23,12 +23,12 @@ import (
 
 func main() {
 	var (
-		path      = flag.String("transcript", "", "path to a Claude Code transcript .jsonl")
-		relay     = flag.String("relay", "http://127.0.0.1:8787", "relay base URL")
-		sessionID = flag.String("session", "", "session id to replay under (default: derived from the file name)")
-		settle    = flag.Duration("settle", 6*time.Second, "pause after each turn so the decision pass can finish")
-		maxTurns  = flag.Int("max-turns", 0, "stop after N turns (0 = all)")
-		verbose   = flag.Bool("v", false, "print every event")
+		path       = flag.String("transcript", "", "path to a Claude Code transcript .jsonl")
+		relay      = flag.String("relay", "http://127.0.0.1:8787", "relay base URL")
+		sessionID  = flag.String("session", "", "session id to replay under (default: derived from the file name)")
+		settle     = flag.Duration("settle", 6*time.Second, "pause after each answer so the decision pass can finish")
+		maxAnswers = flag.Int("max-answers", 0, "stop after N answers (0 = all)")
+		verbose    = flag.Bool("v", false, "print every event")
 	)
 	flag.Parse()
 	if *path == "" {
@@ -53,7 +53,7 @@ func main() {
 
 	toolNames := map[string]string{}
 	var pendingText strings.Builder
-	turns, prompts, tools, injections := 0, 0, 0, 0
+	answers, prompts, tools, injections := 0, 0, 0, 0
 
 	for _, line := range strings.Split(string(raw), "\n") {
 		if strings.TrimSpace(line) == "" {
@@ -103,24 +103,24 @@ func main() {
 				}
 			}
 			if m.StopReason == "end_turn" || m.StopReason == "stop_sequence" {
-				turns++
-				adv := c.send(session.Event{TS: ts, Kind: session.KindTurnEnd, Assistant: strings.TrimSpace(pendingText.String())})
+				answers++
+				adv := c.send(session.Event{TS: ts, Kind: session.KindAnswerEnd, Assistant: strings.TrimSpace(pendingText.String())})
 				pendingText.Reset()
 				if adv != "" {
 					injections++
-					fmt.Printf("  turn %d injected: %s\n", turns, adv)
+					fmt.Printf("  answer %d injected: %s\n", answers, adv)
 				}
-				fmt.Printf("turn %d (%d prompts, %d tool calls so far)\n", turns, prompts, tools)
+				fmt.Printf("answer %d (%d prompts, %d tool calls so far)\n", answers, prompts, tools)
 				time.Sleep(*settle)
-				if *maxTurns > 0 && turns >= *maxTurns {
-					fmt.Printf("stopping at %d turns\n", turns)
+				if *maxAnswers > 0 && answers >= *maxAnswers {
+					fmt.Printf("stopping at %d answers\n", answers)
 					goto done
 				}
 			}
 		}
 	}
 done:
-	fmt.Printf("\nreplayed %d turns, %d prompts, %d tool calls, %d injections\n", turns, prompts, tools, injections)
+	fmt.Printf("\nreplayed %d answers, %d prompts, %d tool calls, %d injections\n", answers, prompts, tools, injections)
 }
 
 type client struct {

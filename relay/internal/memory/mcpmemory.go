@@ -523,7 +523,7 @@ func (m *MCPMemory) Store(ctx context.Context, r Record) (string, error) {
 }
 
 // Forget deletes a record. It is the only way the working notes this daemon
-// writes ever leave the store: they are superseded turn after turn, and a
+// writes ever leave the store: they are superseded event after event, and a
 // supersede replaces rather than removes, so the population of one note per
 // session per project only ever grows.
 //

@@ -205,7 +205,7 @@ func writeFileAtomic(path string, body []byte, perm os.FileMode) error {
 
 // jsonObject is a JSON object with its keys in the order the file had them.
 // encoding/json alone cannot do this: decoding into a map loses the order and
-// re-encoding sorts it, which turns a one-value edit of somebody's settings
+// re-encoding sorts it, which converts a one-value edit of somebody's settings
 // into a rewrite of the whole file.
 type jsonObject []jsonField
 

@@ -1,7 +1,7 @@
 # The decision model contract
 
 shoulder-daemon's relay contains no model and no opinion about what advice
-should be. Once per turn boundary, off the session's hot path, it hands a
+should be. At every prompt and every answer end, off the session's hot path, it hands a
 rendered window of the session and whatever its memory backend matched to one
 provider, lets that provider look things up if it wants to, and acts on the JSON
 that comes back at the end. Anything that can answer that prompt is a valid
@@ -59,7 +59,7 @@ Four traps are encoded in the presets rather than left to be rediscovered:
   access.
 - **`opencode-go`** is a subscription gateway in front of open-weight coding
   models, billed monthly rather than per token, which is what makes it a
-  reasonable place to put a job that runs on every turn. It's an ordinary
+  reasonable place to put a job that runs on every event. It's an ordinary
   OpenAI-compatible HTTP endpoint: `OPENCODE_API_KEY` goes out as a Bearer
   token, and nothing shells out to the `opencode` CLI or reads its config. It's
   a separate namespace from OpenCode Zen, which carries the frontier models.
@@ -120,27 +120,27 @@ covers the other two settings this same command reaches - the log level and the 
 
 `SHOULDER_TRIAGE=jev` puts TypeSafe's Jev (System One) in front of the decision model. Jev answers
 typed questions with calibrated probabilities and never writes text, so it cannot replace the
-decision model; it decides which turns need it. Each turn it is sent the recent turn and the
-recalled facts and asked, in one call, whether the turn calls for `nothing`, `create` (a new fact),
+decision model; it decides which events need it. At each one it is sent the recent events and the
+recalled facts and asked, in one call, whether they call for `nothing`, `create` (a new fact),
 `update` (a stored fact is now wrong) or `inject` (a stored fact the session should be reminded of),
 and which stored fact it means. `update` and `inject` are offered only when a recalled fact has an
 id to name.
 
 | Variable | Default | |
 |---|---|---|
-| `SHOULDER_TRIAGE` | empty (off) | `jev` turns it on; anything else refuses to start. |
+| `SHOULDER_TRIAGE` | empty (off) | `jev` switches it on; anything else refuses to start. |
 | `TYPESAFE_API_KEY` | none | Required when triage is on. |
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | |
 | `SHOULDER_JEV_MODEL` | `jev-latest` | |
 | `SHOULDER_JEV_MIN_CONFIDENCE` | `0.6` | From 0 to 1. A verdict below it is not acted on. |
 
 A confident `inject` queues the stored fact's text as action-level advice, delivered at the
-session's next tool call rather than its next prompt, and ends the turn without calling the decision
-model. A confident `nothing` ends the turn the same way, but only at pickiness `balanced` or
-stricter: `eager` and `open` tell the decision model to store rules a turn merely implies, which a
-"nothing" does not rule out, so at those two the turn still goes to it. `create`, `update`, a
+session's next tool call rather than its next prompt, and settles the event without calling the decision
+model. A confident `nothing` settles it the same way, but only at pickiness `balanced` or
+stricter: `eager` and `open` tell the decision model to store rules the session merely implies, which a
+"nothing" does not rule out, so at those two the event still goes to it. `create`, `update`, a
 verdict below the threshold, and any triage failure go to the decision model exactly as if triage
-were off. A turn triage ends writes nothing and records no session keywords, because only the
+were off. An event triage settles writes nothing and records no session keywords, because only the
 decision model produces either.
 
 Triage without `SHOULDER_LLM` is allowed: stored facts can still be repeated, and a confident
@@ -148,7 +148,7 @@ Triage without `SHOULDER_LLM` is allowed: stored facts can still be repeated, an
 `shoulder_triage_unhandled_total`. The other counters are `shoulder_triage_nothing_total`,
 `shoulder_triage_inject_total`, `shoulder_triage_create_total`, `shoulder_triage_update_total`,
 `shoulder_triage_unsure_total` and `shoulder_triage_error_total`. The state is cut to about 48 KB,
-well inside Jev's 32k-token window, by dropping the oldest part of the turn; a clipped fact is cut
+well inside Jev's 32k-token window, by dropping the oldest part of the event window; a clipped fact is cut
 at a character boundary. Triage has its own time limit, a quarter of `ADVISOR_TIMEOUT_SECONDS` and
 never more than 5s, so a stalled Jev leaves the decision model its full timeout. Its latency is the
 `shoulder_hook_latency_seconds` series with `event="triage"`. `shoulderd config show` reports the triage in use; it is
@@ -167,7 +167,7 @@ Authorization: Bearer {key}          # omitted when the preset has no key
   "max_tokens": 1200,
   "messages": [
     { "role": "system", "content": "<the decision prompt>" },
-    { "role": "user",   "content": "<the turn window and the recalled facts>" }
+    { "role": "user",   "content": "<the event window and the recalled facts>" }
   ],
   "tools": [
     { "type": "function", "function": { "name": "search_memory",   … } },
@@ -197,14 +197,14 @@ path.
 The user message is two sections:
 
 ```
-<recent-turn>
+<recent-events>
 <user>refactor the parser</user>
 <tool name="Read">/src/parser.go</tool>
 <result name="Read">package parser…</result>
 <tool name="Bash">go test ./...</tool>
 <result name="Bash" error="true">FAIL parser_test.go:41</result>
 <assistant>I rewrote the tokenizer loop.</assistant>
-</recent-turn>
+</recent-events>
 
 <stored-facts>
 id=a3f19c4e8b2d7015 scope=local category=fact: the main branch is master
@@ -212,7 +212,7 @@ id=7c02b8de41af9330 scope=global category=preference: prefers terse answers
 </stored-facts>
 ```
 
-The turn window is deliberately lossy: the model needs the shape of the work,
+The event window is deliberately lossy: the model needs the shape of the work,
 not a transcript. Tool arguments are reduced to the one field that identifies
 what the call touched - the command, the file path, the search pattern and where
 it looked - and tool results are clipped at 1500 characters. The window keeps at
@@ -220,7 +220,7 @@ most `WINDOW_EVENTS` events (default 40) inside `WINDOW_CHARS` characters
 (default 12000), rendered oldest first and dropped from the oldest end when the
 character budget runs out.
 
-The `<assistant>` block is the whole turn's text, not only its last message.
+The `<assistant>` block is the whole answer's text, not only its last message.
 Claude Code's Stop hook carries only the final text block, so the daemon reads
 the rest from the session transcript the hook names; when that file cannot be
 read, the hook's message is all it has, and it says so once per session in the
@@ -244,7 +244,7 @@ sentences. A sentence ends at a line break or at a full stop, an exclamation
 mark or a question mark that ends a word, so `conn.go`, `5.3` and
 `relay.local` stay whole; a one-word piece is not searched, and at most sixteen
 sentences are, the newest, with the cut counted in
-`shoulder_recall_sentences_dropped_total`. One embedding of four turns is an
+`shoulder_recall_sentences_dropped_total`. One embedding of a whole window is an
 average of everything said, and a fact that matches a single sentence closely
 is only a weak match to the average - searched on its own, that sentence finds
 it. A record found by more than one search keeps its best score, each scope's
@@ -268,10 +268,10 @@ and an unbounded one lets a single call spend the whole context window.
 `min_score` drops matches the backend scored below it, and a record the backend
 left unscored is never dropped. It answers `(nothing matched)` when nothing does.
 
-`session_history({})` returns the keywords from every earlier turn of this
+`session_history({})` returns the keywords from every earlier event of this
 session, in order, on one comma-separated line. It's what makes a bare "do it" or
-"same for the other one" readable: the turn alone doesn't say what it's about and
-what came before does. It answers `nothing yet` on the first turn.
+"same for the other one" readable: the prompt alone doesn't say what it's about and
+what came before does. It answers `nothing yet` on the first event.
 
 A tool that fails hands its error text back to the model rather than ending the
 pass, because the model can retry with different arguments. Every call of either
@@ -305,39 +305,39 @@ final content must be a JSON object with three fields:
 common answer. The prompt asks for one short note, spoken in two cases: a stored
 fact contradicts what the assistant just said or is about to do, or a stored
 fact says how this codebase does the thing just asked for, which the assistant
-would otherwise spend the turn searching for.
+would otherwise spend its answer searching for.
 
-**`keywords`** are the terms the model took from the turn and from whatever it
+**`keywords`** are the terms the model took from the event window and from whatever it
 just injected: nouns and identifiers - file paths, function and type names,
 commands, packages, the subject being worked on - rather than verbs. They're
 folded into one running note per session, and that note is what `session_history`
-reads back, so a bare "do it" on a later turn still means something.
+reads back, so a bare "do it" at a later prompt still means something.
 
 That note is a stored record like any other, with one difference that decides
 everything about it: its kind is `session`, where a fact carries the zero value.
 A session record is local by definition, filed under the project this session is
 running in, and it's rewritten rather than appended to - each consult that names
 something new supersedes the record the last one wrote, so there's one record per
-session and not one per turn. A prompt and an answer end are each consulted, and
+session and not one per event. A prompt and an answer end are each consulted, and
 the consults of one session run concurrently, so this rewrite is the one step
-they take turns at: without that, two of them would each replace the same record
+they do one at a time: without that, two of them would each replace the same record
 and leave two.
 A read that names no kind is asking for facts, and recall, a digest and
 `shoulderd fact list` all name none, so the note never appears in any of them and
 is never quoted back to a person as something the daemon learned. It's worth
-having on the next turn and noise a week later. Writes count
+having on the next event and noise a week later. Writes count
 `shoulder_session_keywords_stored_total` the first time and
 `shoulder_session_keywords_superseded_total` after that; a session whose
 directory doesn't resolve to a project has nowhere to file it and counts
 `shoulder_session_keywords_no_project_total` instead.
 
-How many a turn may add is cut after parsing rather than trusted to the model:
-eight for a short turn, twenty-five for a long one, split at roughly 500 tokens
-of rendered turn. The model is told those numbers too, and they're enforced
+How many one consult may add is cut after parsing rather than trusted to the model:
+eight for a short event window, twenty-five for a long one, split at roughly 500
+tokens of rendered window. The model is told those numbers too, and they're enforced
 anyway, because a note that grows at whatever rate the model picks is a prompt
 nobody sized.
 
-**`facts`** are durable statements the turn established that are not already
+**`facts`** are durable statements the session established that are not already
 stored - something that would still be true and useful in another session next
 month. `category` is one of four, and who may add each is part of the definition:
 
@@ -404,7 +404,7 @@ Text that survives is:
    thing;
 5. put through the budget gate, which counts the main thread's prompts and
    answer ends. By default it permits one note in six of them
-   (`BUDGET_MIN_TURN_GAP`), which is a note and then two prompts without one,
+   (`BUDGET_MIN_EVENT_GAP`), which is a note and then two prompts without one,
    and 4000 characters per session, and it drops a note once the count has
    moved four past the one it was written at.
 
@@ -455,7 +455,7 @@ costs the coding session nothing.
 
 ## Privacy
 
-The turn window contains the user's prompts, the assistant's replies, the
+The event window contains the user's prompts, the assistant's replies, the
 commands it ran and the output it saw. All of it goes to whichever provider you
 configured. If that is a hosted model, source code leaves the machine. The
 `local` preset and `advisor-echo` are there so that it does not have to.

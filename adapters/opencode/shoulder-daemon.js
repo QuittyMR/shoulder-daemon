@@ -10,7 +10,7 @@
  * It awaits every hook with no timeout, and it awaits them through
  * Effect.promise, which treats a rejection as an unrecoverable defect rather
  * than a typed error - and no call site catches it. A hook that throws takes
- * the user's turn with it. Claude Code's harness fails open on our behalf; here
+ * the user's prompt with it. Claude Code's harness fails open on our behalf; here
  * that guarantee is ours to keep, so every hook body below is wrapped and can
  * never rethrow, and every request carries its own deadline.
  *
@@ -228,7 +228,7 @@ function reviveDaemon() {
 
 /**
  * watchReadiness re-asks whether the relay can still do its job, and replaces it
- * if it cannot, without the turn waiting on either.
+ * if it cannot, without the session waiting on either.
  *
  * Probing when the plugin loads is not enough on its own. A store that dies
  * under a running editor leaves a relay that goes on answering /v1/events with
@@ -239,7 +239,7 @@ function reviveDaemon() {
  *
  * Deliberately not awaited and deliberately not returned: a prompt must not
  * wait a second on a probe, and a rejection that escaped here would reach a
- * hook body and take the user's turn with it.
+ * hook body and take the user's prompt with it.
  */
 function watchReadiness() {
   answering()
@@ -247,7 +247,7 @@ function watchReadiness() {
     .catch(() => {});
 }
 
-/** send fires an event we do not need an answer to, without making the turn wait. */
+/** send fires an event we do not need an answer to, without making the session wait. */
 function send(event) {
   post(event).catch(() => {});
 }
@@ -482,7 +482,7 @@ export const ShoulderDaemon = async ({ directory, worktree }) => {
   const live = new Set(); // sessions opened here and not yet reported as over
   closeOnExit(live, cwd);
 
-  const turn = (id) => {
+  const answer = (id) => {
     if (!assistant.has(id)) assistant.set(id, { text: "", reasoning: "" });
     return assistant.get(id);
   };
@@ -504,7 +504,7 @@ export const ShoulderDaemon = async ({ directory, worktree }) => {
         });
         if (advice && advice.text) pending.set(sessionID, advice.text);
       } catch {
-        /* never rethrow: this hook runs inside the user's turn */
+        /* never rethrow: this hook runs inside the user's prompt */
       }
     },
 
@@ -563,18 +563,18 @@ export const ShoulderDaemon = async ({ directory, worktree }) => {
           const part = p.part;
           const id = part.sessionID;
           if (!id) return;
-          if (part.type === "text" && part.text) turn(id).text = part.text;
-          if (part.type === "reasoning" && part.text) turn(id).reasoning = part.text;
+          if (part.type === "text" && part.text) answer(id).text = part.text;
+          if (part.type === "reasoning" && part.text) answer(id).reasoning = part.text;
           return;
         }
 
         if (event.type === "session.idle" && p.sessionID) {
           live.add(p.sessionID);
-          const t = turn(p.sessionID);
+          const t = answer(p.sessionID);
           assistant.delete(p.sessionID);
           send({
             session_id: p.sessionID,
-            event: "turn_end",
+            event: "answer_end",
             cwd,
             assistant: t.text,
             thinking: t.reasoning,

@@ -47,7 +47,7 @@ func TestDecidePutsTheWindowAndEveryRecalledFactInFrontOfTheModel(t *testing.T) 
 		t.Fatal("the pickiness asked for was not the one sent")
 	}
 	for _, want := range []string{
-		"<recent-turn>\n<user>rebase onto main</user>\n</recent-turn>",
+		"<recent-events>\n<user>rebase onto main</user>\n</recent-events>",
 		"id=r1 scope=global category=preference: terse answers",
 		"id=r2 scope=local category=structure: main branch is master",
 	} {

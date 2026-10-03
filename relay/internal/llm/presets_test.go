@@ -149,7 +149,7 @@ func TestAChainIgnoresTheSingleProviderOverrides(t *testing.T) {
 }
 
 // A provider whose key is not in the daemon's environment cannot answer, and
-// finding that out at the first turn rather than at configuration time means
+// finding that out at the first event rather than at configuration time means
 // finding out from a 401 in a log nobody is watching.
 func TestAProviderWithNoKeyIsRefusedByName(t *testing.T) {
 	clearEnv(t)

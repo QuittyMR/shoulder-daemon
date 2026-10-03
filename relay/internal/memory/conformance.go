@@ -173,7 +173,7 @@ func TestConnector(t *testing.T, newConnector func() Connector) {
 				t.Fatalf("%s: %v", read.name, err)
 			}
 			if _, found := conformanceFind(got, stale); found {
-				t.Errorf("%s still returns the superseded content; every later turn will supersede it again", read.name)
+				t.Errorf("%s still returns the superseded content; every later event will supersede it again", read.name)
 			}
 			for _, r := range got {
 				if r.ID == oldID {
@@ -308,7 +308,7 @@ func TestConnector(t *testing.T, newConnector func() Connector) {
 		}
 	})
 
-	// The running note of a session is one record rewritten every turn, so this
+	// The running note of a session is one record rewritten every event, so this
 	// is the supersede that happens most often: same scope, same project, same
 	// kind, new content.
 	t.Run("a session record supersedes itself", func(t *testing.T) {
@@ -320,7 +320,7 @@ func TestConnector(t *testing.T, newConnector func() Connector) {
 		rec := Record{Content: before, Kind: KindSession, Scope: scope.Local, Project: conformanceProjectA}
 		oldID := conformanceStore(ctx, t, c, rec)
 		if oldID == "" {
-			t.Fatal("Store returned no id: the next turn has nothing to supersede")
+			t.Fatal("Store returned no id: the next event has nothing to supersede")
 		}
 		rec.Content = after
 		newID, err := c.Supersede(ctx, oldID, rec)
@@ -328,12 +328,12 @@ func TestConnector(t *testing.T, newConnector func() Connector) {
 			t.Fatalf("supersede: %v", err)
 		}
 		if newID == "" {
-			t.Fatal("Supersede returned no id: the turn after this one has nothing to supersede")
+			t.Fatal("Supersede returned no id: the event after this one has nothing to supersede")
 		}
 
 		got := conformanceList(ctx, t, c, Query{Scope: scope.Local, Project: conformanceProjectA, Kind: KindSession})
 		if _, found := conformanceFind(got, before); found {
-			t.Error("the superseded keywords are still listed; the note grows a second copy every turn")
+			t.Error("the superseded keywords are still listed; the note grows a second copy every event")
 		}
 		for _, r := range got {
 			if r.ID == oldID {
@@ -345,7 +345,7 @@ func TestConnector(t *testing.T, newConnector func() Connector) {
 			t.Fatalf("the replacement is not listed where the original was: %+v", got)
 		}
 		if current.ID != newID {
-			t.Errorf("the listed replacement is %q but Supersede reported %q; the next turn would supersede the wrong record", current.ID, newID)
+			t.Errorf("the listed replacement is %q but Supersede reported %q; the next event would supersede the wrong record", current.ID, newID)
 		}
 		if _, found := conformanceFind(conformanceList(ctx, t, c, Query{Scope: scope.Local, Project: conformanceProjectA}), after); found {
 			t.Error("the replacement is a fact as far as a default list is concerned")

@@ -88,7 +88,7 @@ Use AskUserQuestion, one question at a time, recommended option first. Skip any
 question preflight already answered, and say what you found instead of asking.
 
 **Q1 - the decision model.** This is the only setting the daemon cannot work
-without; with none it observes every turn and stays silent. `SHOULDER_LLM`
+without; with none it observes every event and stays silent. `SHOULDER_LLM`
 names a connector and takes a comma-separated list to fail over through.
 
 | Connector | Endpoint | Default model | Key |
@@ -101,8 +101,8 @@ names a connector and takes a comma-separated list to fail over through.
 | `openai` | OpenAI | `gpt-5.2-mini` | `OPENAI_API_KEY` |
 | `local` | Ollama on `127.0.0.1:11434` | `qwen2.5-coder:7b` | none |
 
-Recommend by latency, not by quality: the pass runs while the user's turn is
-open and advice that lands after the assistant has already chosen what to do is
+Recommend by latency, not by quality: the pass runs while the user's prompt is
+being answered and advice that lands after the assistant has already chosen what to do is
 worth nothing. A flash-tier model beats a better one that thinks for twenty
 seconds. Put whichever connectors already have a key first in the list, and
 offer `local` to anyone who wants no key at all - check `curl -sf
@@ -194,7 +194,7 @@ For the connector they chose, in order:
 
    Give them the URL to get one from, then wait. Do not configure around a
    missing key or write a placeholder: an env file with `GEMINI_API_KEY=` in it
-   reports as configured and fails on the first turn.
+   reports as configured and fails on the first prompt.
 
 ## 5. Write, restart, verify
 
@@ -232,7 +232,7 @@ Then verify, and treat the verification as the deliverable:
   is not done. Doctor exits 1 for any of these, and also for hook events it has
   not seen yet, so read the lines rather than the exit code.
 - `doctor` also reports hook events it has never seen. Some only appear after
-  the user's next turn, so say which ones are still outstanding rather than
+  the user's next prompt, so say which ones are still outstanding rather than
   claiming a clean result you have not seen.
 - The plugin's hooks only reload when the editor restarts. If you changed
   anything the adapter carries, say so.

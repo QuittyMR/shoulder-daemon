@@ -38,7 +38,7 @@ answer the question, say so plainly instead of guessing or padding.
 No preamble, no "Based on the stored knowledge", no bullet lists, no headings, no
 offers to help further. Do not talk about memory, scopes or records; just answer.`
 
-// Digest turns everything a scope holds into prose. The output is
+// Digest converts everything a scope holds into prose. The output is
 // meant to be read, not audited: a list of records is something the CLI could
 // print without a model, and would tell the user nothing they did not already
 // have.
@@ -57,22 +57,22 @@ When you are given both project knowledge and global knowledge, be explicit abou
 which is which: what holds only inside this project, and what follows the person into
 every other one.`
 
-// decisionTemplate is the prompt for one turn, with the one paragraph that
+// decisionTemplate is the prompt for one event, with the one paragraph that
 // pickiness rewrites left as a hole. Build it with Decision.
-const decisionTemplate = `You are the memory of a coding session. You read each turn and almost always
-decide there is nothing to do.
+const decisionTemplate = `You are the memory of a coding session. You read each event - something the user
+or an agent has just said - and almost always decide there is nothing to do.
 
-<input>The recent turn, and the stored facts a search already matched.</input>
+<input>The recent events, the latest last, and the stored facts a search already matched.</input>
 
-<tools>Rare; most turns call neither.
+<tools>Rare; most events call for neither.
 search_memory({"query":"","limit":5,"min_score":0.0}) - search again, wider.
-session_history({}) - keywords of earlier turns, for a turn like "do it".</tools>
+session_history({}) - keywords of earlier events, for a prompt like "do it".</tools>
 
 <inject>Reaches the assistant before it decides what to do next, so write only what still
-matters once this turn is answered. Speak in two cases. One: a stored fact bears on the
-operation this turn is about to perform - it forbids it, permits it, or says where or how this
+matters after the latest event. Speak in two cases. One: a stored fact bears on the
+operation the assistant is about to perform - it forbids it, permits it, or says where or how this
 codebase does it. A permission counts as much as a prohibition; the assistant cannot know the
-question was already settled. Two: the assistant's own output in this turn has just broken a
+question was already settled. Two: the assistant's own output in these events has just broken a
 stored preference or convention. Open with the fact, one or two sentences. Otherwise empty.
 Where the store is wrong, fix it in "facts" and say nothing.
 "level": "action" when the note is about an operation the assistant is about to perform - a
@@ -84,7 +84,7 @@ State a rule as what is allowed or what is forbidden, never as what must not hap
 stored sentence carries none of "not", "never", "don't", "must not", "no longer". "never commit
 secrets" is stored as "only commit data that is non-secret", "do not use var" as "use of var is
 forbidden", "never force push to main" as "force pushes to main are forbidden". Keep the
-subject and the restriction, and add nothing the turn did not say.
+subject and the restriction, and add nothing the events did not say.
 "supersedes": id of the fact this replaces, same scope only.
 "category": one of four.
 finding - something this session established by looking: a bug located, the state of a file or
@@ -101,7 +101,7 @@ finding or a fact may come from any line.
 "private": true only for a fact about this person's machine, accounts, paths or habits that a
 teammate cloning the repository must not receive; team conventions are not private.</facts>
 
-<keywords>Paths, names, commands, the subject. Up to 8 for a short turn, 25 for a long one.</keywords>
+<keywords>Paths, names, commands, the subject. Up to 8 when the recent events are short, 25 when they are long.</keywords>
 
 <examples>
 <example>Rewrote a subsystem, added tests, deployed. No rule stated.
@@ -141,7 +141,7 @@ teammate cloning the repository must not receive; team conventions are not priva
 <output>JSON only, no prose, no fence:
 {"inject":"","level":"","facts":[{"content":"","category":"","scope":"local","private":false,"tags":[],"supersedes":""}],"keywords":[]}</output>`
 
-// Consolidate is the tidying pass. The write path judges one turn at a time and
+// Consolidate is the tidying pass. The write path judges one event at a time and
 // cannot see that it is producing the fourth wording of a rule already stored,
 // or that what it wrote last week has since become a note about history. Only a
 // pass over the whole scope can.
@@ -183,10 +183,10 @@ in place is as much a failure as removing something that was still a rule.
 {"drop":["id"],"merge":[{"keep":"id","replaces":["id"],"content":""}]}</output>`
 
 // Learn reads documentation somebody wrote for people. It is a separate prompt
-// from the decision one because the input is nothing like a turn: there is no
+// from the decision one because the input is nothing like a session's events: there is no
 // session to advise, no injection to consider, and almost all of a document is
 // explanation around the few sentences that actually bind later work. A model
-// given the turn prompt and handed a page of markdown writes down the page.
+// given the decision prompt and handed a page of markdown writes down the page.
 const Learn = `You are reading one piece of a document a team keeps with its code, and taking
 from it only what should be remembered.
 

@@ -14,13 +14,13 @@ import (
 const maxSpawns = 16
 
 // maxSessionKeywords bounds the running note a session accumulates. The
-// per-turn cap bounds one turn; nothing bounded the sum, and a long session is
-// hundreds of turns. The note is written to the store and read back into every
+// per-event cap bounds one consult; nothing bounded the sum, and a long session
+// is hundreds of them. The note is written to the store and read back into every
 // later prompt, so an unbounded sum is a record and a prompt that grow all day
 // and are largest exactly when the session can least afford it.
 //
 // The most recent are the ones kept: the note exists so that a bare "do it" can
-// be read against what just happened, and what happened two hundred turns ago
+// be read against what just happened, and what happened two hundred prompts ago
 // is not that.
 const maxSessionKeywords = 200
 
@@ -51,9 +51,9 @@ type State struct {
 	ProjectDir string `json:"-"`
 
 	Seq uint64 `json:"seq"`
-	// Turn counts the main thread's prompts and answer ends. Advice is aged
-	// and budgeted in it.
-	Turn uint64 `json:"turn"`
+	// MainEvents counts the main thread's events: the user's prompts and the
+	// ends of its answers. Advice is aged and budgeted in it.
+	MainEvents uint64 `json:"main_events"`
 
 	// Events is the window the advisor reads. It carries prompts and tool
 	// output verbatim, so it is never part of a listing.
@@ -66,9 +66,9 @@ type State struct {
 	// prompt carries; the id arrives later, on the agent's first own event.
 	Spawns []Spawn `json:"-"`
 
-	// Keywords is what every turn of this session has been about so far, and
+	// Keywords is what every event of this session has been about so far, and
 	// KeywordRecord is the memory record holding it. They are kept together
-	// because the note is rewritten in place: each turn supersedes the record
+	// because the note is rewritten in place: each consult supersedes the record
 	// the last one wrote, and a list with no id would be stored twice.
 	//
 	// Neither is published. The note is the session's own working vocabulary,
@@ -77,11 +77,11 @@ type State struct {
 	Keywords      []string `json:"-"`
 	KeywordRecord string   `json:"-"`
 
-	// KeywordsWritten is the note as the store last accepted it. A turn that
+	// KeywordsWritten is the note as the store last accepted it. A consult that
 	// names nothing the session has not already named leaves Keywords exactly
 	// as it was, and rewriting a record with the content it already holds is
 	// not a no-op at a backend that deduplicates: it is refused, and the
-	// refusal is indistinguishable in the log from losing the turn.
+	// refusal is indistinguishable in the log from losing the consult.
 	KeywordsWritten string `json:"-"`
 
 	// keywordWrite serialises the rewrite of the keyword record. It lives
@@ -121,7 +121,7 @@ func NewRegistry(maxEvents int) *Registry {
 // Observe records an event, opening the session lazily if this is the first one
 // seen. Claude Code refuses HTTP hooks for SessionStart, so there is no
 // explicit open: whichever event arrives first creates the session.
-func (r *Registry) Observe(e Event) (turn uint64, seq uint64) {
+func (r *Registry) Observe(e Event) (mainEvents uint64, seq uint64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -154,12 +154,12 @@ func (r *Registry) Observe(e Event) (turn uint64, seq uint64) {
 	// Only the main thread counts: a subagent runs between one of its
 	// prompts and the answer to it, and advice written for the main thread
 	// must not age while a subagent talks.
-	if e.Origin == OriginUser && (e.Kind == KindUserPrompt || e.Kind == KindTurnEnd) {
-		st.Turn++
+	if e.Origin == OriginUser && (e.Kind == KindUserPrompt || e.Kind == KindAnswerEnd) {
+		st.MainEvents++
 	}
 	st.observeSpawn(e)
 	r.lastSeen = e.TS
-	return st.Turn, st.Seq
+	return st.MainEvents, st.Seq
 }
 
 // observeSpawn keeps the spawn list current: a subagent's prompt opens a
@@ -199,7 +199,7 @@ func (st *State) observeSpawn(e Event) {
 		if unbound >= 0 {
 			st.Spawns[unbound].AgentID = e.AgentID
 		}
-	case KindTurnEnd:
+	case KindAnswerEnd:
 		for i, sp := range st.Spawns {
 			if sp.AgentID == e.AgentID {
 				st.Spawns = append(st.Spawns[:i], st.Spawns[i+1:]...)
@@ -239,12 +239,12 @@ func (r *Registry) SpawnOf(sessionID, agentID string) string {
 	return ""
 }
 
-// Turn reports the current turn number without mutating anything.
-func (r *Registry) Turn(sessionID string) uint64 {
+// MainEvents reports the session's count of main-thread events.
+func (r *Registry) MainEvents(sessionID string) uint64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if st, ok := r.sessions[sessionID]; ok {
-		return st.Turn
+		return st.MainEvents
 	}
 	return 0
 }
@@ -260,7 +260,7 @@ func (r *Registry) ConsolidationDue(sessionID string, every uint64) bool {
 	if !ok || every == 0 {
 		return false
 	}
-	span := st.Turn / every
+	span := st.MainEvents / every
 	if span <= st.consolidated {
 		return false
 	}
@@ -270,7 +270,7 @@ func (r *Registry) ConsolidationDue(sessionID string, every uint64) bool {
 
 // Snapshot copies the event window for a session so the advisor can be called
 // off the hook path without holding the lock.
-func (r *Registry) Snapshot(sessionID string) (events []Event, turn uint64, ok bool) {
+func (r *Registry) Snapshot(sessionID string) (events []Event, mainEvents uint64, ok bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	st, ok := r.sessions[sessionID]
@@ -279,7 +279,7 @@ func (r *Registry) Snapshot(sessionID string) (events []Event, turn uint64, ok b
 	}
 	out := make([]Event, len(st.Events))
 	copy(out, st.Events)
-	return out, st.Turn, true
+	return out, st.MainEvents, true
 }
 
 // LockKeywords holds the session's keyword record for one rewrite: reading
@@ -313,10 +313,10 @@ func (r *Registry) keywordWrite(sessionID string) *sync.Mutex {
 
 // BudgetState returns a copy for the gate to evaluate against, for the asker
 // named by agentID. The session's character cap is shared by everyone in it;
-// the turn gap is the main thread's alone. A subagent lives inside one turn,
-// so a gap keyed on it would either never pass for the agent or, counted
-// against the main thread, silence the person's next turns because an agent
-// was told something.
+// the event gap is the main thread's alone. A subagent runs while the count
+// stands still, so a gap keyed on it would either never pass for the agent
+// or, counted against the main thread, silence the person's next prompts
+// because an agent was told something.
 func (r *Registry) BudgetState(sessionID, agentID string) budget.State {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -331,8 +331,8 @@ func (r *Registry) BudgetState(sessionID, agentID string) budget.State {
 }
 
 // RecordInjection charges an injection to the session. One handed to a
-// subagent counts against the characters and leaves the turn gap alone.
-func (r *Registry) RecordInjection(sessionID string, turn uint64, agentID string, a Advice) {
+// subagent counts against the characters and leaves the event gap alone.
+func (r *Registry) RecordInjection(sessionID string, event uint64, agentID string, a Advice) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	st, ok := r.sessions[sessionID]
@@ -343,7 +343,7 @@ func (r *Registry) RecordInjection(sessionID string, turn uint64, agentID string
 		st.Budget.CharsUsed += a.Candidate().Len
 		return
 	}
-	st.Budget.Record(turn, a.Candidate())
+	st.Budget.Record(event, a.Candidate())
 }
 
 // Evicted is what one dropped session leaves behind elsewhere. The id clears
@@ -357,7 +357,7 @@ type Evicted struct {
 	// gone by the time the caller acts. Dir is the directory that project was
 	// resolved from, for a backend that has to find the checkout to delete
 	// from it; the two travel together and are never taken from different
-	// turns.
+	// events.
 	Project       string
 	Dir           string
 	KeywordRecord string
@@ -440,10 +440,10 @@ func (r *Registry) Sessions() []State {
 	return out
 }
 
-// AddKeywords folds this turn's keywords into the session's running note and
+// AddKeywords folds one consult's keywords into the session's running note and
 // returns the accumulated list along with the id of the record that currently
-// holds it, empty on the first turn. Repeats are dropped: a session that works
-// on one file for an hour would otherwise name it in every turn.
+// holds it, empty on the first consult. Repeats are dropped: a session that works
+// on one file for an hour would otherwise name it in every consult.
 func (r *Registry) AddKeywords(sessionID string, words []string) (recordID, note string, unchanged bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -478,13 +478,13 @@ func (r *Registry) AddKeywords(sessionID string, words []string) (recordID, note
 }
 
 // SetKeywordRecord points the session at where its note now lives. Superseding
-// returns a new id, so the value from the previous turn is dead the moment the
+// returns a new id, so the value from the previous write is dead the moment the
 // write lands.
 // SetKeywordRecord records the note, the project it was filed under and the
 // directory that project was resolved from. The project is kept because
 // deleting the note later has to name the scope it is deleting from, and by
 // then the caller has only an eviction to go on; the directory is kept with it
-// so the two cannot come from different turns.
+// so the two cannot come from different events.
 func (r *Registry) SetKeywordRecord(sessionID, project, dir, recordID, note string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -497,7 +497,7 @@ func (r *Registry) SetKeywordRecord(sessionID, project, dir, recordID, note stri
 }
 
 // Keywords returns what the session has been about, for the tool that answers
-// the decision model when a turn does not explain itself.
+// the decision model when a prompt does not explain itself.
 func (r *Registry) Keywords(sessionID string) []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()

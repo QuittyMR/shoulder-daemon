@@ -105,8 +105,8 @@ func TestSubagentStartIsTheAgentsStart(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "for the explorer") || !strings.Contains(rec.Body.String(), `"hookEventName":"SubagentStart"`) {
 		t.Fatalf("the start did not carry the note written for its type: %s", rec.Body.String())
 	}
-	if turn := srv.Registry.Turn("s-st"); turn != 0 {
-		t.Fatalf("a subagent's start advanced the main thread's turn to %d", turn)
+	if count := srv.Registry.MainEvents("s-st"); count != 0 {
+		t.Fatalf("a subagent's start advanced the main thread's count to %d", count)
 	}
 	for _, name := range RoutineEvents() {
 		if name == "SubagentStart" {
@@ -115,7 +115,7 @@ func TestSubagentStartIsTheAgentsStart(t *testing.T) {
 	}
 }
 
-func TestSubagentStopIsTheAgentsTurnEnd(t *testing.T) {
+func TestSubagentStopIsTheAgentsAnswerEnd(t *testing.T) {
 	body := `{"session_id":"` + sid + `","hook_event_name":"SubagentStop","cwd":"/p","stop_hook_active":false,
 		"agent_id":"agent-7","agent_type":"explore","last_assistant_message":"The pool is never closed.",
 		"transcript_path":"/home/u/.claude/projects/-p/` + sid + `.jsonl"}`
@@ -124,7 +124,7 @@ func TestSubagentStopIsTheAgentsTurnEnd(t *testing.T) {
 		t.Fatalf("%d events, ok=%v", len(events), ok)
 	}
 	ev := events[0]
-	if ev.Kind != session.KindTurnEnd || ev.Origin != session.OriginAgent || ev.AgentID != "agent-7" || ev.AgentType != "explore" {
+	if ev.Kind != session.KindAnswerEnd || ev.Origin != session.OriginAgent || ev.AgentID != "agent-7" || ev.AgentType != "explore" {
 		t.Fatalf("got %+v", ev)
 	}
 	if ev.Assistant != "The pool is never closed." || hook.TranscriptPath == "" {
@@ -132,12 +132,12 @@ func TestSubagentStopIsTheAgentsTurnEnd(t *testing.T) {
 	}
 }
 
-// The transcript on a SubagentStop is the parent's file, and the parent's turn
+// The transcript on a SubagentStop is the parent's file, and the parent's answer
 // is still in flight: widening the agent's answer from it would hand the
-// window the main thread's half-finished turn as the agent's result.
+// window the main thread's half-finished answer as the agent's result.
 func TestASubagentStopIsNotWidenedFromTheTranscript(t *testing.T) {
 	srv, _ := newTestServer(t)
-	srv.TurnText = func(string) (string, error) {
+	srv.AnswerText = func(string) (string, error) {
 		t.Fatal("the parent's transcript was read for a subagent's stop")
 		return "", nil
 	}
@@ -147,12 +147,12 @@ func TestASubagentStopIsNotWidenedFromTheTranscript(t *testing.T) {
 	if got := strings.TrimSpace(rec.Body.String()); got != "{}" {
 		t.Fatalf("SubagentStop must answer with an empty object, got %q", got)
 	}
-	events, turn, ok := srv.Registry.Snapshot("s-sub")
+	events, count, ok := srv.Registry.Snapshot("s-sub")
 	if !ok || len(events) != 1 || events[0].Assistant != "Done." {
 		t.Fatalf("got %+v", events)
 	}
-	if turn != 0 {
-		t.Fatalf("a subagent's stop advanced the main thread's turn to %d", turn)
+	if count != 0 {
+		t.Fatalf("a subagent's stop advanced the main thread's count to %d", count)
 	}
 }
 

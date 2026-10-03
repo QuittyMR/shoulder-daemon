@@ -618,7 +618,7 @@ func TestARequestWithNoModelNamesTheVariable(t *testing.T) {
 	}
 }
 
-// configServer is a daemon whose settings can actually be turned, rather than
+// configServer is a daemon whose settings can actually be changed, rather than
 // the fixed ones newTestServer builds. The config routes are the only ones that
 // write to the settings, so they are the only ones that need this.
 func configServer(t *testing.T, token string) (http.Handler, *settings.Live, *metrics.Metrics) {
@@ -726,7 +726,7 @@ func TestAConfigChangeIsVisibleToTheNextReader(t *testing.T) {
 	}
 	// And the decision path, which is what any of this was for.
 	if live.Pickiness() != prompts.Strict {
-		t.Fatalf("the next turn would still run at %v", live.Pickiness())
+		t.Fatalf("the next event would still run at %v", live.Pickiness())
 	}
 	if m.Get("shoulder_cli_config_changed_total") != 1 {
 		t.Fatal("the change was not counted")
@@ -762,7 +762,7 @@ func TestAConfigChangeTheDaemonCannotMakeChangesNothing(t *testing.T) {
 				t.Fatalf("the daemon is now %+v, was %+v", after, before)
 			}
 			if live.Pickiness() != prompts.Careful {
-				t.Fatalf("the next turn would run at %v", live.Pickiness())
+				t.Fatalf("the next event would run at %v", live.Pickiness())
 			}
 			if m.Get("shoulder_cli_config_changed_total") != 0 {
 				t.Fatal("a refused change was counted as one")
@@ -785,7 +785,7 @@ func TestAConfigChangeThatNamesNothingIsRefused(t *testing.T) {
 	}
 }
 
-// The settings are the one route that can turn a daemon somebody else is
+// The settings are the one route that can change a daemon somebody else is
 // using, so it is guarded exactly as the rest are rather than nearly so.
 func TestConfigNeedsTheTokenLikeEveryOtherRoute(t *testing.T) {
 	h, live, m := configServer(t, "s3cret")
@@ -805,7 +805,7 @@ func TestConfigNeedsTheTokenLikeEveryOtherRoute(t *testing.T) {
 		})
 	}
 	if live.Pickiness() != prompts.Careful {
-		t.Fatalf("an unauthenticated PATCH turned the daemon to %v", live.Pickiness())
+		t.Fatalf("an unauthenticated PATCH changed the daemon to %v", live.Pickiness())
 	}
 	if m.Get("shoulder_cli_unauthorised_total") != 2 {
 		t.Fatalf("rejections counted %d", m.Get("shoulder_cli_unauthorised_total"))
@@ -830,7 +830,7 @@ func TestConfigRefusesAPost(t *testing.T) {
 		t.Fatalf("error %q does not say which method to use", msg)
 	}
 	if live.Pickiness() != prompts.Careful {
-		t.Fatalf("a POST turned the daemon to %v", live.Pickiness())
+		t.Fatalf("a POST changed the daemon to %v", live.Pickiness())
 	}
 }
 

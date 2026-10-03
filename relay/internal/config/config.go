@@ -73,7 +73,7 @@ type Config struct {
 	// that dies without saying goodbye, which otherwise leaves a daemon sitting
 	// on the machine until it is rebooted. An hour is long enough that nobody
 	// between two sessions ever notices it and short enough that a crash does
-	// not cost the day. Zero turns it off.
+	// not cost the day. Zero switches it off.
 	IdleExit time.Duration
 
 	QueueSize int
@@ -81,9 +81,28 @@ type Config struct {
 	LogLevel  slog.Level
 
 	// Pickiness is how reluctant the decision model is to write a new fact.
-	// Only the starting value lives here: it can be turned while the daemon
+	// Only the starting value lives here: it can be changed while the daemon
 	// runs, and from that point on the live value is the one that counts.
 	Pickiness prompts.Pickiness
+
+	// Renamed lists the settings that were read under an old name.
+	Renamed []Renamed
+}
+
+// Renamed is a setting that was read under the name it used to have.
+type Renamed struct {
+	Old string
+	New string
+}
+
+// renamedInt reads k, and reads old in its place while k is unset, so an env
+// file written before the key was renamed keeps its value.
+func (c *Config) renamedInt(k, old string, d int) int {
+	if Setting(k) == "" && Setting(old) != "" {
+		c.Renamed = append(c.Renamed, Renamed{Old: old, New: k})
+		return envInt(old, d)
+	}
+	return envInt(k, d)
 }
 
 func Load() Config {
@@ -111,7 +130,7 @@ func Load() Config {
 		Pickiness:      pickiness(Setting("SHOULDER_PICKINESS")),
 	}
 	g := budget.Default()
-	g.MinTurnGap = envInt("BUDGET_MIN_TURN_GAP", g.MinTurnGap)
+	g.MinEventGap = c.renamedInt("BUDGET_MIN_EVENT_GAP", "BUDGET_MIN_TURN_GAP", g.MinEventGap)
 	g.MaxChars = envInt("BUDGET_MAX_CHARS", g.MaxChars)
 	g.SessionMaxChars = envInt("BUDGET_SESSION_MAX_CHARS", g.SessionMaxChars)
 	g.DryRun = envBool("SHOULDER_DRY_RUN", false)

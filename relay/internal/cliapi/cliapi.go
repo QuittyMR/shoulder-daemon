@@ -449,8 +449,8 @@ func (s *Server) failed(w http.ResponseWriter, err error) {
 // not a refusal the caller has to act on: what they asked for is already true,
 // and a script that files the same fact twice is doing nothing wrong. A
 // semantic collision is different, and naming the record that blocked it is
-// what lets the user turn the write into an update.
-// refused turns a boundary or backend refusal into the answer a person typing a
+// what lets the user convert the write into an update.
+// refused converts a boundary or backend refusal into the answer a person typing a
 // command should get. A cross-scope supersede is a 404 rather than a 400: the
 // fact they named is real, it is just not here.
 func (s *Server) refused(w http.ResponseWriter, err error) {
@@ -658,7 +658,7 @@ func (s *Server) configResponse(snap settings.Snapshot) ConfigResponse {
 	return out
 }
 
-// handleConfig reads the live settings with GET and turns them with PATCH.
+// handleConfig reads the live settings with GET and changes them with PATCH.
 // PATCH rather than POST because a request names only the knobs it wants moved:
 // there is no way to submit the whole set, and one that omitted a field would
 // otherwise be asking to clear it.

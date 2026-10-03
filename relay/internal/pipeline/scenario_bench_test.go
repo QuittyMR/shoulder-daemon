@@ -11,12 +11,12 @@
 // rebase onto") and reports where the answering record ranked. A session never
 // asks a question: it says "committing now", and what has to happen is a chain
 // of four things, any one of which can break while the other three work. The
-// fact has to be recalled by the turn's own prose, the decision model has to
-// choose to say something about it, a later turn that contradicts it has to
+// fact has to be recalled by the step's own prose, the decision model has to
+// choose to say something about it, a later step that contradicts it has to
 // recall it again so the model sees both at once, and the store has to end up
 // holding the new fact and not the old one and not both.
 //
-// So this measures all four, per turn, against every backend the daemon can be
+// So this measures all four, per step, against every backend the daemon can be
 // built with, constructed the way cmd/shoulderd constructs them. It asserts
 // nothing: a scenario that fails is printed and counted, because the numbers
 // are the output.
@@ -52,8 +52,8 @@ import (
 )
 
 // seed is a fact the store already holds when the session starts. It is written
-// through the connector rather than through a turn, so that what a scenario
-// measures is the recall and the correction, not whether some earlier turn
+// through the connector rather than through a step, so that what a scenario
+// measures is the recall and the correction, not whether some earlier step
 // happened to store the right thing.
 type seed struct {
 	name     string
@@ -69,15 +69,15 @@ type seed struct {
 // two records can hold the same sentence.
 type placed struct{ content, id string }
 
-// turnCase is one turn and everything that must be true of it by the time
-// Consult returns. Each expectation is optional: a turn with no recall named
-// counts towards nothing, which is what lets a scenario carry setup turns.
-type turnCase struct {
+// stepCase is one step and everything that must be true of it by the time
+// Consult returns. Each expectation is optional: a step with no recall named
+// counts towards nothing, which is what lets a scenario carry setup steps.
+type stepCase struct {
 	label           string
 	user, assistant string
 
 	// recall names the seed whose content has to appear in some search this
-	// turn made. It is the first link of the chain and the only one a
+	// step made. It is the first link of the chain and the only one a
 	// retrieval benchmark measures.
 	recall string
 
@@ -92,7 +92,7 @@ type turnCase struct {
 	silent bool
 
 	// supersede names the seed that must be unreachable by the end of this
-	// turn, replaced rather than merely joined by a second fact.
+	// step, replaced rather than merely joined by a second fact.
 	supersede string
 }
 
@@ -107,7 +107,7 @@ type wanted struct {
 type scenarioCase struct {
 	name  string
 	seeds []seed
-	turns []turnCase
+	steps []stepCase
 	final []wanted
 }
 
@@ -173,19 +173,19 @@ func both(a, b func(string) bool) func(string) bool {
 
 // commitSecrets is the owner's scenario, and the seed is deliberately the wrong
 // way round: the store holds permission, the user withdraws it, and the only
-// way the second turn can supersede the first fact is if the turn's own prose
+// way the second step can supersede the first fact is if the step's own prose
 // recalled it.
 const commitSecrets = "secrets can be committed into this repository"
 
 // scenarios are the loops worth measuring. Between them they cover every
-// category the decision prompt knows, both scopes, a turn that must produce
+// category the decision prompt knows, both scopes, a step that must produce
 // nothing, and a session whose working note must not become knowledge.
 func scenarios() []scenarioCase {
 	secrets := func(name, contradiction string) scenarioCase {
 		return scenarioCase{
 			name:  name,
 			seeds: []seed{{"permitted", commitSecrets, "constraint", scope.Local}},
-			turns: []turnCase{
+			steps: []stepCase{
 				{
 					label: "commit", user: "committing now", assistant: "Committing the staged changes.",
 					recall: "permitted", inject: []string{"secret"},
@@ -219,7 +219,7 @@ func scenarios() []scenarioCase {
 		{
 			name:  "branch-rename",
 			seeds: []seed{{"master", "the main branch is master", "structure", scope.Local}},
-			turns: []turnCase{
+			steps: []stepCase{
 				{
 					label: "rebase", user: "rebase onto the main branch", assistant: "Rebasing onto main.",
 					recall: "master", inject: []string{"master"},
@@ -232,13 +232,13 @@ func scenarios() []scenarioCase {
 			final: []wanted{{"one fact naming main and not master", both(holds("main"), lacks("master"))}},
 		},
 
-		// 4. The false-injection measure. A store with one fact in it and a turn
+		// 4. The false-injection measure. A store with one fact in it and a step
 		// with nothing to do with that fact: speaking here is the failure that
-		// makes people turn the daemon off.
+		// makes people switch the daemon off.
 		{
 			name:  "quiet-unrelated",
 			seeds: []seed{{"rota", "the release rota is kept in docs/rota.md", "reference", scope.Local}},
-			turns: []turnCase{
+			steps: []stepCase{
 				{
 					label: "unrelated", user: "rename the variable n to count in parser.go",
 					assistant: "Renamed n to count in parser.go.", silent: true,
@@ -247,14 +247,14 @@ func scenarios() []scenarioCase {
 			final: []wanted{{"the seed, untouched", holds("rota.md")}},
 		},
 
-		// 5. Two turns of ordinary work that state no rule. The session keeps a
+		// 5. Two steps of ordinary work that state no rule. The session keeps a
 		// working note across them, and the note is by construction the exact
-		// vocabulary of the turns; the measurement is that none of it has become
+		// vocabulary of the steps; the measurement is that none of it has become
 		// a fact.
 		{
 			name:  "notes-continuity",
 			seeds: []seed{{"bazel", "the build is driven by bazel", "structure", scope.Local}},
-			turns: []turnCase{
+			steps: []stepCase{
 				{label: "read", user: "what does parser.go do?", assistant: "It tokenises the input and builds the AST.", silent: true},
 				{label: "follow-up", user: "and the file after it?", assistant: "analyser.go walks that AST and resolves names.", silent: true},
 			},
@@ -262,11 +262,11 @@ func scenarios() []scenarioCase {
 		},
 
 		// 6. Reference, local: a stored procedure that answers the question the
-		// turn just asked, then the procedure changing under it.
+		// step just asked, then the procedure changing under it.
 		{
 			name:  "procedure-tests",
 			seeds: []seed{{"maketest", "the test suite is run with make test, never go test directly", "reference", scope.Local}},
-			turns: []turnCase{
+			steps: []stepCase{
 				{
 					label: "run", user: "run the tests", assistant: "Running go test ./... now.",
 					recall: "maketest", inject: []string{"make test"},
@@ -283,7 +283,7 @@ func scenarios() []scenarioCase {
 		{
 			name:  "decision-region",
 			seeds: []seed{{"useast", "deploys go to us-east-1", "decision", scope.Local}},
-			turns: []turnCase{
+			steps: []stepCase{
 				{
 					label: "deploy", user: "deploy this", assistant: "Deploying the current build.",
 					recall: "useast", inject: []string{"us-east-1"},
@@ -301,7 +301,7 @@ func scenarios() []scenarioCase {
 		{
 			name:  "preference-commit-mood",
 			seeds: []seed{{"imperative", "the user wants commit messages written in the imperative mood", "preference", scope.Global}},
-			turns: []turnCase{
+			steps: []stepCase{
 				{
 					label: "write", user: "write the commit message for this change", assistant: "Wrote: \"Added a retry to the uploader\".",
 					recall: "imperative", inject: []string{"imperative"},
@@ -319,7 +319,7 @@ func scenarios() []scenarioCase {
 		{
 			name:  "constraint-force-push",
 			seeds: []seed{{"allowed", "force pushing to the release branch is allowed", "constraint", scope.Local}},
-			turns: []turnCase{
+			steps: []stepCase{
 				{
 					label: "push", user: "force push this to the release branch", assistant: "Force pushing to release.",
 					recall: "allowed", inject: []string{"force"},
@@ -336,7 +336,7 @@ func scenarios() []scenarioCase {
 		{
 			name:  "reference-rota",
 			seeds: []seed{{"rota", "the on-call rota is kept in docs/rota.md", "reference", scope.Local}},
-			turns: []turnCase{
+			steps: []stepCase{
 				{
 					label: "ask", user: "who is on call this week?", assistant: "Let me find out who is on call.",
 					recall: "rota", inject: []string{"rota"},
@@ -355,7 +355,7 @@ func scenarios() []scenarioCase {
 		{
 			name:  "structure-distro",
 			seeds: []seed{{"fedora", "the user's machines run Fedora", "structure", scope.Global}},
-			turns: []turnCase{
+			steps: []stepCase{
 				{
 					label: "install", user: "install the build dependencies", assistant: "Running sudo apt-get install build-essential.",
 					recall: "fedora", inject: []string{"fedora"},
@@ -369,18 +369,18 @@ func scenarios() []scenarioCase {
 // recording wraps the connector under test and keeps what it was asked and what
 // it did. It is separate from observingMemory in scenario_live_test.go because
 // that one narrates for a person reading a log and this one has to be read by
-// the code that scores a turn.
+// the code that scores a step.
 type recording struct {
 	inner memory.Connector
 	log   func(string, ...any)
 
-	// searched is every record content returned since the last turn began. The
+	// searched is every record content returned since the last step began. The
 	// recall column is read from it, and it is the only place the tool loop's
 	// own second search shows up.
 	searched []string
 
 	// superOld is every id that has been superseded, cumulatively, because a
-	// scenario asks whether a seed is gone by the end of a turn rather than in
+	// scenario asks whether a seed is gone by the end of a step rather than in
 	// one particular call.
 	superOld []string
 
@@ -464,7 +464,7 @@ func clipID(id string) string {
 
 // spy records what the decision model actually replied. Consult keeps the
 // decision document to itself - it parses it and logs only the parts that had
-// an effect - so without this the only evidence of a turn where the model chose
+// an effect - so without this the only evidence of a step where the model chose
 // to say nothing is that nothing was said. The document is the evidence.
 type spy struct {
 	llm.Provider
@@ -631,22 +631,22 @@ func clearRun(t *testing.T, c, raw memory.Connector, dir, project string, mem *r
 	}
 }
 
-// turnResult is one row of the table.
-type turnResult struct {
+// stepResult is one row of the table.
+type stepResult struct {
 	label     string
 	recall    string
 	inject    string
 	supersede string
 	took      time.Duration
-	// ok is false when any expectation this turn carried was not met, which is
-	// what the totals count and what decides whether the turn's detail is
+	// ok is false when any expectation this step carried was not met, which is
+	// what the totals count and what decides whether the step's detail is
 	// worth reading.
 	ok bool
 }
 
 type scenarioResult struct {
 	name    string
-	turns   []turnResult
+	steps   []stepResult
 	final   string
 	finalOK bool
 	held    []string
@@ -716,7 +716,7 @@ func TestScenarioBenchmark(t *testing.T) {
 					}
 					res.scenarios = append(res.scenarios, sr)
 					res.latency = append(res.latency, lat...)
-					for _, tr := range sr.turns {
+					for _, tr := range sr.steps {
 						res.recall.add(tr.recall != "-", tr.recall == "hit")
 						res.inject.add(tr.inject != "-", tr.inject == "ok")
 						res.supersede.add(tr.supersede != "-", tr.supersede == "ok")
@@ -768,7 +768,7 @@ func runScenario(t *testing.T, provider llm.Provider, b backend, sc scenarioCase
 	// The gate lives in httpapi, after the outbox this benchmark reads, so the
 	// only part of it that reaches here is MaxChars. Zeroing the gap keeps that
 	// explicit rather than accidental.
-	g.MinTurnGap = 0
+	g.MinEventGap = 0
 	cfg.Budget = g
 
 	watched := &spy{Provider: provider}
@@ -798,10 +798,10 @@ func runScenario(t *testing.T, provider llm.Provider, b backend, sc scenarioCase
 	sid := "bench-" + sc.name
 	res := scenarioResult{name: sc.name}
 	var lat []time.Duration
-	for i, tc := range sc.turns {
+	for i, tc := range sc.steps {
 		mem.searched = mem.searched[:0]
 		watched.replies = watched.replies[:0]
-		t.Logf("  turn %d (%s): %q", i+1, tc.label, tc.user)
+		t.Logf("  step %d (%s): %q", i+1, tc.label, tc.user)
 
 		now := time.Now()
 		reg.Observe(session.Event{
@@ -810,7 +810,7 @@ func runScenario(t *testing.T, provider llm.Provider, b backend, sc scenarioCase
 		})
 		reg.Observe(session.Event{
 			Protocol: 1, Harness: "bench", SessionID: sid, TS: now,
-			Kind: session.KindTurnEnd, CWD: dir, Assistant: tc.assistant,
+			Kind: session.KindAnswerEnd, CWD: dir, Assistant: tc.assistant,
 		})
 
 		cctx, cancel := context.WithTimeout(ctx, 120*time.Second)
@@ -823,8 +823,8 @@ func runScenario(t *testing.T, provider llm.Provider, b backend, sc scenarioCase
 		for _, reply := range watched.replies {
 			t.Logf("    decision: %s", reply)
 		}
-		advice := drain(box, sid, reg.Turn(sid))
-		res.turns = append(res.turns, score(t, mem, seeded, tc, advice, took))
+		advice := drain(box, sid, reg.MainEvents(sid))
+		res.steps = append(res.steps, score(t, mem, seeded, tc, advice, took))
 	}
 
 	res.held = finalFacts(t, mem, dir, project)
@@ -833,15 +833,15 @@ func runScenario(t *testing.T, provider llm.Provider, b backend, sc scenarioCase
 	return res, lat, nil
 }
 
-// drain empties the outbox for this turn at both delivery points. Reading only
+// drain empties the outbox for this step at both delivery points. Reading only
 // the prompt point would report every note the model marked "action" - which is
 // what it is told to do for a push, a delete or a deploy, and so exactly the
-// turns this benchmark is about - as no injection at all.
-func drain(box *outbox.Box, sid string, turn uint64) []session.Advice {
+// steps this benchmark is about - as no injection at all.
+func drain(box *outbox.Box, sid string, count uint64) []session.Advice {
 	var out []session.Advice
 	for _, kind := range []session.Kind{session.KindUserPrompt, session.KindToolCall} {
 		for {
-			a, ok := box.Take(sid, turn, kind, "", "")
+			a, ok := box.Take(sid, count, kind, "", "")
 			if !ok {
 				break
 			}
@@ -851,11 +851,11 @@ func drain(box *outbox.Box, sid string, turn uint64) []session.Advice {
 	return out
 }
 
-// score reads one turn's four columns. A column a turn made no claim about is
+// score reads one step's four columns. A column a step made no claim about is
 // "-" and counts towards nothing.
-func score(t *testing.T, mem *recording, seeded map[string]placed, tc turnCase, advice []session.Advice, took time.Duration) turnResult {
+func score(t *testing.T, mem *recording, seeded map[string]placed, tc stepCase, advice []session.Advice, took time.Duration) stepResult {
 	t.Helper()
-	tr := turnResult{label: tc.label, recall: "-", inject: "-", supersede: "-", took: took, ok: true}
+	tr := stepResult{label: tc.label, recall: "-", inject: "-", supersede: "-", took: took, ok: true}
 
 	if tc.recall != "" {
 		tr.recall = "miss"
@@ -947,7 +947,7 @@ func finalFacts(t *testing.T, mem *recording, dir, project string) []string {
 // matchFinal pairs each wanted record with one record the store holds. Both
 // directions matter: a missing record is a correction that was lost, and a
 // leftover is the stale fact still sitting beside its replacement, which is the
-// failure that makes every later turn recall the wrong thing.
+// failure that makes every later step recall the wrong thing.
 func matchFinal(want []wanted, got []string) (string, bool) {
 	used := make([]bool, len(got))
 	var missing []string
@@ -989,9 +989,9 @@ func report(results []backendResult) {
 			fmt.Fprintf(w, "could not be built: %s\n", r.failed)
 			continue
 		}
-		fmt.Fprintln(w, "scenario\tturn\trecall\tinject\tsupersede\tadvisor")
+		fmt.Fprintln(w, "scenario\tstep\trecall\tinject\tsupersede\tadvisor")
 		for _, sc := range r.scenarios {
-			for _, tr := range sc.turns {
+			for _, tr := range sc.steps {
 				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", sc.name, tr.label,
 					tr.recall, tr.inject, tr.supersede, tr.took.Round(10*time.Millisecond))
 			}

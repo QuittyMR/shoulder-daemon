@@ -80,7 +80,7 @@ func (o *observingMemory) Forget(ctx context.Context, id string, q memory.Query)
 }
 
 // TestLiveBranchScenario walks the exact sequence that matters: a new fact, a
-// recall, an unrelated turn, and a contradiction that must both store and
+// recall, an unrelated step, and a contradiction that must both store and
 // supersede.
 func TestLiveBranchScenario(t *testing.T) {
 	url := os.Getenv("SHOULDER_MEMORY_URL")
@@ -101,7 +101,7 @@ func TestLiveBranchScenario(t *testing.T) {
 	cfg.WindowEvents, cfg.WindowChars = 40, 12000
 	cfg.AdvisorTimeout = 90 * time.Second
 	g := budget.Default()
-	g.MinTurnGap = 0
+	g.MinEventGap = 0
 	cfg.Budget = g
 
 	mem := &observingMemory{
@@ -119,30 +119,30 @@ func TestLiveBranchScenario(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	turn := func(label, userText, assistantText string) {
-		t.Logf("  TURN: %s", label)
+	step := func(label, userText, assistantText string) {
+		t.Logf("  STEP: %s", label)
 		reg.Observe(session.Event{
 			Protocol: 1, Harness: "test", SessionID: sid, TS: time.Now(),
 			Kind: session.KindUserPrompt, CWD: cwd, Prompt: userText,
 		})
 		reg.Observe(session.Event{
 			Protocol: 1, Harness: "test", SessionID: sid, TS: time.Now(),
-			Kind: session.KindTurnEnd, CWD: cwd, Assistant: assistantText,
+			Kind: session.KindAnswerEnd, CWD: cwd, Assistant: assistantText,
 		})
 		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer cancel()
 		p.Consult(ctx, sid)
-		if a, ok := box.Take(sid, reg.Turn(sid), session.KindUserPrompt, "", ""); ok {
+		if a, ok := box.Take(sid, reg.MainEvents(sid), session.KindUserPrompt, "", ""); ok {
 			t.Logf("    INJECT: %q", textutil.Clip(a.Text, 100))
 		} else {
 			t.Logf("    INJECT: (none)")
 		}
 	}
 
-	turn("1 — new fact", "the main branch is main", "Understood, the main branch is main.")
-	turn("2 — should recall", "I should commit this", "I'll commit your changes.")
-	turn("3 — unrelated", "I'm on the feature-a branch", "Noted, you're on feature-a.")
-	turn("4 — contradiction", "the main branch is now master", "Understood, the main branch is now master.")
+	step("1 — new fact", "the main branch is main", "Understood, the main branch is main.")
+	step("2 — should recall", "I should commit this", "I'll commit your changes.")
+	step("3 — unrelated", "I'm on the feature-a branch", "Noted, you're on feature-a.")
+	step("4 — contradiction", "the main branch is now master", "Understood, the main branch is now master.")
 
 	t.Logf("SUMMARY searches=%v stored=%d superseded=%d", mem.searches, len(mem.stored), len(mem.superOld))
 	for _, s := range mem.stored {

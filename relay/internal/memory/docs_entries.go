@@ -174,7 +174,7 @@ const docsLF = "\n"
 
 // docsCRLF is what a file committed from Windows uses. It is carried through a
 // write rather than normalised: the connector edits one bullet of a file a
-// team owns, and rewriting every line ending of it turns a one-line change
+// team owns, and rewriting every line ending of it converts a one-line change
 // into a whole-file diff that hides what the daemon actually did and that
 // somebody has to review.
 const docsCRLF = "\r\n"

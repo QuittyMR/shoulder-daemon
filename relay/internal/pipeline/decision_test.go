@@ -17,7 +17,7 @@ import (
 )
 
 // keywordBody is a decision that says nothing and remembers nothing, carrying
-// only the keywords this turn was about.
+// only the keywords this event was about.
 func keywordBody(t *testing.T, keywords ...string) string {
 	t.Helper()
 	inner, err := json.Marshal(map[string]any{
@@ -97,16 +97,16 @@ func notes(recs []memory.Record) []memory.Record {
 	return out
 }
 
-// turnIn is one turn of a session working in dir: two consults, the prompt's
-// and then the answer's.
-func turnIn(t *testing.T, s *stack, sid, dir, userText, assistantText string) {
+// promptAndAnswerIn is a prompt and its answer in a session working in dir:
+// two consults, the prompt's and then the answer's.
+func promptAndAnswerIn(t *testing.T, s *stack, sid, dir, userText, assistantText string) {
 	t.Helper()
-	s.turn(t, promptIn(sid, userText, dir), stop(sid, assistantText))
+	s.promptAndAnswer(t, promptIn(sid, userText, dir), stop(sid, assistantText))
 }
 
-// perTurn repeats each body once, for a model that says the same at the
-// prompt and at the answer of a turn.
-func perTurn(bodies ...string) []string {
+// perEvent repeats each body once, for a model that says the same at the
+// prompt and at its answer.
+func perEvent(bodies ...string) []string {
 	out := make([]string, 0, 2*len(bodies))
 	for _, b := range bodies {
 		out = append(out, b, b)
@@ -114,7 +114,7 @@ func perTurn(bodies ...string) []string {
 	return out
 }
 
-func TestShortTurnKeepsEightKeywords(t *testing.T) {
+func TestShortEventKeepsEightKeywords(t *testing.T) {
 	dir := t.TempDir()
 	ts := advisorServer(t, 0, keywordBody(t,
 		"k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8", "k9", "k10", "k11", "k12"))
@@ -122,15 +122,15 @@ func TestShortTurnKeepsEightKeywords(t *testing.T) {
 	mem := &fakeMemory{}
 	s.pipe.Memory = mem
 
-	turnIn(t, s, "s1", dir, "do it", "Done.")
+	promptAndAnswerIn(t, s, "s1", dir, "do it", "Done.")
 
 	stored, _, _ := mem.snapshot()
 	note := notes(stored)
 	if len(note) != 1 {
 		t.Fatalf("expected one session note, got %d of %d records", len(note), len(stored))
 	}
-	if got := strings.Split(note[0].Content, ", "); len(got) != shortTurnKeywords {
-		t.Fatalf("a short turn keeps %d keywords, got %d: %q", shortTurnKeywords, len(got), note[0].Content)
+	if got := strings.Split(note[0].Content, ", "); len(got) != shortEventKeywords {
+		t.Fatalf("a short event keeps %d keywords, got %d: %q", shortEventKeywords, len(got), note[0].Content)
 	}
 	if note[0].Scope != scope.Local || note[0].Project != projectOf(t, dir) {
 		t.Errorf("the note belongs to the session's project: %+v", note[0])
@@ -143,7 +143,7 @@ func TestShortTurnKeepsEightKeywords(t *testing.T) {
 	}
 }
 
-func TestLongTurnKeepsTwentyFiveKeywords(t *testing.T) {
+func TestLongEventKeepsTwentyFiveKeywords(t *testing.T) {
 	dir := t.TempDir()
 	words := make([]string, 40)
 	for i := range words {
@@ -154,25 +154,25 @@ func TestLongTurnKeepsTwentyFiveKeywords(t *testing.T) {
 	mem := &fakeMemory{}
 	s.pipe.Memory = mem
 
-	// Over 500 estimated tokens of turn, which is what buys the larger note.
-	turnIn(t, s, "s1", dir, strings.Repeat("rewrite the parser and the loader. ", 80), "Done.")
+	// Over 500 estimated tokens of window, which is what buys the larger note.
+	promptAndAnswerIn(t, s, "s1", dir, strings.Repeat("rewrite the parser and the loader. ", 80), "Done.")
 
 	stored, _, _ := mem.snapshot()
 	note := notes(stored)
 	if len(note) != 1 {
 		t.Fatalf("expected one session note, got %d of %d records", len(note), len(stored))
 	}
-	if got := strings.Split(note[0].Content, ", "); len(got) != longTurnKeywords {
-		t.Fatalf("a long turn keeps %d keywords, got %d: %q", longTurnKeywords, len(got), note[0].Content)
+	if got := strings.Split(note[0].Content, ", "); len(got) != longEventKeywords {
+		t.Fatalf("a long event keeps %d keywords, got %d: %q", longEventKeywords, len(got), note[0].Content)
 	}
 }
 
-// The note is one record that keeps being rewritten. Three turns that each
+// The note is one record that keeps being rewritten. Three prompts and answers that each
 // stored one would leave three of them, and a search for what the session is
 // about would answer with its own history three times over.
 func TestSessionNoteIsSupersededNotDuplicated(t *testing.T) {
 	dir := t.TempDir()
-	ts := sequencedAdvisor(t, perTurn(
+	ts := sequencedAdvisor(t, perEvent(
 		keywordBody(t, "parser"),
 		keywordBody(t, "loader"),
 		keywordBody(t, "renderer"))...)
@@ -180,9 +180,9 @@ func TestSessionNoteIsSupersededNotDuplicated(t *testing.T) {
 	mem := &fakeMemory{}
 	s.pipe.Memory = mem
 
-	turnIn(t, s, "s1", dir, "fix the parser", "Fixed.")
-	turnIn(t, s, "s1", dir, "now the loader", "Done.")
-	turnIn(t, s, "s1", dir, "now the renderer", "Done.")
+	promptAndAnswerIn(t, s, "s1", dir, "fix the parser", "Fixed.")
+	promptAndAnswerIn(t, s, "s1", dir, "now the loader", "Done.")
+	promptAndAnswerIn(t, s, "s1", dir, "now the renderer", "Done.")
 
 	stored, superseded, _ := mem.snapshot()
 	note := notes(stored)
@@ -190,15 +190,15 @@ func TestSessionNoteIsSupersededNotDuplicated(t *testing.T) {
 		t.Fatalf("expected three writes of one note, got %d", len(note))
 	}
 	if len(superseded) != 2 {
-		t.Fatalf("expected the second and third turns to supersede, got %v", superseded)
+		t.Fatalf("expected the consults after the first to supersede, got %v", superseded)
 	}
 	// Each supersede names the id the previous write returned, not the one
 	// before it: the handle dies with every rewrite.
 	if superseded[0] != "mem_1" || superseded[1] != "mem_2" {
-		t.Errorf("each turn must replace the record the last one wrote, got %v", superseded)
+		t.Errorf("each consult must replace the record the last one wrote, got %v", superseded)
 	}
 	if got := note[2].Content; got != "parser, loader, renderer" {
-		t.Errorf("the note accumulates every turn, got %q", got)
+		t.Errorf("the note accumulates at every consult, got %q", got)
 	}
 	if s.srv.Metrics.Get("shoulder_session_keywords_superseded_total") != 2 {
 		t.Error("each rewrite must be counted")
@@ -217,7 +217,7 @@ func TestSessionNoteStaysOutOfRecallAndDigest(t *testing.T) {
 	}}
 	s.pipe.Memory = mem
 
-	turnIn(t, s, "s1", dir, "fix the parser", "Fixed.")
+	promptAndAnswerIn(t, s, "s1", dir, "fix the parser", "Fixed.")
 	if _, err := s.pipe.Digest(context.Background(), DigestRequest{Project: projectOf(t, dir)}); err != nil {
 		t.Fatal(err)
 	}
@@ -264,17 +264,17 @@ func TestSessionHistoryToolAnswersWithEarlierKeywords(t *testing.T) {
 	s := newStack(t, ts.URL, 2*time.Second)
 	s.pipe.Memory = &fakeMemory{}
 
-	turnIn(t, s, "s1", dir, "fix the parser", "Fixed.")
-	turnIn(t, s, "s1", dir, "do it", "Done.")
+	promptAndAnswerIn(t, s, "s1", dir, "fix the parser", "Fixed.")
+	promptAndAnswerIn(t, s, "s1", dir, "do it", "Done.")
 
-	// Two calls for the first turn, the second turn's prompt asking for the
+	// Two calls for the first prompt and its answer, the second prompt asking for the
 	// tool and then answering, and one for its answer.
 	reqs := rec.requests()
 	if len(reqs) != 5 {
 		t.Fatalf("expected five model calls, got %d", len(reqs))
 	}
 	if !strings.Contains(reqs[3], "parser, tokenizer") {
-		t.Fatalf("the earlier turn's keywords must reach the model: %s", reqs[3])
+		t.Fatalf("the earlier prompt's keywords must reach the model: %s", reqs[3])
 	}
 	if s.srv.Metrics.Get("shoulder_decision_tool_call_total") != 1 {
 		t.Error("the tool call must be counted")
@@ -292,7 +292,7 @@ func TestSearchMemoryToolSearchesAgainAndTheResultReachesTheModel(t *testing.T) 
 	}}
 	s.pipe.Memory = mem
 
-	turnIn(t, s, "s1", dir, "which branch", "Not sure.")
+	promptAndAnswerIn(t, s, "s1", dir, "which branch", "Not sure.")
 
 	_, _, queries := mem.snapshot()
 	var asked *memory.Query
@@ -318,17 +318,17 @@ func TestSearchMemoryToolSearchesAgainAndTheResultReachesTheModel(t *testing.T) 
 	}
 }
 
-// A model that will not stop calling tools must not take the turn down with it.
-func TestStepCapEndsTheTurnAndIsCounted(t *testing.T) {
+// A model that will not stop calling tools must not take the consult down with it.
+func TestStepCapEndsTheConsultAndIsCounted(t *testing.T) {
 	dir := t.TempDir()
 	rec, ts := newRecordingAdvisor(t, toolCallBody(t, "session_history", "{}"))
 	s := newStack(t, ts.URL, 2*time.Second)
 	s.pipe.Memory = &fakeMemory{}
 
-	turnIn(t, s, "s1", dir, "do it", "Done.")
+	promptAndAnswerIn(t, s, "s1", dir, "do it", "Done.")
 
 	if n := len(rec.requests()); n != 2*decisionSteps {
-		t.Fatalf("each of the turn's two consults must stop at %d steps, got %d calls", decisionSteps, n)
+		t.Fatalf("each of the two consults must stop at %d steps, got %d calls", decisionSteps, n)
 	}
 	if s.srv.Metrics.Get("shoulder_decision_steps_exhausted_total") != 2 {
 		t.Error("hitting the cap must be counted once for each consult")
@@ -339,7 +339,7 @@ func TestStepCapEndsTheTurnAndIsCounted(t *testing.T) {
 }
 
 // A note is local by definition. A session whose directory does not resolve has
-// nowhere to file one, and that has to be visible: the next turn silently loses
+// nowhere to file one, and that has to be visible: the next event silently loses
 // its history.
 func TestKeywordsWithNoProjectAreDroppedAndCounted(t *testing.T) {
 	ts := advisorServer(t, 0, keywordBody(t, "parser"))
@@ -347,14 +347,14 @@ func TestKeywordsWithNoProjectAreDroppedAndCounted(t *testing.T) {
 	mem := &fakeMemory{}
 	s.pipe.Memory = mem
 
-	s.turn(t, prompt("s1", "fix the parser"), stop("s1", "Fixed."))
+	s.promptAndAnswer(t, prompt("s1", "fix the parser"), stop("s1", "Fixed."))
 
 	stored, _, _ := mem.snapshot()
 	if n := len(notes(stored)); n != 0 {
 		t.Fatalf("a session with no project must not file a note, got %d", n)
 	}
 	if s.srv.Metrics.Get("shoulder_session_keywords_no_project_total") != 2 {
-		t.Error("the dropped note must be counted for each of the turn's two consults")
+		t.Error("the dropped note must be counted for each of the two consults")
 	}
 }
 
@@ -376,16 +376,16 @@ func noteIn(t *testing.T, id, sessionID, dir, content string) memory.Record {
 // session.
 func TestASessionThatLostItsStateRejoinsItsNoteInsteadOfWritingASecond(t *testing.T) {
 	dir := t.TempDir()
-	ts := sequencedAdvisor(t, perTurn(keywordBody(t, "parser"), keywordBody(t, "loader"))...)
+	ts := sequencedAdvisor(t, perEvent(keywordBody(t, "parser"), keywordBody(t, "loader"))...)
 	s := newStack(t, ts.URL, 2*time.Second)
 	mem := &fakeMemory{}
 	s.pipe.Memory = mem
 
-	turnIn(t, s, "s1", dir, "fix the parser", "Fixed.")
+	promptAndAnswerIn(t, s, "s1", dir, "fix the parser", "Fixed.")
 	stored, _, _ := mem.snapshot()
 	written := notes(stored)
 	if len(written) != 1 {
-		t.Fatalf("expected the first turn to write one note, got %d", len(written))
+		t.Fatalf("expected the first prompt and its answer to write one note, got %d", len(written))
 	}
 	if written[0].Session != "s1" {
 		t.Fatalf("the note must name the session that keeps it, got %q", written[0].Session)
@@ -397,14 +397,14 @@ func TestASessionThatLostItsStateRejoinsItsNoteInsteadOfWritingASecond(t *testin
 	if gone := s.pipe.Registry.Evict(0, time.Now().Add(time.Hour)); len(gone) != 1 {
 		t.Fatalf("expected the session's state to be dropped, got %+v", gone)
 	}
-	turnIn(t, s, "s1", dir, "now the loader", "Done.")
+	promptAndAnswerIn(t, s, "s1", dir, "now the loader", "Done.")
 
 	stored, superseded, _ := mem.snapshot()
 	if n := len(notes(stored)); n != 2 {
 		t.Fatalf("expected two writes of one note, got %d", n)
 	}
 	if len(superseded) != 1 || superseded[0] != "mem_1" {
-		t.Fatalf("the second turn must replace the note already in the store, got %v", superseded)
+		t.Fatalf("the second prompt and its answer must replace the note already in the store, got %v", superseded)
 	}
 	if s.srv.Metrics.Get("shoulder_session_keywords_rejoined_total") != 1 {
 		t.Error("finding a note the process had forgotten must be counted")
@@ -414,7 +414,7 @@ func TestASessionThatLostItsStateRejoinsItsNoteInsteadOfWritingASecond(t *testin
 // A note is superseded for as long as its session lives and never removed, and
 // one is written per session per project. Left alone the population grows
 // without bound, and every one of them is worded out of that project's own
-// turns, so they rank alongside the facts they are buried beside.
+// events, so they rank alongside the facts they are buried beside.
 func TestAnEvictedSessionsNoteIsForgotten(t *testing.T) {
 	dir := t.TempDir()
 	ts := advisorServer(t, 0, keywordBody(t, "parser"))
@@ -422,7 +422,7 @@ func TestAnEvictedSessionsNoteIsForgotten(t *testing.T) {
 	mem := &fakeMemory{}
 	s.pipe.Memory = mem
 
-	turnIn(t, s, "s1", dir, "fix the parser", "Fixed.")
+	promptAndAnswerIn(t, s, "s1", dir, "fix the parser", "Fixed.")
 
 	gone := s.pipe.Registry.Evict(time.Hour, time.Now().Add(2*time.Hour))
 	if len(gone) != 1 || gone[0].ID != "s1" {
@@ -456,12 +456,12 @@ func (v *vanishingMemory) Supersede(ctx context.Context, old string, r memory.Re
 	return v.fakeMemory.Supersede(ctx, old, r)
 }
 
-// Taking that refusal at face value freezes the note at the turn it broke on
+// Taking that refusal at face value freezes the note at the event it broke on
 // for the rest of the session, while the log blames a scope violation that
 // never happened.
 func TestAHalfLandedSupersedeDoesNotWedgeTheNote(t *testing.T) {
 	dir := t.TempDir()
-	ts := sequencedAdvisor(t, perTurn(
+	ts := sequencedAdvisor(t, perEvent(
 		keywordBody(t, "parser"),
 		keywordBody(t, "loader"),
 		keywordBody(t, "renderer"))...)
@@ -469,18 +469,18 @@ func TestAHalfLandedSupersedeDoesNotWedgeTheNote(t *testing.T) {
 	mem := &vanishingMemory{dead: "mem_1"}
 	s.pipe.Memory = mem
 
-	turnIn(t, s, "s1", dir, "fix the parser", "Fixed.")
+	promptAndAnswerIn(t, s, "s1", dir, "fix the parser", "Fixed.")
 	// What the lost reply actually wrote: the replacement is in the store, and
 	// it still carries this session's mark.
 	mem.notes = []memory.Record{noteIn(t, "mem_committed", "s1", dir, "parser")}
 
-	turnIn(t, s, "s1", dir, "now the loader", "Done.")
-	turnIn(t, s, "s1", dir, "now the renderer", "Done.")
+	promptAndAnswerIn(t, s, "s1", dir, "now the loader", "Done.")
+	promptAndAnswerIn(t, s, "s1", dir, "now the renderer", "Done.")
 
 	stored, superseded, _ := mem.snapshot()
 	written := notes(stored)
 	if len(written) != 3 {
-		t.Fatalf("every turn must still write the note, got %d", len(written))
+		t.Fatalf("every prompt and answer must still write the note, got %d", len(written))
 	}
 	if got := written[2].Content; got != "parser, loader, renderer" {
 		t.Errorf("the note must keep accumulating, got %q", got)
@@ -498,9 +498,9 @@ func TestAHalfLandedSupersedeDoesNotWedgeTheNote(t *testing.T) {
 	}
 }
 
-// The count cap says how many keywords a turn may add and nothing about how
+// The count cap says how many keywords an event may add and nothing about how
 // large each is. The note is stored and then read back into every later prompt,
-// so one long keyword is paid for on every turn that follows it.
+// so one long keyword is paid for on every event that follows it.
 func TestAnEnormousKeywordIsClamped(t *testing.T) {
 	dir := t.TempDir()
 	huge := strings.Repeat("boilerplate ", 8000)
@@ -509,7 +509,7 @@ func TestAnEnormousKeywordIsClamped(t *testing.T) {
 	mem := &fakeMemory{}
 	s.pipe.Memory = mem
 
-	turnIn(t, s, "s1", dir, "do it", "Done.")
+	promptAndAnswerIn(t, s, "s1", dir, "do it", "Done.")
 
 	stored, _, _ := mem.snapshot()
 	note := notes(stored)
@@ -524,7 +524,7 @@ func TestAnEnormousKeywordIsClamped(t *testing.T) {
 }
 
 // A dry run that skipped the note in silence was indistinguishable from a
-// session whose turns produced no keywords, which is the one thing a dry run
+// session whose events produced no keywords, which is the one thing a dry run
 // exists to find out.
 func TestDryRunSaysTheNoteWasNotWritten(t *testing.T) {
 	dir := t.TempDir()
@@ -534,20 +534,20 @@ func TestDryRunSaysTheNoteWasNotWritten(t *testing.T) {
 	s.pipe.Memory = mem
 	s.pipe.Cfg.Budget.DryRun = true
 
-	turnIn(t, s, "s1", dir, "fix the parser", "Fixed.")
+	promptAndAnswerIn(t, s, "s1", dir, "fix the parser", "Fixed.")
 
 	stored, _, _ := mem.snapshot()
 	if n := len(notes(stored)); n != 0 {
 		t.Fatalf("a dry run must not write: %d", n)
 	}
 	if s.srv.Metrics.Get("shoulder_session_keywords_dry_run_total") != 2 {
-		t.Error("the skipped write must be counted for each of the turn's two consults, as the fact path counts its own")
+		t.Error("the skipped write must be counted for each of the two consults, as the fact path counts its own")
 	}
 }
 
 // A daemon that has been told its last known session is over stops. The
 // adapters probe the port before every prompt, so an editor that is still open
-// gets one back at its next turn; a daemon that lingered on a guess would
+// gets one back at its next prompt; a daemon that lingered on a guess would
 // instead sit there after everything had closed.
 func TestTheLastGoodbyeStopsTheDaemon(t *testing.T) {
 	ts := advisorServer(t, 0, decisionBody(t, ""))

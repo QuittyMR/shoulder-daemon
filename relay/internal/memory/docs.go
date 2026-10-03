@@ -61,7 +61,7 @@ type DocsOptions struct {
 	// in, which is empty when the caller had none to give. Nil resolves the
 	// worktree with git from that directory and reuses an existing docs or doc
 	// directory under it. The worktree is empty when there is none, which
-	// turns off the .gitignore handling for private records.
+	// switches off the .gitignore handling for private records.
 	Roots func(s scope.Scope, project, dir string) (docsDir, worktree string)
 
 	// GlobalDir is where global facts go under the default Roots; empty means

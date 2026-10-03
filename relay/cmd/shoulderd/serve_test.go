@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/config"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/llm"
 )
 
@@ -179,7 +180,7 @@ func TestTheMissingModelWarningSaysWhatIsLost(t *testing.T) {
 	var buf bytes.Buffer
 	warnMissingModel(slog.New(slog.NewTextHandler(&buf, nil)), nil, &llm.Jev{})
 	got := buf.String()
-	if !strings.Contains(got, "no fact is deduced from the turn") || strings.Contains(got, "no new fact is written") {
+	if !strings.Contains(got, "no fact is deduced from the session") || strings.Contains(got, "no new fact is written") {
 		t.Fatalf("warning = %q", got)
 	}
 
@@ -193,5 +194,23 @@ func TestTheMissingModelWarningSaysWhatIsLost(t *testing.T) {
 	warnMissingModel(slog.New(slog.NewTextHandler(&buf, nil)), &llm.OpenAICompatible{}, nil)
 	if buf.Len() != 0 {
 		t.Fatalf("warned with a decision model configured: %q", buf.String())
+	}
+}
+
+// A setting read under its old name is said once, at Info, with the name to
+// change it to; a daemon that read none says nothing.
+func TestASettingReadUnderItsOldNameIsLoggedWithItsReplacement(t *testing.T) {
+	var out bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&out, nil))
+
+	logRenamed(log, nil)
+	if out.Len() != 0 {
+		t.Fatalf("logged with nothing renamed: %s", out.String())
+	}
+	logRenamed(log, []config.Renamed{{Old: "BUDGET_MIN_TURN_GAP", New: "BUDGET_MIN_EVENT_GAP"}})
+	line := out.String()
+	if strings.Count(line, "\n") != 1 || !strings.Contains(line, "level=INFO") ||
+		!strings.Contains(line, "key=BUDGET_MIN_TURN_GAP") || !strings.Contains(line, "replacement=BUDGET_MIN_EVENT_GAP") {
+		t.Fatalf("want one Info line naming the old key and its replacement, got %q", line)
 	}
 }

@@ -64,7 +64,7 @@ var (
 	// editorConfig is a configuration directory of the suite's own for the
 	// editor to load. Without it a run loads whatever the person running the
 	// suite has installed globally, and their plugins are then part of every
-	// test: one here answered a turn with a tool call the provider refused, so
+	// test: one here answered a prompt with a tool call the provider refused, so
 	// the editor exited non-zero and the daemon was blamed for it. Built once,
 	// because the first run against an empty one costs a minute.
 	editorConfig string
@@ -237,11 +237,11 @@ func (d *daemon) get(path string) string {
 }
 
 type observedSession struct {
-	ID      string `json:"id"`
-	Harness string `json:"harness"`
-	CWD     string `json:"cwd"`
-	Turn    uint64 `json:"turn"`
-	Seq     uint64 `json:"seq"`
+	ID         string `json:"id"`
+	Harness    string `json:"harness"`
+	CWD        string `json:"cwd"`
+	MainEvents uint64 `json:"main_events"`
+	Seq        uint64 `json:"seq"`
 }
 
 func (d *daemon) sessions() []observedSession {
@@ -347,7 +347,7 @@ func (d *daemon) pin() {
 			case <-tick.C:
 				// A tool result, not a prompt: it keeps the session alive
 				// without asking the decision model anything, so a test that
-				// reads what the model was sent reads its own turns only.
+				// reads what the model was sent reads its own prompts only.
 				d.event(`{"session_id":"integration-pin","event":"tool_result","tool_name":"Read"}`)
 			}
 		}
@@ -416,10 +416,10 @@ func run(t *testing.T, dir, prompt string, env ...string) {
 	}
 }
 
-// runContinuing drives a second turn of the session the last run left behind.
+// runContinuing drives a second prompt of the session the last run left behind.
 // Two invocations are two sessions otherwise, and advice is delivered to the
-// session that earned it on its next turn — so a test that wants to see advice
-// arrive has to give that session another turn rather than start a new one.
+// session that earned it on its next prompt — so a test that wants to see advice
+// arrive has to give that session another prompt rather than start a new one.
 func runContinuing(t *testing.T, dir, prompt string, env ...string) {
 	t.Helper()
 	var err error
@@ -513,7 +513,7 @@ func clean(env []string) []string {
 }
 
 // TestOpenCodeSessionIsObserved is the whole point of the adapter: a real
-// editor, doing a real turn, showing up in the daemon as the session it is.
+// editor, running a real prompt, showing up in the daemon as the session it is.
 func TestOpenCodeSessionIsObserved(t *testing.T) {
 	d := startDaemon(t)
 	d.pin()
@@ -530,7 +530,7 @@ func TestOpenCodeSessionIsObserved(t *testing.T) {
 	// One assertion per kind, because each is a separate mapping in the adapter
 	// and a missing one is invisible in a total. session_end in particular was
 	// mapped to an event OpenCode does not emit for a run.
-	for _, kind := range []string{"session_start", "user_prompt", "turn_end", "session_end"} {
+	for _, kind := range []string{"session_start", "user_prompt", "answer_end", "session_end"} {
 		if d.observed(kind) == 0 {
 			t.Errorf("no %s hook reached the daemon", kind)
 		}
@@ -617,9 +617,9 @@ func TestOpenCodeReceivesAdvice(t *testing.T) {
 	d.pin()
 	dir := project(t)
 
-	// Two turns of one session: the first produces the advice, the second is
+	// Two prompts of one session: the first produces the advice, the second is
 	// the one it can be delivered on, because advice is never returned to the
-	// turn that caused it. Two separate invocations would be two sessions, and
+	// prompt that caused it. Two separate invocations would be two sessions, and
 	// the advice the first earned would have nowhere to go.
 	run(t, dir, "reply with exactly: one", "SHOULDER_ADDR="+d.addr, "SHOULDER_TOKEN="+d.token)
 	runContinuing(t, dir, "reply with exactly: two", "SHOULDER_ADDR="+d.addr, "SHOULDER_TOKEN="+d.token)

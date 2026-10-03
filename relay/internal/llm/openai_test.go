@@ -207,7 +207,7 @@ func TestCompleteReportsAnErrorStatus(t *testing.T) {
 }
 
 // Gemini attaches a thought signature to every tool call it makes and answers
-// 400 if the next request does not carry it back, so a turn that calls a tool
+// 400 if the next request does not carry it back, so a decision that calls a tool
 // fails on its second step and nowhere else.
 func TestProviderStateOnAToolCallIsReplayedVerbatim(t *testing.T) {
 	const sig = `{"google":{"thought_signature":"abc123"}}`

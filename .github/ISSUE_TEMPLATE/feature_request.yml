@@ -32,7 +32,7 @@ body:
       description: >
         If this is a connector or a backend, name the endpoint or the product and say
         what it costs to call. Latency is the constraint that decides most of these -
-        the decision pass runs while the user's turn is open.
+        the decision pass runs while the user's prompt is being answered.
 
   - type: checkboxes
     id: budget

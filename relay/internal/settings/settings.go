@@ -1,4 +1,4 @@
-// Package settings holds the handful of knobs that may be turned while the
+// Package settings holds the handful of knobs that may be changed while the
 // daemon is running.
 //
 // They are here rather than in config because config is a snapshot of the
@@ -26,7 +26,7 @@ import (
 )
 
 // Live is the current value of each knob. Every reader goes through it, so a
-// change reaches the next turn rather than the next process.
+// change reaches the next event rather than the next process.
 type Live struct {
 	mu    sync.RWMutex
 	pick  prompts.Pickiness
@@ -123,7 +123,7 @@ func (l *Live) snapshot() Snapshot {
 	return s
 }
 
-// Change is one request to turn some of the knobs. A nil field is one the
+// Change is one request to change some of the knobs. A nil field is one the
 // caller did not mention, which is different from one they cleared: there is no
 // way to ask for "no provider", because a daemon told to stop thinking is one
 // you stop.
@@ -143,7 +143,7 @@ func (c Change) Empty() bool {
 // command that asked.
 var ErrBadChange = errors.New("bad setting")
 
-// Apply turns every knob the change names, or none of them. All-or-nothing is
+// Apply changes every knob the change names, or none of them. All-or-nothing is
 // the point: naming a provider and a model that provider does not have would
 // otherwise leave the daemon pointed at a model that does not exist, having
 // reported an error about something else.

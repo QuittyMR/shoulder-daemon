@@ -10,7 +10,7 @@ import (
 // hookSpecificOutput and hookResponse are the ONLY types this package can
 // serialise back to a harness. They have no field for `decision`, `continue`,
 // `stopReason` or `permissionDecision`, so the relay is structurally incapable
-// of blocking a tool, forcing continuation, or taking the user's turn. The
+// of blocking a tool, forcing continuation, or taking over the user's prompt. The
 // guarantee is enforced by the type system first and by TestNeverBlocks second.
 type hookSpecificOutput struct {
 	HookEventName     string `json:"hookEventName"`
@@ -22,7 +22,7 @@ type hookResponse struct {
 }
 
 // ForbiddenFields are the JSON keys whose presence would mean the relay had
-// gained the power to interfere with a turn.
+// gained the power to interfere with a prompt or its answer.
 var ForbiddenFields = []string{"decision", "continue", "stopReason", "permissionDecision", "permissionDecisionReason", "updatedInput", "systemMessage"}
 
 // Kept to one line: this rides along on every injection, and a paragraph of

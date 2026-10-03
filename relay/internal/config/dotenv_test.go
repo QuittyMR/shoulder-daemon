@@ -50,7 +50,7 @@ func TestParseEnvReadsTheFileAsComposeDoes(t *testing.T) {
 // The table is only as good as the python-dotenv it was taken from, so where
 // python-dotenv is installed - wherever podman-compose is - the table is
 // checked against it again. `make check-stack` sets SHOULDER_DOTENV_REQUIRED,
-// which turns a missing python-dotenv from a skip into a failure there.
+// which makes a missing python-dotenv a failure there instead of a skip.
 func TestTheTableIsWhatPythonDotenvSays(t *testing.T) {
 	required := os.Getenv("SHOULDER_DOTENV_REQUIRED") != ""
 	if err := exec.Command("python3", "-c", "import dotenv").Run(); err != nil {

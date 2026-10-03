@@ -9,11 +9,11 @@ import (
 )
 
 func observe(r *Registry, sessionID string) {
-	r.Observe(Event{SessionID: sessionID, Kind: KindTurnEnd, TS: time.Now()})
+	r.Observe(Event{SessionID: sessionID, Kind: KindAnswerEnd, TS: time.Now()})
 }
 
-// The per-turn cap bounds one turn and nothing bounded the sum. A long session
-// is hundreds of turns, and the note is written to the store and read back into
+// The per-event cap bounds one consult and nothing bounded the sum. A long
+// session is hundreds of them, and the note is written to the store and read back into
 // every prompt after it, so an unbounded sum is a record and a prompt that grow
 // all day.
 func TestTheRunningNoteStopsGrowing(t *testing.T) {
@@ -27,7 +27,7 @@ func TestTheRunningNoteStopsGrowing(t *testing.T) {
 
 	got := r.Keywords("s1")
 	if len(got) != maxSessionKeywords {
-		t.Fatalf("the note kept %d keywords; it is joined into a record and a prompt on every turn", len(got))
+		t.Fatalf("the note kept %d keywords; it is joined into a record and a prompt on every event", len(got))
 	}
 	// The note exists so a bare "do it" can be read against what just happened,
 	// which is the recent end of the list rather than the start of the session.
@@ -46,7 +46,7 @@ func TestRepeatsDoNotAccumulate(t *testing.T) {
 		r.AddKeywords("s1", []string{"parser", "PARSER", "loader"})
 	}
 	if got := r.Keywords("s1"); len(got) != 2 {
-		t.Fatalf("a session working on one file for an hour must not name it every turn: %v", got)
+		t.Fatalf("a session working on one file for an hour must not name it every time: %v", got)
 	}
 }
 
@@ -56,7 +56,7 @@ func TestRepeatsDoNotAccumulate(t *testing.T) {
 // nothing should join that listing by being added to this struct.
 func TestTheSessionListingPublishesIdentityAndNotContent(t *testing.T) {
 	r := NewRegistry(10)
-	r.Observe(Event{SessionID: "s1", Kind: KindTurnEnd, TS: time.Now(), CWD: "/srv/app", Harness: "claude-code"})
+	r.Observe(Event{SessionID: "s1", Kind: KindAnswerEnd, TS: time.Now(), CWD: "/srv/app", Harness: "claude-code"})
 	r.AddKeywords("s1", []string{"parser", "loader"})
 	r.SetKeywordRecord("s1", "/repo", "/repo", "mem_1", "parser, loader")
 
@@ -74,7 +74,7 @@ func TestTheSessionListingPublishesIdentityAndNotContent(t *testing.T) {
 			t.Errorf("the session's working note reached the listing: %s", out)
 		}
 	}
-	for _, want := range []string{`"id":"s1"`, `"cwd":"/srv/app"`, `"turn":1`} {
+	for _, want := range []string{`"id":"s1"`, `"cwd":"/srv/app"`, `"main_events":1`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the listing must still say who the session is; %s missing from %s", want, out)
 		}
@@ -114,20 +114,20 @@ func TestAnEvictionPairsTheProjectWithTheDirectoryItWasResolvedFrom(t *testing.T
 // counted: advice is aged and budgeted in the count, and an answer that
 // spawns ten agents would otherwise expire its notes ten times over before
 // the user is back.
-func TestASubagentsPromptAndStopDoNotAdvanceTheTurn(t *testing.T) {
+func TestASubagentsPromptAndStopDoNotAdvanceTheCount(t *testing.T) {
 	r := NewRegistry(10)
 	r.Observe(Event{SessionID: "s1", Kind: KindUserPrompt, TS: time.Now()})
 	r.Observe(Event{SessionID: "s1", Kind: KindUserPrompt, Origin: OriginAgent, AgentType: "explore", TS: time.Now()})
-	if got := r.Turn("s1"); got != 1 {
-		t.Fatalf("turn = %d after a subagent's prompt, want the 1 the user's prompt left", got)
+	if got := r.MainEvents("s1"); got != 1 {
+		t.Fatalf("count = %d after a subagent's prompt, want the 1 the user's prompt left", got)
 	}
-	r.Observe(Event{SessionID: "s1", Kind: KindTurnEnd, Origin: OriginAgent, AgentID: "a1", Assistant: "found it", TS: time.Now()})
-	if got := r.Turn("s1"); got != 1 {
-		t.Fatalf("turn advanced to %d on a subagent's stop", got)
+	r.Observe(Event{SessionID: "s1", Kind: KindAnswerEnd, Origin: OriginAgent, AgentID: "a1", Assistant: "found it", TS: time.Now()})
+	if got := r.MainEvents("s1"); got != 1 {
+		t.Fatalf("count advanced to %d on a subagent's stop", got)
 	}
-	r.Observe(Event{SessionID: "s1", Kind: KindTurnEnd, TS: time.Now()})
-	if got := r.Turn("s1"); got != 2 {
-		t.Fatalf("turn = %d after the user's prompt and its answer, want 2", got)
+	r.Observe(Event{SessionID: "s1", Kind: KindAnswerEnd, TS: time.Now()})
+	if got := r.MainEvents("s1"); got != 2 {
+		t.Fatalf("count = %d after the user's prompt and its answer, want 2", got)
 	}
 	events, _, _ := r.Snapshot("s1")
 	if len(events) != 4 || events[2].Origin != OriginAgent || events[2].AgentID != "a1" {

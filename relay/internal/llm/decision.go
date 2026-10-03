@@ -15,7 +15,7 @@ import (
 )
 
 // Decision is the only thing the model is allowed to return: what to say to the
-// session, what to remember from it, and the keywords that carry this turn
+// session, what to remember from it, and the keywords that carry this event
 // forward to the next one.
 type Decision struct {
 	Inject string `json:"inject"`
@@ -32,11 +32,11 @@ type Decision struct {
 // pick is passed rather than read from anywhere because it may have been
 // changed since the daemon started, and the caller is the one holding the
 // current value.
-func Decide(ctx context.Context, p Provider, pick prompts.Pickiness, turnWindow string, recalled []memory.Record) (Decision, error) {
+func Decide(ctx context.Context, p Provider, pick prompts.Pickiness, eventWindow string, recalled []memory.Record) (Decision, error) {
 	var b strings.Builder
-	b.WriteString("<recent-turn>\n")
-	b.WriteString(turnWindow)
-	b.WriteString("\n</recent-turn>\n\n<stored-facts>\n")
+	b.WriteString("<recent-events>\n")
+	b.WriteString(eventWindow)
+	b.WriteString("\n</recent-events>\n\n<stored-facts>\n")
 	if len(recalled) == 0 {
 		b.WriteString("(none matched)")
 	}

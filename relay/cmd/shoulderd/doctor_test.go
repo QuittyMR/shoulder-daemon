@@ -19,7 +19,7 @@ import (
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/settings"
 )
 
-// relay stands in for a daemon that has seen the given events, turned away the
+// relay stands in for a daemon that has seen the given events, refused the
 // given number of hooks, holds a store that answers and runs the model the env
 // file asks for. doctor reads the first two off the metrics scrape and asks the
 // daemon for the rest.
@@ -192,7 +192,7 @@ func TestDoctorNamesTheEventsThatNeverFired(t *testing.T) {
 
 // A rejected hook is observed before it is counted, so it looks like a fired
 // one. Without the unauthorised check doctor would call this install healthy.
-func TestDoctorSeesARelayTurningHooksAway(t *testing.T) {
+func TestDoctorSeesARelayRefusingHooks(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	noRelease(t)
 	srv := relay(t, true, httpapi.RoutineEvents(), 4)
@@ -291,7 +291,7 @@ func TestDoctorSaysWhenTheStoreWillNotAnswer(t *testing.T) {
 }
 
 // A daemon that has never heard of the route is old, not broken, and doctor
-// says so without turning a missing answer into a verdict on the store.
+// says so without making a missing answer a verdict on the store.
 func TestDoctorDoesNotCondemnAStoreItCouldNotAskAbout(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	noRelease(t)
@@ -623,7 +623,7 @@ func TestDoctorJSONCarriesTheSourcesAndTheMismatch(t *testing.T) {
 	}
 }
 
-// The healthcheck must not turn a container unhealthy over its configuration:
+// The healthcheck must not make a container unhealthy over its configuration:
 // restarting it would not change the environment it was created with.
 func TestDoctorLivenessIgnoresAMismatch(t *testing.T) {
 	d := fromFile

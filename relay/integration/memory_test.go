@@ -75,7 +75,7 @@ func (a *advisor) seen() []string {
 }
 
 // sawInAPrompt reports whether any prompt so far contains want, waiting for one
-// that does. The advisor pass runs off the hook path, so a turn returning is
+// that does. The advisor pass runs off the hook path, so a prompt returning is
 // not the same as the pass having happened.
 func (a *advisor) sawInAPrompt(want string, within time.Duration) bool {
 	deadline := time.Now().Add(within)
@@ -112,7 +112,7 @@ func fact(content, scope string) map[string]any {
 
 // withAdvisor is startDaemon pointed at a stub model, which is the only way to
 // make an assertion about a decision: a real one is free to say nothing, and
-// nothing is the correct answer to most turns.
+// nothing is the correct answer to most prompts.
 func withAdvisor(t *testing.T, a *advisor, extra ...string) *daemon {
 	t.Helper()
 	return startDaemon(t, append([]string{
@@ -181,12 +181,12 @@ func cli(t *testing.T, d *daemon, dir string, args ...string) string {
 	return string(out)
 }
 
-// TestAFactLearnedInOneTurnIsRecalledForALaterOneInOtherWords is the promise of
+// TestAFactLearnedAtOnePromptIsRecalledForALaterOneInOtherWords is the promise of
 // the whole system, measured end to end through the shipping configuration: a
 // real editor, the daemon's own store, and the embedding table compiled into
-// the binary. The second turn shares no word with the fact the first one
+// the binary. The second prompt shares no word with the fact the first one
 // established, so nothing that counts words in common can pass this.
-func TestAFactLearnedInOneTurnIsRecalledForALaterOneInOtherWords(t *testing.T) {
+func TestAFactLearnedAtOnePromptIsRecalledForALaterOneInOtherWords(t *testing.T) {
 	opencodeOrSkip(t)
 	const learned = "we ship every build to the staging cluster"
 
@@ -213,7 +213,7 @@ func TestAFactLearnedInOneTurnIsRecalledForALaterOneInOtherWords(t *testing.T) {
 		"SHOULDER_ADDR="+d.addr, "SHOULDER_TOKEN="+d.token)
 
 	if !a.sawInAPrompt(learned, 30*time.Second) {
-		t.Fatalf("the stored fact was never recalled for a turn about the same thing in other words;\nprompts:\n%s\ndaemon:\n%s",
+		t.Fatalf("the stored fact was never recalled for a prompt about the same thing in other words;\nprompts:\n%s\ndaemon:\n%s",
 			strings.Join(a.seen(), "\n----\n"), d.log.String())
 	}
 }
@@ -256,7 +256,7 @@ func TestFactsSurviveTheDaemonExitingBetweenSessions(t *testing.T) {
 }
 
 // Local knowledge is keyed to the project it was learned in. A leak here is the
-// worst thing this system can do: one client's arrangements turning up in
+// worst thing this system can do: one client's arrangements appearing in
 // another's session, silently, as something the agent believes.
 func TestALocalFactStaysOutOfAnotherProjectsSession(t *testing.T) {
 	opencodeOrSkip(t)
@@ -269,13 +269,13 @@ func TestALocalFactStaysOutOfAnotherProjectsSession(t *testing.T) {
 	here, elsewhere := project(t), project(t)
 	cli(t, d, here, "fact", "add", "--local", "--category=constraint", secret)
 
-	// A turn in the other project, about exactly the subject of the fact.
+	// A prompt in the other project, about exactly the subject of the fact.
 	run(t, elsewhere, "reply with exactly: ok. who has to review a database migration",
 		"SHOULDER_ADDR="+d.addr, "SHOULDER_TOKEN="+d.token)
 
 	// Give the pass every chance to have run before concluding it did not leak.
 	if !a.sawInAPrompt("review a database migration", 30*time.Second) {
-		t.Skipf("the turn never reached the decision model, so nothing is proven:\n%s", d.log.String())
+		t.Skipf("the prompt never reached the decision model, so nothing is proven:\n%s", d.log.String())
 	}
 	for _, p := range a.seen() {
 		if strings.Contains(p, secret) {
@@ -460,7 +460,7 @@ func TestTheGeneratedTokenReachesTheHarnessAndThenIsEnforced(t *testing.T) {
 	// why it is let in.
 	post("", "before")
 	if !strings.Contains(log.String(), "accepting hooks without a token") {
-		t.Errorf("a hook from the session that started the daemon was turned away:\n%s", log.String())
+		t.Errorf("a hook from the session that started the daemon was refused:\n%s", log.String())
 	}
 	// The next editor to start has the value, and from then on it is required.
 	post(token, "after")

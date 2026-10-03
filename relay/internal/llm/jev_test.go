@@ -22,8 +22,8 @@ type jevCall struct {
 	raw        []byte
 	body       struct {
 		State struct {
-			Turn        string    `json:"turn"`
-			StoredFacts []jevFact `json:"stored_facts"`
+			RecentEvents string    `json:"recent_events"`
+			StoredFacts  []jevFact `json:"stored_facts"`
 		} `json:"state"`
 		Model     string                 `json:"model"`
 		Questions map[string]jevQuestion `json:"questions"`
@@ -135,8 +135,8 @@ func TestJevAsksBothQuestionsInOneCall(t *testing.T) {
 	if c.body.Model != "jev-test" {
 		t.Errorf("model = %q", c.body.Model)
 	}
-	if c.body.State.Turn != "user: push it to main & <deploy>" {
-		t.Errorf("turn = %q", c.body.State.Turn)
+	if c.body.State.RecentEvents != "user: push it to main & <deploy>" {
+		t.Errorf("recent_events = %q", c.body.State.RecentEvents)
 	}
 	if strings.Contains(string(c.raw), `\u003c`) || strings.Contains(string(c.raw), `\u0026`) {
 		t.Errorf("angle brackets were escaped, spending the window: %s", c.raw)
@@ -206,7 +206,7 @@ func TestJevTargetsTheOnlyRecalledFactWithoutAsking(t *testing.T) {
 }
 
 // The target answer is ignored for actions that are not about a stored fact,
-// so an odd one there must not turn a usable verdict into an error.
+// so an odd one there must not make a usable verdict an error.
 func TestJevIgnoresTheTargetForActionsWithoutOne(t *testing.T) {
 	j, _ := jevServer(t, http.StatusOK, answers(t, map[string]any{
 		"action": choice("create", 0.9),
@@ -254,14 +254,14 @@ func TestJevRefusesAnswersItCannotTrust(t *testing.T) {
 	}
 }
 
-// The turn is what gives way to the window, and from the front: its end is
+// The event window is what gives way to Jev's limit, and from the front: its end is
 // what was just said.
 func TestJevStateStaysInsideTheWindow(t *testing.T) {
 	j, calls := jevServer(t, http.StatusOK, answers(t, map[string]any{"action": choice("nothing", 0.9)}))
 	long := []memory.Record{{ID: "f1", Scope: scope.Global, Content: strings.Repeat("x", 10*maxJevFactBytes)}}
-	turn := "OLDEST" + strings.Repeat("\"é<\n", 40_000) + "NEWEST"
+	window := "OLDEST" + strings.Repeat("\"é<\n", 40_000) + "NEWEST"
 
-	if _, err := j.Triage(context.Background(), turn, long); err != nil {
+	if _, err := j.Triage(context.Background(), window, long); err != nil {
 		t.Fatal(err)
 	}
 	c := calls()[0]
@@ -273,11 +273,11 @@ func TestJevStateStaysInsideTheWindow(t *testing.T) {
 		t.Fatalf("state is %d bytes, over %d", len(b), maxJevStateBytes)
 	}
 	if len(b) < maxJevStateBytes*9/10 {
-		t.Fatalf("state is %d bytes: the turn was cut far past what the window needs", len(b))
+		t.Fatalf("state is %d bytes: the event window was cut far past what the limit needs", len(b))
 	}
-	got := c.body.State.Turn
+	got := c.body.State.RecentEvents
 	if !strings.HasPrefix(got, clippedMark) || !strings.HasSuffix(got, "NEWEST") || strings.Contains(got, "OLDEST") {
-		t.Fatalf("turn was not cut from the front: %d bytes, %q", len(got), textutil.Clip(got, 40))
+		t.Fatalf("the event window was not cut from the front: %d bytes, %q", len(got), textutil.Clip(got, 40))
 	}
 	if strings.ContainsRune(got, utf8.RuneError) {
 		t.Fatal("the cut split a character")

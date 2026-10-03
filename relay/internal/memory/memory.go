@@ -19,7 +19,7 @@ import (
 )
 
 // Kind separates durable facts, which a digest is about, from per-session
-// working notes that exist only to give the next turn continuity. A fact is
+// working notes that exist only to give the next event continuity. A fact is
 // worth recalling in a month; a working note is worth recalling in the next
 // minute and is noise afterwards, so the two are never read together.
 //
@@ -171,7 +171,7 @@ type Query struct {
 // List may ever produce that record again, by whatever means the backend has —
 // deleting it, hiding it behind the replacement, filtering it on the way out.
 // This is the invariant the reconciliation loop rests on. A backend that leaves
-// the old record visible has every later turn recall the stale fact, supersede
+// the old record visible has every later event recall the stale fact, supersede
 // it again, and write another replacement, without end.
 //
 // Both reads must match Query.Kind exactly, which makes a query that never
@@ -184,7 +184,7 @@ type Query struct {
 // writes is ever bounded. Supersede replaces a record with another one, so a
 // store only ever grows; the working note of every session in every project
 // would accumulate for the life of the backend, and those notes are by
-// construction the exact vocabulary of the turns they came from, so they
+// construction the exact vocabulary of the events they came from, so they
 // outrank the facts in any search over the same project. Forgetting one when
 // its session dies is what keeps recall from being buried under the history of
 // how it was reached.
@@ -263,7 +263,7 @@ func Validate(r Record) error {
 	if r.Scope == scope.Global && r.Project != "" {
 		return fmt.Errorf("global record must not name a project, got %q", r.Project)
 	}
-	// A working note is keywords of the last few turns, written for the next
+	// A working note is keywords of the last few events, written for the next
 	// minute and dropped when the session ends. Nothing about the person is in
 	// it, and a backend that files private records somewhere separate would be
 	// asked to keep session churn there forever.
@@ -446,7 +446,7 @@ func (c checked) Forget(ctx context.Context, id string, where Query) error {
 // that exists is the worse failure.
 func (c checked) holds(ctx context.Context, oldID string, r Record) (*Record, error) {
 	// Kind is carried into the lookup because a session record supersedes
-	// itself every turn: asked for as a fact, the record being replaced reads
+	// itself every event: asked for as a fact, the record being replaced reads
 	// as absent and the correction is refused as a cross-scope one. Dir is
 	// carried for the backend that cannot list a project without it.
 	return c.heldBy(ctx, oldID, Query{Scope: r.Scope, Project: r.Project, Dir: r.Dir, Kind: r.Kind})

@@ -1,7 +1,7 @@
 // Package facts is the vocabulary of what the daemon stores, and the merge
 // that keeps one statement from being written twice.
 //
-// A turn that states "the best number is 1" and later "I will record that the
+// A session that states "the best number is 1" and later "I will record that the
 // best number is 1" yields two facts in slightly different words, and a person
 // who types one on the command line that the model also reads out of the
 // exchange yields two more. Without reconciliation the memory backend gets
@@ -22,7 +22,7 @@ const (
 	// Explicit is what the person typed, through the CLI. It is authoritative:
 	// they chose those words and that scope deliberately.
 	Explicit Source = "explicit"
-	// Deduced was inferred from the turn's prose by the decision model.
+	// Deduced was inferred from the event's prose by the decision model.
 	Deduced Source = "deduced"
 )
 
@@ -244,8 +244,8 @@ func NormaliseCategory(c string) (string, bool) {
 // AgainstRecalled marks each fact that restates something already stored, so it
 // supersedes that memory instead of being written alongside it.
 //
-// Reconcile only merges facts within one turn. The same fact restated three
-// turns apart arrives as three separate writes, and no store can be relied on
+// Reconcile only merges facts within one event. The same fact restated three
+// events apart arrives as three separate writes, and no store can be relied on
 // to recognise a paraphrase of what it already holds. Without this, a long
 // session accumulates near-duplicates of its own conclusions.
 //

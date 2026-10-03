@@ -15,7 +15,7 @@ import (
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/settings"
 )
 
-// fakeTriage answers every turn with the same verdict and keeps what it was
+// fakeTriage answers every event with the same verdict and keeps what it was
 // shown.
 type fakeTriage struct {
 	verdict llm.Verdict
@@ -68,15 +68,15 @@ func triageStack(t *testing.T, v llm.Verdict, err error) (*stack, *fakeTriage, *
 	return s, tr, adv, mem
 }
 
-// endTurn ends one turn and waits for the one consult it causes. A prompt
+// endAnswer ends one answer and waits for the one consult it causes. A prompt
 // would cause a second, racing the first for the same counters.
-func endTurn(t *testing.T, s *stack) {
+func endAnswer(t *testing.T, s *stack) {
 	t.Helper()
 	s.post(t, "Stop", stop("s1", "Running npm install."))
 	select {
 	case <-s.consults:
 	case <-time.After(3 * time.Second):
-		t.Fatal("the turn was never consulted on")
+		t.Fatal("the answer end was never consulted on")
 	}
 }
 
@@ -101,14 +101,14 @@ func withPickiness(s *stack, pick prompts.Pickiness) {
 func TestASureNothingSkipsTheDecisionModel(t *testing.T) {
 	s, tr, adv, mem := triageStack(t, llm.Verdict{Action: llm.Nothing, Confidence: 0.9}, nil)
 
-	endTurn(t, s)
+	endAnswer(t, s)
 	if n := len(adv.requests()); n != 0 {
 		t.Fatalf("the decision model was asked %d times after a sure nothing", n)
 	}
 	if s.srv.Metrics.Get("shoulder_triage_nothing_total") != 1 {
 		t.Fatal("the verdict was not counted")
 	}
-	// Triage sees what the decision model would have: the turn and what it
+	// Triage sees what the decision model would have: the event and what it
 	// recalled.
 	tr.mu.Lock()
 	windows, recalled := tr.windows, tr.recalled
@@ -128,7 +128,7 @@ func TestASureNothingSkipsTheDecisionModel(t *testing.T) {
 func TestASureInjectRepeatsTheStoredFact(t *testing.T) {
 	s, _, adv, mem := triageStack(t, llm.Verdict{Action: llm.Inject, Confidence: 0.8, FactID: "f1"}, nil)
 
-	endTurn(t, s)
+	endAnswer(t, s)
 	if n := len(adv.requests()); n != 0 {
 		t.Fatalf("the decision model was asked %d times after a sure inject", n)
 	}
@@ -166,7 +166,7 @@ func TestTriageHandsTheRestToTheDecisionModel(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			s, _, adv, _ := triageStack(t, c.verdict, c.err)
 
-			endTurn(t, s)
+			endAnswer(t, s)
 			if len(adv.requests()) != 1 {
 				t.Fatalf("the decision model was asked %d times, want once", len(adv.requests()))
 			}
@@ -174,7 +174,7 @@ func TestTriageHandsTheRestToTheDecisionModel(t *testing.T) {
 				t.Fatalf("%s was not counted", c.metric)
 			}
 			if s.srv.Metrics.Get("shoulder_triage_unhandled_total") != 0 {
-				t.Fatal("a turn the decision model took was counted as unhandled")
+				t.Fatal("an event the decision model took was counted as unhandled")
 			}
 			got := delivered(t, s)
 			if !strings.Contains(got, "the decision model's advice") {
@@ -209,7 +209,7 @@ func TestTriageWithoutADecisionModel(t *testing.T) {
 			s, tr, adv, mem := triageStack(t, c.verdict, c.err)
 			s.pipe.Settings = settings.ForProvider(nil)
 
-			endTurn(t, s)
+			endAnswer(t, s)
 			if tr.calls() != 1 {
 				t.Fatalf("triage was asked %d times", tr.calls())
 			}
@@ -236,7 +236,7 @@ func TestNoTriageAndNoDecisionModelDoesNothing(t *testing.T) {
 	s.pipe.Triage = nil
 	s.pipe.Settings = settings.ForProvider(nil)
 
-	endTurn(t, s)
+	endAnswer(t, s)
 	if tr.calls() != 0 {
 		t.Fatal("a triage that was taken away was asked")
 	}
@@ -245,9 +245,9 @@ func TestNoTriageAndNoDecisionModelDoesNothing(t *testing.T) {
 	}
 }
 
-// A sure "nothing" settles the turn only where the decision model would also
+// A sure "nothing" settles the event only where the decision model would also
 // have been told to leave an implied rule alone. Below Balanced it is told to
-// store those, so the turn is still put to it.
+// store those, so the event is still put to it.
 func TestNothingSettlesOnlyAtBalancedOrStricter(t *testing.T) {
 	for _, c := range []struct {
 		pick  prompts.Pickiness
@@ -263,7 +263,7 @@ func TestNothingSettlesOnlyAtBalancedOrStricter(t *testing.T) {
 			s, _, adv, _ := triageStack(t, llm.Verdict{Action: llm.Nothing, Confidence: 0.95}, nil)
 			withPickiness(s, c.pick)
 
-			endTurn(t, s)
+			endAnswer(t, s)
 			if asked := len(adv.requests()) > 0; asked != c.asked {
 				t.Fatalf("decision model asked = %v, want %v", asked, c.asked)
 			}
@@ -281,9 +281,9 @@ func TestAStalledTriageLeavesTheDecisionModelItsTime(t *testing.T) {
 	tr.stall = true
 
 	start := time.Now()
-	endTurn(t, s)
+	endAnswer(t, s)
 	if took := time.Since(start); took > s.pipe.Cfg.AdvisorTimeout {
-		t.Fatalf("the turn took %v, past the advisor timeout", took)
+		t.Fatalf("the consult took %v, past the advisor timeout", took)
 	}
 	if len(adv.requests()) != 1 {
 		t.Fatalf("the decision model was asked %d times, want once", len(adv.requests()))

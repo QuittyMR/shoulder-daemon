@@ -66,7 +66,7 @@ var presets = map[string]Preset{
 	// subscription rather than per-token. It is a separate namespace from
 	// OpenCode Zen, which carries the frontier models, and it is not the
 	// `opencode` CLI: this talks to it directly over its OpenAI-compatible API.
-	// The default is a flash-tier model on purpose; deciding whether a turn
+	// The default is a flash-tier model on purpose; deciding whether an event
 	// contradicts a stored fact is classification, not authorship.
 	"opencode-go": {
 		BaseURL:      "https://opencode.ai/zen/go/v1",

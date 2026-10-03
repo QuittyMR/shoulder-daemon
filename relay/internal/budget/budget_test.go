@@ -2,8 +2,8 @@ package budget
 
 import "testing"
 
-func note(n int, turn uint64) Candidate {
-	return Candidate{Kind: "note", Len: n, CreatedTurn: turn, TTLTurns: 4}
+func note(n int, event uint64) Candidate {
+	return Candidate{Kind: "note", Len: n, CreatedEvent: event, TTLEvents: 4}
 }
 
 func TestGate(t *testing.T) {
@@ -16,12 +16,12 @@ func TestGate(t *testing.T) {
 	})
 
 	t.Run("second note inside the gap is suppressed", func(t *testing.T) {
-		st := State{LastInjectTurn: 5, CharsUsed: 100}
+		st := State{LastInjectEvent: 5, CharsUsed: 100}
 		// Injected at a prompt: the count is odd there and moves by two from
 		// one prompt to the next.
-		for _, turn := range []uint64{6, 7, 9, 10} {
-			if d := g.Allow(st, turn, note(100, turn)); d.Allow || d.Reason != "turn_gap:6" {
-				t.Fatalf("note at %d, inside the two prompts after the injection, got %v", turn, d)
+		for _, event := range []uint64{6, 7, 9, 10} {
+			if d := g.Allow(st, event, note(100, event)); d.Allow || d.Reason != "event_gap:6" {
+				t.Fatalf("note at %d, inside the two prompts after the injection, got %v", event, d)
 			}
 		}
 		if d := g.Allow(st, 11, note(100, 11)); !d.Allow {
@@ -30,13 +30,13 @@ func TestGate(t *testing.T) {
 	})
 
 	t.Run("warning bypasses the gap but not the session cap", func(t *testing.T) {
-		st := State{LastInjectTurn: 5, CharsUsed: 100}
-		w := Candidate{Kind: KindWarning, Len: 100, CreatedTurn: 6, TTLTurns: 4}
+		st := State{LastInjectEvent: 5, CharsUsed: 100}
+		w := Candidate{Kind: KindWarning, Len: 100, CreatedEvent: 6, TTLEvents: 4}
 		if d := g.Allow(st, 6, w); !d.Allow {
-			t.Fatalf("warning should bypass the turn gap, got %v", d)
+			t.Fatalf("warning should bypass the event gap, got %v", d)
 		}
 		full := State{CharsUsed: g.SessionMaxChars - 10}
-		if d := g.Allow(full, 6, Candidate{Kind: KindWarning, Len: 100, CreatedTurn: 6}); d.Allow {
+		if d := g.Allow(full, 6, Candidate{Kind: KindWarning, Len: 100, CreatedEvent: 6}); d.Allow {
 			t.Fatal("warning must not escape the session character cap")
 		}
 	})
@@ -69,7 +69,7 @@ func TestRecordAccumulates(t *testing.T) {
 	var st State
 	st.Record(3, note(200, 3))
 	st.Record(9, note(300, 9))
-	if st.CharsUsed != 500 || st.LastInjectTurn != 9 {
+	if st.CharsUsed != 500 || st.LastInjectEvent != 9 {
 		t.Fatalf("unexpected state %+v", st)
 	}
 }

@@ -174,10 +174,10 @@ func sequencedAdvisor(t *testing.T, bodies ...string) *httptest.Server {
 	return ts
 }
 
-// turn posts a prompt and the answer that ends its turn, and waits out the
+// promptAndAnswer posts a prompt and the end of its answer, and waits out the
 // consult each of them causes. The prompt's is over before the answer is
 // posted, so a sequenced advisor's first body is the prompt's.
-func (s *stack) turn(t *testing.T, promptBody, stopBody string) {
+func (s *stack) promptAndAnswer(t *testing.T, promptBody, stopBody string) {
 	t.Helper()
 	s.post(t, "UserPromptSubmit", promptBody)
 	awaitConsult(t, s)
@@ -186,7 +186,7 @@ func (s *stack) turn(t *testing.T, promptBody, stopBody string) {
 }
 
 // atAnswerEnd is a model with nothing to say at the prompt that answers with
-// body once the turn has ended.
+// body once the answer has ended.
 func atAnswerEnd(t *testing.T, body string) *httptest.Server {
 	t.Helper()
 	return sequencedAdvisor(t, decisionBody(t, ""), body)
@@ -247,7 +247,7 @@ func TestAdviceIsDeliveredOnTheNextHook(t *testing.T) {
 	}
 	awaitConsult(t, s)
 
-	got := s.post(t, "UserPromptSubmit", prompt("s1", "next turn"))
+	got := s.post(t, "UserPromptSubmit", prompt("s1", "next prompt"))
 	if !strings.Contains(got, "the marker advice") {
 		t.Fatalf("advice should ride along on the next prompt, got %s", got)
 	}
@@ -288,7 +288,7 @@ func TestStalledAdvisorDoesNotSlowHooks(t *testing.T) {
 func TestDeadAdvisorProducesNoInjectionAndNoError(t *testing.T) {
 	s := newStack(t, "http://127.0.0.1:1", 200*time.Millisecond)
 
-	s.turn(t, prompt("s1", "hi"), stop("s1", "done"))
+	s.promptAndAnswer(t, prompt("s1", "hi"), stop("s1", "done"))
 
 	got := s.post(t, "UserPromptSubmit", prompt("s1", "again"))
 	if strings.TrimSpace(got) != "{}" {
@@ -336,7 +336,7 @@ func TestBudgetLimitsInjectionRate(t *testing.T) {
 	s := newStack(t, ts.URL, 2*time.Second)
 
 	injected := 0
-	for turn := 0; turn < 12; turn++ {
+	for range 12 {
 		if strings.Contains(s.post(t, "UserPromptSubmit", prompt("s1", "x")), "marker advice") {
 			injected++
 		}
@@ -345,7 +345,7 @@ func TestBudgetLimitsInjectionRate(t *testing.T) {
 		awaitConsult(t, s)
 	}
 	if injected > 5 {
-		t.Fatalf("budget gate let %d injections through in 12 turns", injected)
+		t.Fatalf("budget gate let %d injections through in 12 prompts", injected)
 	}
 	if injected == 0 {
 		t.Fatal("budget gate suppressed everything; the pipe would look broken")
@@ -375,20 +375,20 @@ func BenchmarkHookRoundTrip(b *testing.B) {
 // TestAdviceSurvivesSessionEnd pins the bug found in live testing: `claude -p`
 // fires SessionEnd at the end of every invocation, and a session resumed with
 // --continue keeps the same id. Treating SessionEnd as "destroy everything"
-// silently discarded advice a fraction of a second before the next turn
+// silently discarded advice a fraction of a second before the next prompt
 // collected it, so the whole pipeline looked healthy and injected nothing.
 func TestAdviceSurvivesSessionEnd(t *testing.T) {
 	ts := advisorServer(t, 0, decisionBody(t, "the marker advice"))
 	s := newStack(t, ts.URL, 2*time.Second)
 
-	s.turn(t, prompt("resumed", "first turn"), stop("resumed", "done"))
+	s.promptAndAnswer(t, prompt("resumed", "first prompt"), stop("resumed", "done"))
 
 	sessionEnd := `{"session_id":"resumed","hook_event_name":"SessionEnd","reason":"other"}`
 	if got := s.post(t, "SessionEnd", sessionEnd); strings.TrimSpace(got) != "{}" {
 		t.Fatalf("SessionEnd must never inject, got %q", got)
 	}
 
-	got := s.post(t, "UserPromptSubmit", prompt("resumed", "second turn after resume"))
+	got := s.post(t, "UserPromptSubmit", prompt("resumed", "second prompt after resume"))
 	if !strings.Contains(got, "the marker advice") {
 		t.Fatalf("advice must survive SessionEnd so a resumed session still receives it, got %s", got)
 	}
@@ -627,7 +627,7 @@ func TestRefusedCorrectionBecomesASupersede(t *testing.T) {
 	// the store named is one this scope may correct.
 	s.pipe.Memory = memory.Checked(mem)
 
-	s.turn(t, prompt("s1", "which branch do we release from"), stop("s1", "done"))
+	s.promptAndAnswer(t, prompt("s1", "which branch do we release from"), stop("s1", "done"))
 
 	_, superseded, _ := mem.snapshot()
 	if len(superseded) != 1 || superseded[0] != "abc123def4567890" {
@@ -717,7 +717,7 @@ func TestRestatementOfARecalledFactSupersedesIt(t *testing.T) {
 	}}
 	s.pipe.Memory = mem
 
-	s.turn(t, prompt("s1", "what output style is set"), stop("s1", "Terse."))
+	s.promptAndAnswer(t, prompt("s1", "what output style is set"), stop("s1", "Terse."))
 
 	_, superseded, _ := mem.snapshot()
 	if len(superseded) != 1 || superseded[0] != "mem_old" {
@@ -754,7 +754,7 @@ func TestLocalFactIsStoredUnderTheSessionsProject(t *testing.T) {
 	mem := &fakeMemory{}
 	s.pipe.Memory = mem
 
-	s.turn(t, promptIn("s1", "which branch do we release from", dir), stop("s1", "release/stable."))
+	s.promptAndAnswer(t, promptIn("s1", "which branch do we release from", dir), stop("s1", "release/stable."))
 
 	stored, _, _ := mem.snapshot()
 	if len(stored) != 1 {
@@ -808,7 +808,7 @@ func TestRecallReadsLocalAndGlobalTogether(t *testing.T) {
 	}}
 	s.pipe.Memory = mem
 
-	s.turn(t, promptIn("s1", "how should you answer me", dir), stop("s1", "Tersely."))
+	s.promptAndAnswer(t, promptIn("s1", "how should you answer me", dir), stop("s1", "Tersely."))
 
 	_, superseded, queries := mem.snapshot()
 	var sawLocal, sawGlobal bool
@@ -1081,7 +1081,7 @@ func TestALocalFactNeverSupersedesAGlobalRecall(t *testing.T) {
 	}}
 	s.pipe.Memory = mem
 
-	s.turn(t, promptIn("s1", "how should you answer me", dir), stop("s1", "Tersely."))
+	s.promptAndAnswer(t, promptIn("s1", "how should you answer me", dir), stop("s1", "Tersely."))
 
 	stored, superseded, _ := mem.snapshot()
 	if len(superseded) != 0 {
@@ -1110,7 +1110,7 @@ func TestALocalFactNeverSupersedesAnotherProjectsRecall(t *testing.T) {
 	}}
 	s.pipe.Memory = mem
 
-	s.turn(t, promptIn("s1", "which branch is the main one", dir), stop("s1", "master."))
+	s.promptAndAnswer(t, promptIn("s1", "which branch is the main one", dir), stop("s1", "master."))
 
 	_, superseded, _ := mem.snapshot()
 	if len(superseded) != 0 {
@@ -1133,7 +1133,7 @@ func TestARefusalNamingARecordOutsideThisScopeDropsTheWrite(t *testing.T) {
 	// record the store named and refuses to move it here.
 	s.pipe.Memory = memory.Checked(mem)
 
-	s.turn(t, promptIn("s1", "which branch is the main one", dir), stop("s1", "master."))
+	s.promptAndAnswer(t, promptIn("s1", "which branch is the main one", dir), stop("s1", "master."))
 
 	stored, superseded, _ := mem.snapshot()
 	if len(superseded) != 0 {
@@ -1285,7 +1285,7 @@ func TestCountedStepsWarnsOnSlowCall(t *testing.T) {
 	}
 }
 
-// The project is an identity nothing can turn back into a path, so the
+// The project is an identity nothing can convert back into a path, so the
 // directory the session was seen in travels beside it on every read and
 // write, for a backend that keeps local facts with the checkout. A
 // preference is the person's own and is marked so wherever it is filed.
@@ -1298,7 +1298,7 @@ func TestASessionsDirectoryTravelsWithItsProject(t *testing.T) {
 	mem := &fakeMemory{}
 	s.pipe.Memory = mem
 
-	s.turn(t, promptIn("s1", "which branch do we release from", dir), stop("s1", "release/stable."))
+	s.promptAndAnswer(t, promptIn("s1", "which branch do we release from", dir), stop("s1", "release/stable."))
 
 	stored, _, _ := mem.snapshot()
 	if len(stored) != 2 {
@@ -1332,7 +1332,7 @@ func TestThePrivateFlagTheModelSetReachesTheStore(t *testing.T) {
 	mem := &fakeMemory{}
 	s.pipe.Memory = mem
 
-	s.turn(t, promptIn("s1", "where is postgres", t.TempDir()), stop("s1", "5433."))
+	s.promptAndAnswer(t, promptIn("s1", "where is postgres", t.TempDir()), stop("s1", "5433."))
 
 	stored, _, _ := mem.snapshot()
 	if len(stored) != 2 {
@@ -1346,7 +1346,7 @@ func TestThePrivateFlagTheModelSetReachesTheStore(t *testing.T) {
 	}
 }
 
-// The turn that corrects a private fact is a turn about the code, and the model
+// The prompt that corrects a private fact is a prompt about the code, and the model
 // answering it has been shown the record's words rather than where it is filed.
 // Left to restate the flag it would drop it, and the correction would publish
 // what the fact it corrects was kept out of.
@@ -1369,7 +1369,7 @@ func TestACorrectionOfAPrivateFactStaysPrivate(t *testing.T) {
 	// read the record being replaced.
 	s.pipe.Memory = memory.Checked(mem)
 
-	s.turn(t, prompt("s1", "postgres moved to 5434"), stop("s1", "noted."))
+	s.promptAndAnswer(t, prompt("s1", "postgres moved to 5434"), stop("s1", "noted."))
 
 	stored, superseded, _ := mem.snapshot()
 	if len(superseded) != 1 || superseded[0] != held.ID {
@@ -1805,7 +1805,7 @@ func TestTheLastGoodbyeWaitsForAnEarlierGoodbyesTidyingPass(t *testing.T) {
 	stopped(t, idle, mem, 2)
 }
 
-// A pass started every few turns is as much a paid model call as a goodbye's,
+// A pass started every few events is as much a paid model call as a goodbye's,
 // and the last goodbye waits for it too.
 func TestTheLastGoodbyeWaitsForAPeriodicTidyingPass(t *testing.T) {
 	s, prov, mem, idle := gatedStack(t)
@@ -1813,7 +1813,7 @@ func TestTheLastGoodbyeWaitsForAPeriodicTidyingPass(t *testing.T) {
 		s.post(t, "Stop", stop("a", "done"))
 		consulted(t, s)
 	}
-	periodic := prov.pass(t, "the periodic turn")
+	periodic := prov.pass(t, "the periodic pass")
 
 	s.post(t, "SessionEnd", `{"session_id":"a","hook_event_name":"SessionEnd"}`)
 	goodbye := prov.pass(t, "the goodbye")
@@ -1864,7 +1864,7 @@ func TestTheLastEvictionWaitsForATidyingPass(t *testing.T) {
 		s.post(t, "Stop", stop("a", "done"))
 		consulted(t, s)
 	}
-	periodic := prov.pass(t, "the periodic turn")
+	periodic := prov.pass(t, "the periodic pass")
 	s.pipe.Registry.Observe(session.Event{SessionID: "a", TS: time.Now().Add(-2 * IdleEviction), Kind: session.KindUserPrompt})
 	deadline := time.Now().Add(5 * time.Second)
 	for s.pipe.Registry.Len() != 0 {
@@ -2051,7 +2051,7 @@ func TestRecallKeepsTheWholeTextHitsWhenASentenceSearchFails(t *testing.T) {
 }
 
 // The cut takes the oldest sentences: the text is oldest first, and the
-// newest prose is what the turn is about.
+// newest prose is what the event is about.
 func TestRecallCapsTheSentencesAndCountsTheDrop(t *testing.T) {
 	var b strings.Builder
 	for i := 0; i < recallSentenceCap+3; i++ {
@@ -2262,7 +2262,7 @@ func TestAdviceForASubagentIsAddressedToIt(t *testing.T) {
 // A subagent's stop ends its own run and is not counted by the session: the
 // count stands where the user's prompt left it, and the result is still read
 // for facts.
-func TestASubagentsStopIsConsultedWithoutAdvancingTheTurn(t *testing.T) {
+func TestASubagentsStopIsConsultedWithoutAdvancingTheCount(t *testing.T) {
 	ts := advisorServer(t, 0, decisionBody(t, "",
 		map[string]any{"content": "the pool is closed in main.go", "category": "finding", "scope": "global"}))
 	s := newStack(t, ts.URL, 2*time.Second)
@@ -2274,8 +2274,8 @@ func TestASubagentsStopIsConsultedWithoutAdvancingTheTurn(t *testing.T) {
 	s.post(t, "SubagentStop", agentStop("s1", "agent-7", "The pool is closed in main.go."))
 	awaitConsult(t, s)
 
-	if turn := s.pipe.Registry.Turn("s1"); turn != 1 {
-		t.Fatalf("the session's turn is %d after the user's prompt and a subagent's stop, want 1", turn)
+	if count := s.pipe.Registry.MainEvents("s1"); count != 1 {
+		t.Fatalf("the session's count is %d after the user's prompt and a subagent's stop, want 1", count)
 	}
 	stored, _, _ := mem.snapshot()
 	if len(stored) != 2 {
@@ -2283,11 +2283,11 @@ func TestASubagentsStopIsConsultedWithoutAdvancingTheTurn(t *testing.T) {
 	}
 }
 
-// Only the person states how work is done here. A subagent's turn may add what
+// Only the person states how work is done here. A subagent's event may add what
 // it found and what is so, and whatever the model read into it as a rule or a
 // preference is dropped and counted, whether the consult was the agent's
 // prompt or its stop, and whether the decision model or a triage decided it.
-func TestASubagentsTurnCannotStateARuleOrAPreference(t *testing.T) {
+func TestASubagentsEventCannotStateARuleOrAPreference(t *testing.T) {
 	body := decisionBody(t, "",
 		map[string]any{"content": "the pool is never closed in main.go", "category": "finding", "scope": "global"},
 		map[string]any{"content": "the build runs with make build", "category": "fact", "scope": "global"},
@@ -2301,7 +2301,7 @@ func TestASubagentsTurnCannotStateARuleOrAPreference(t *testing.T) {
 		"prompt": func(t *testing.T, s *stack) {
 			s.post(t, "PreToolUse", spawnAgentAs("s1", "toolu_1", "explore", "find where the pool leaks"))
 		},
-		"prompt under a triage that hands the turn on": func(t *testing.T, s *stack) {
+		"prompt under a triage that hands the event on": func(t *testing.T, s *stack) {
 			s.pipe.Triage = &fakeTriage{verdict: llm.Verdict{Action: llm.Create, Confidence: 0.9}, min: 0.6}
 			s.post(t, "PreToolUse", spawnAgentAs("s1", "toolu_1", "explore", "find where the pool leaks"))
 		},
@@ -2331,7 +2331,7 @@ func TestASubagentsTurnCannotStateARuleOrAPreference(t *testing.T) {
 	}
 }
 
-func TestTheUsersTurnStoresARule(t *testing.T) {
+func TestTheUsersPromptStoresARule(t *testing.T) {
 	ts := advisorServer(t, 0, decisionBody(t, "",
 		map[string]any{"content": "always close the pool in a defer", "category": "rule", "scope": "global"}))
 	s := newStack(t, ts.URL, 2*time.Second)
@@ -2348,7 +2348,7 @@ func TestTheUsersTurnStoresARule(t *testing.T) {
 		t.Fatalf("stored %+v, want the user's rule", stored)
 	}
 	if s.srv.Metrics.Get("shoulder_facts_agent_rule_dropped_total") != 0 {
-		t.Fatal("a rule from the user's own turn was dropped")
+		t.Fatal("a rule from the user's own prompt was dropped")
 	}
 }
 
@@ -2370,14 +2370,14 @@ func TestASubagentsStopDoesNotTidy(t *testing.T) {
 		s.post(t, "Stop", stop("s1", "done"))
 		awaitConsult(t, s)
 	}
-	if turn := s.pipe.Registry.Turn("s1"); turn != consolidateEvery {
-		t.Fatalf("turn = %d", turn)
+	if count := s.pipe.Registry.MainEvents("s1"); count != consolidateEvery {
+		t.Fatalf("count = %d", count)
 	}
 	// The fifth answer end tidies; that pass lists the store once.
 	deadline := time.Now().Add(3 * time.Second)
 	for tidies(mem) == 0 {
 		if time.Now().After(deadline) {
-			t.Fatal("the user's turn end on a multiple never tidied")
+			t.Fatal("the fifth answer end never tidied")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -2483,7 +2483,7 @@ func TestIdenticalAdviceIsQueuedOnce(t *testing.T) {
 	ts := advisorServer(t, 0, decisionBody(t, "the marker advice"))
 	s := newStack(t, ts.URL, 2*time.Second)
 
-	s.turn(t, prompt("s1", "do the thing"), stop("s1", "done"))
+	s.promptAndAnswer(t, prompt("s1", "do the thing"), stop("s1", "done"))
 
 	if n := s.pipe.Outbox.Depth(); n != 1 {
 		t.Fatalf("%d notes are pending, want one", n)
@@ -2494,7 +2494,7 @@ func TestIdenticalAdviceIsQueuedOnce(t *testing.T) {
 	if n := s.srv.Metrics.Get("shoulder_advice_duplicate_total"); n != 1 {
 		t.Fatalf("counted %d duplicates, want 1", n)
 	}
-	if got := s.post(t, "UserPromptSubmit", prompt("s1", "next turn")); strings.Count(got, "the marker advice") != 1 {
+	if got := s.post(t, "UserPromptSubmit", prompt("s1", "next prompt")); strings.Count(got, "the marker advice") != 1 {
 		t.Fatalf("the advice should be delivered once, got %s", got)
 	}
 }

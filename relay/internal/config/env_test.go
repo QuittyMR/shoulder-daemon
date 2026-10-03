@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/budget"
 )
 
 func TestEnvTreatsEmptyAsUnset(t *testing.T) {
@@ -104,5 +106,32 @@ func TestSourceSaysWhereASettingCameFrom(t *testing.T) {
 	t.Setenv(EnvFileLoaded, "/host/env")
 	if got := Source("SHOULDER_LLM"); got != SourceFile || LoadedFile() != "/host/env" {
 		t.Errorf("under a runtime that loaded the file: %q from %q", got, LoadedFile())
+	}
+}
+
+// An env file written before the key was renamed keeps its gap, the new name
+// wins once it is set, and the old name is reported only when it was the one
+// read.
+func TestTheMinimumGapIsStillReadUnderItsOldName(t *testing.T) {
+	t.Setenv("BUDGET_MIN_EVENT_GAP", "")
+	t.Setenv("BUDGET_MIN_TURN_GAP", "")
+	c := Load()
+	if c.Budget.MinEventGap != budget.Default().MinEventGap || len(c.Renamed) != 0 {
+		t.Fatalf("with neither key set: gap %d, renamed %v", c.Budget.MinEventGap, c.Renamed)
+	}
+
+	t.Setenv("BUDGET_MIN_TURN_GAP", "9")
+	c = Load()
+	if c.Budget.MinEventGap != 9 {
+		t.Fatalf("gap = %d, want the 9 set under the old name", c.Budget.MinEventGap)
+	}
+	if len(c.Renamed) != 1 || c.Renamed[0] != (Renamed{Old: "BUDGET_MIN_TURN_GAP", New: "BUDGET_MIN_EVENT_GAP"}) {
+		t.Fatalf("renamed = %v, want the old key and its replacement", c.Renamed)
+	}
+
+	t.Setenv("BUDGET_MIN_EVENT_GAP", "2")
+	c = Load()
+	if c.Budget.MinEventGap != 2 || len(c.Renamed) != 0 {
+		t.Fatalf("with both set: gap %d, renamed %v; the new name must win and nothing be reported", c.Budget.MinEventGap, c.Renamed)
 	}
 }

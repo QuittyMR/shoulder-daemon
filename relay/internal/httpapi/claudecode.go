@@ -35,13 +35,13 @@ var claudeEvents = map[string]claudeEvent{
 	"PreToolUse":         {kind: session.KindToolCall, routine: true},
 	"PostToolUse":        {kind: session.KindToolResult, routine: true},
 	"PostToolUseFailure": {kind: session.KindToolFailure},
-	"Stop":               {kind: session.KindTurnEnd, routine: true},
+	"Stop":               {kind: session.KindAnswerEnd, routine: true},
 	// Neither subagent event is routine: a session that never spawns an agent
 	// never fires them, and the main thread's Stop proves the install on its
 	// own. SubagentStart is the first event to carry the id Claude Code gave
 	// the agent, and the one place context reaches it before its first step.
 	"SubagentStart": {kind: session.KindAgentStart, agent: true},
-	"SubagentStop":  {kind: session.KindTurnEnd, agent: true},
+	"SubagentStop":  {kind: session.KindAnswerEnd, agent: true},
 	"PreCompact":    {kind: session.KindCompact},
 	"SessionEnd":    {kind: session.KindSessionEnd, routine: true},
 }
@@ -73,7 +73,7 @@ type claudeHook struct {
 	ToolResponse  json.RawMessage `json:"tool_response"`
 
 	// Every event; read on Stop. The JSONL session file, which holds every
-	// text block of the turn where last_assistant_message holds the last.
+	// text block of the answer where last_assistant_message holds the last.
 	TranscriptPath string `json:"transcript_path"`
 
 	// Stop, SubagentStop
@@ -142,7 +142,7 @@ func parseClaudeCode(event string, body []byte, now time.Time) ([]session.Event,
 		// hundreds of these per session for up to an hour, and no reader ever
 		// sees more than this many bytes of one.
 		ev.ToolResult = textutil.Clip(flatten(h.ToolResponse), render.ToolResultClip)
-	case session.KindTurnEnd:
+	case session.KindAnswerEnd:
 		ev.Assistant = h.LastAssistantMessage
 	case session.KindSessionEnd:
 		ev.StopReason = h.Reason

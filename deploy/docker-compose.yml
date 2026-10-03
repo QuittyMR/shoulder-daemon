@@ -55,7 +55,7 @@ services:
       - ${HOME}/.cache/shoulder-daemon/models:/home/nonroot/.cache/shoulder-daemon/models
       # Claude Code's session transcripts, read-only and at the host path,
       # because a hook payload names the file by that path. The Stop hook
-      # carries only the last text of a turn; the file has all of it.
+      # carries only the last text of an answer; the file has all of it.
       - ${HOME}/.claude/projects:${HOME}/.claude/projects:ro
     # The transcripts are mode 600 and owned by you, so the container's
     # nonroot user has to be you. Under rootless podman that is this mapping;

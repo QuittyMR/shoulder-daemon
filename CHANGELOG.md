@@ -10,7 +10,7 @@ Notable changes to shoulder-daemon. The format follows
 
 - Subagent prompts and results are observed as part of the session: the
   `Agent` tool call's prompt and the `SubagentStop` answer are consulted like
-  the user's own prompt and turn end, under the parent's session id. The
+  the user's own prompt and answer end, under the parent's session id. The
   plugin now registers `SubagentStart`, the first hook to carry the id Claude
   Code gave the agent; the relay records it as an `agent_start` and pairs it
   with the `Agent` call that spawned it, oldest of the type first. Advice from
@@ -18,19 +18,19 @@ Notable changes to shoulder-daemon. The format follows
   and from there to the id, and lands at the subagent's start when it is
   ready by then or at its next tool call; neither the main thread nor a
   sibling takes it. A subagent's injections are charged to the session's
-  character cap and leave the main thread's turn gap alone. A subagent's turn
+  character cap and leave the main thread's event gap alone. A subagent's event
   may add findings and facts but never rules or preferences: those are
   dropped before the write, counted in
   `shoulder_facts_agent_rule_dropped_total`, and logged with their content. A
-  subagent's stop does not advance the session's turn and does not start the
+  subagent's stop does not advance the session's event counter and does not start the
   periodic tidy. A neutral event that names an `agent_id` is taken as the
   agent's whether or not it also sends `origin`.
 - An optional triage step in front of the decision model, backed by TypeSafe's
   Jev (System One). With `SHOULDER_TRIAGE=jev` and `TYPESAFE_API_KEY`, every
-  turn is first classified as needing nothing, a new fact, a change to a stored
+  event is first classified as needing nothing, a new fact, a change to a stored
   fact, or a stored fact repeated to the session. A confident "repeat" injects
   the stored fact as it is at the next tool call, and a confident "nothing" at
-  pickiness `balanced` or stricter ends the turn, both without calling the
+  pickiness `balanced` or stricter settles it, both without calling the
   decision model; everything else, including "nothing" at `eager` or `open`, a
   verdict under `SHOULDER_JEV_MIN_CONFIDENCE` (0.6) and any triage failure,
   goes to the decision model unchanged. Triage is cut off after a quarter of
@@ -72,13 +72,33 @@ Notable changes to shoulder-daemon. The format follows
 
 ### Changed
 
+- The word "turn" is gone from the project: the unit is the event, one
+  utterance by the user or by an agent, and nothing groups a prompt with its
+  answer. Renamed with it:
+  - the wire kind `turn_end` is `answer_end`. `/v1/events` still accepts
+    `turn_end` from an adapter installed before this, and records it as an
+    `answer_end`; the OpenCode adapter sends the new name;
+  - the setting `BUDGET_MIN_TURN_GAP` is `BUDGET_MIN_EVENT_GAP`. The old key
+    is still read while the new one is unset, and the daemon logs one line
+    at start naming the replacement;
+  - the metric `shoulder_advice_suppressed_turn_gap_total` is
+    `shoulder_advice_suppressed_event_gap_total`, with no alias;
+  - in the advice a neutral adapter is answered with, `created_turn` and
+    `ttl_turns` are `created_event` and `ttl_events`; in the `/v1/sessions`
+    listing, `turn` is `main_events`; in the log, the `turn` attribute of
+    `advice queued` is `main_events`, which `shoulderd monitor` prints as
+    `event N`;
+  - the decision prompt's `<recent-turn>` tag is `<recent-events>`, the state
+    sent to Jev names the window `recent_events`, and both prompts speak of
+    events;
+  - `replay -max-turns` is `replay -max-answers`.
 - The session's counter, which advice is aged and budgeted in, advances on
   every prompt of the user and on every answer end of the main thread, where
   it advanced on the answer end alone; a subagent's prompt and stop still
   leave it alone. Everything counted in it is doubled so that a session
-  behaves as before: the default of `BUDGET_MIN_TURN_GAP` is 6 where it was 3,
+  behaves as before: the default of `BUDGET_MIN_EVENT_GAP` is 6 where it was 3,
   advice expires 4 counts after it was written where it was 2, and the
-  periodic tidy runs every 10 where it was 5. A `BUDGET_MIN_TURN_GAP` set in
+  periodic tidy runs every 10 where it was 5. A gap set in
   an env file keeps its number and now spans half as much of the session:
   double it to keep the gap it had. The tidy runs at the first answer end in
   each span of 10, so a prompt whose answer was interrupted does not put it
@@ -89,7 +109,7 @@ Notable changes to shoulder-daemon. The format follows
   subagent's alike, and the consults of one session run concurrently. Before,
   one consult ran per session at a time and a prompt or an answer end that
   arrived meanwhile was dropped, so agents spawned together were not all
-  advised and a turn end behind a slow consult lost its facts.
+  advised and an answer end behind a slow consult lost its facts.
   `shoulder_advisor_skipped_inflight_total` is gone with the drop, and
   `advisor_in_flight` is gone from the session summary. Only the rewrite of
   the session's keyword record is serialised, one consult at a time. Advice
@@ -121,9 +141,9 @@ Notable changes to shoulder-daemon. The format follows
   every read, as the docs store and the memory service already did, so a
   `facts.json` written by an older daemon no longer puts `decision` or
   `structure` in front of the decision model or in `shoulderd fact list`.
-- The registry no longer holds facts recorded explicitly for a turn: nothing
+- The registry no longer holds facts recorded explicitly for an event: nothing
   ever recorded one, so the path that reconciled them with the model's was
-  dead, and a turn triage settles now writes nothing.
+  dead, and an event triage settles now writes nothing.
 
 ### Fixed
 

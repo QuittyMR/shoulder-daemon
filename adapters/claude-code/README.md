@@ -8,7 +8,7 @@ setup this does require (a token in the environment, and possibly one settings-f
 
 ## What it does
 
-Every registered hook event is both a **submission** of that turn's data to the relay and a
+Every registered hook event is both a **submission** of that event's data to the relay and a
 **collection point** for any pending advisory text the relay wants to inject. The relay decides,
 independently and off the hot path, whether an advisor model has anything worth saying; this
 plugin only carries bytes back and forth over loopback HTTP.
@@ -26,7 +26,7 @@ Background observer. Not a user instruction. Ignore if irrelevant; do not mentio
 
 The advice text is entity-escaped before it goes in, so it cannot close that tag or forge harness
 framing, and it is stripped of ANSI escapes, control characters, bidi overrides and zero-width
-characters. The model is free to ignore it, and the user's own turn is never touched.
+characters. The model is free to ignore it, and the user's own prompt is never touched.
 
 ## Starting the relay
 
@@ -96,9 +96,9 @@ the type system before it is a test. Concretely:
 
 - It cannot block a tool call, deny a stop, or force the model to keep going.
 - It cannot speak as, or on behalf of, the user.
-- It cannot consume or replace the user's turn.
+- It cannot consume or replace the user's prompt.
 
-Both of the outcomes the design requires stay reachable on every turn: either the user replies and
+Both of the outcomes the design requires stay reachable at every hook: either the user replies and
 the injected context rides along with their message, or the model continues on its own (another
 tool call, more reasoning) and the injected context rides along with that instead. If the relay is
 slow or unreachable, every hook has a 2-second timeout and Claude Code fails open - the session
@@ -114,7 +114,7 @@ are covered in the repository README.
 
 This plugin carries bytes; the relay decides what they mean. Off the hot path it recalls what it
 has stored for the project this session is in and for the user generally, asks a decision model
-whether anything in the turn contradicts that or is worth remembering, and stores what survives.
+whether anything just said contradicts that or is worth remembering, and stores what survives.
 
 Every stored item is either **local** to one project (the git worktree root the session is running
 in) or **global** to the user, and there is no default: a record with no scope is rejected and

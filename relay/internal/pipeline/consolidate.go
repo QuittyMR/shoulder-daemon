@@ -55,7 +55,7 @@ type ConsolidateRequest struct {
 // Consolidate tidies one scope: it drops facts that have stopped being rules
 // and collapses several wordings of one rule into a single record.
 //
-// It exists because the write path cannot see this. That path judges one turn
+// It exists because the write path cannot see this. That path judges one event
 // against a handful of recalled facts, so it cannot tell that it is writing the
 // fourth phrasing of something already stored, nor that a fact written last
 // week has since decayed into a note about history. Both are only visible from

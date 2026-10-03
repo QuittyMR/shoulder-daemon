@@ -2,7 +2,7 @@
 
 Performance here means three things, and they pull against each other: how often the
 fact that answers a question is the first one recalled, how long the recall takes while
-the agent's turn is open, and how much the daemon holds resident next to an editor. This
+the agent is answering, and how much the daemon holds resident next to an editor. This
 page says what each lever costs and buys, measured, so the choice is yours rather than
 the default's.
 
@@ -30,18 +30,18 @@ The corpus is small and hand-written. Read the numbers as the shape of the trade
 as a promise about your facts; run it yourself before believing any of them.
 
 Retrieval is half the question. A benchmark query is a question ("which branch should I
-rebase onto"); a production query is the turn's own prose ("committing now"), and a fact
+rebase onto"); a production query is the session's own prose ("committing now"), and a fact
 that ranks first for the one may never be reached by the other. Worse, ranking says
 nothing about whether the loop closes.
 `relay/internal/pipeline/scenario_bench_test.go` measures the whole loop instead. Each
-scenario seeds a fact through the connector, drives real turns through `Pipeline.Consult`
-against the configured decision model, and scores four things per turn: whether the seed
-came back from the search the turn's prose ran, whether advice reached the outbox where
-one was due, whether the turn that contradicts the seed superseded that record rather
+scenario seeds a fact through the connector, drives real prompts and answers through `Pipeline.Consult`
+against the configured decision model, and scores four things per step: whether the seed
+came back from the search the step's prose ran, whether advice reached the outbox where
+one was due, whether the step that contradicts the seed superseded that record rather
 than storing a second fact beside it, and whether the store ends the scenario holding
 exactly what it should. The scenarios cover both scopes and every category the decision
-prompt knows, plus two that must produce nothing: an unrelated turn that must not be
-spoken over, and two turns of ordinary work whose session note must not become knowledge.
+prompt knows, plus two that must produce nothing: an unrelated step that must not be
+spoken over, and two steps of ordinary work whose session note must not become knowledge.
 Every scenario is a fresh store and a fresh session, and every backend is built the way
 `cmd/shoulderd` builds it. Nothing fails the run; the table is the output.
 
@@ -56,32 +56,32 @@ is set. Measured against gemini-flash-lite:
 
 | | `glove` | `minilm` | docs + `glove` | mcp-memory-service |
 |---|---|---|---|---|
-| Seed recalled by the turn's own prose | 81% | 100% | 81% | 90% |
+| Seed recalled by the step's own prose | 81% | 100% | 81% | 90% |
 | Advice reached the outbox where one was due | 64-71% | 71-79% | 64% | 57% |
 | Contradiction superseded the right record | 100% | 100% | 100% | 100% |
 | Store left in the expected final state | 92-100% | 92-100% | 92-100% | 100% |
 | Decision pass, mean / worst | 0.8 s / 1.7 s | 0.8 s / 1.7 s | 0.8 s / 1.6 s | 0.9 s / 1.5 s |
 
 One run is one sample per cell, and the injection row is two. Recall and superseding
-repeated exactly every time; the injection and final columns moved by one turn between
+repeated exactly every time; the injection and final columns moved by one step between
 runs, which is the decision model's own variance and not the store's. The worst decision
 pass is under two seconds, with an occasional four- to five-second provider stall that the
 daemon logs as a slow model call.
 
 Read them with the failures in mind. Superseding is the strongest link, and recall is the
-one the ranker moves: the word table misses every "committing now" turn the transformer
+one the ranker moves: the word table misses every "committing now" step the transformer
 catches, which is the retrieval benchmark's blind spot made visible.
 
 The injection column is the weakest, and it moved when the rule was rewritten rather than
 when anything about the store changed. It used to name two cases to speak in - a fact that
-contradicts the turn, and a fact that says how this codebase does the thing asked for -
-and every miss was a turn it did not cover: a fact that permits the operation, or a
+contradicts the step, and a fact that says how this codebase does the thing asked for -
+and every miss was a step it did not cover: a fact that permits the operation, or a
 preference the assistant's own reply had just broken. It now names both, and the
-permission turn is the one that moved. "force push this to the release branch" over a
+permission step is the one that moved. "force push this to the release branch" over a
 stored "force pushing to the release branch is allowed" was silent under every backend
 before and is answered under every backend now, in both runs; the commit message written
 in the past tense over a stored preference for the imperative is answered wherever the
-preference was recalled at all, three backends of four. Two turns did not move. "deploy
+preference was recalled at all, three backends of four. Two steps did not move. "deploy
 this" over "deploys go to us-east-1" is still answered in about half the runs, and
 "committing now" over "secrets can be committed into this repository" is still silent
 everywhere, including under the ranker that recalls the seed every time - the model does
@@ -142,10 +142,10 @@ the record. Switching embedders changes how well the store recalls, not what it 
 
 ## The other lever: the decision model
 
-Recall is a small part of the time a turn waits. The decision pass runs while the turn is
-open and calls the model you configured with `SHOULDER_LLM`; advice that arrives after the
+Recall is a small part of the time a consult takes. The decision pass runs while the
+prompt is being answered and calls the model you configured with `SHOULDER_LLM`; advice that arrives after the
 assistant has chosen what to do is worth nothing. A flash-tier model answering in under a
-second beats a better one that thinks for twenty, because deciding whether a turn
+second beats a better one that thinks for twenty, because deciding whether an event
 contradicts a stored fact is classification, not authorship. The
 `shoulder_hook_latency_seconds` metric with `event="advisor"` reports what the pass costs
 you; the README's connector table lists the defaults.

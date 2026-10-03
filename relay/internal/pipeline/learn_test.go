@@ -23,7 +23,7 @@ import (
 )
 
 // docModel answers one chunk at a time. byName lets a test give one document
-// facts and another none, which is the difference --replace turns on.
+// facts and another none, which is the difference --replace depends on.
 type docModel struct {
 	mu     sync.Mutex
 	asked  []string
@@ -39,7 +39,7 @@ func (m *docModel) Complete(_ context.Context, system, user string) (string, err
 	defer m.mu.Unlock()
 	m.asked = append(m.asked, user)
 	if system != prompts.Learn {
-		return "", errors.New("learn must send the extraction prompt, not the turn one")
+		return "", errors.New("learn must send the extraction prompt, not the decision one")
 	}
 	for name, broken := range m.broken {
 		if broken && strings.Contains(user, "<document>"+name+"</document>") {

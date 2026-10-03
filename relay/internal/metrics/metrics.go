@@ -139,5 +139,5 @@ func (m *Metrics) Render() string {
 func (m *Metrics) ObserveAdvisor(d time.Duration) { m.ObserveHook("advisor", d) }
 
 // ObserveTriage records how long a triage call took, beside the advisor series
-// and for the same reason: a turn now costs the two added together.
+// and for the same reason: a consult now costs the two added together.
 func (m *Metrics) ObserveTriage(d time.Duration) { m.ObserveHook("triage", d) }

@@ -110,7 +110,7 @@ func (s *Server) handleMigrate(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = src.Close() }()
 	// A query that never mentions Kind asks for facts, which is what leaves the
-	// working notes behind: they are the vocabulary of turns that ended months
+	// working notes behind: they are the vocabulary of events that ended months
 	// ago and belong in nobody's repository.
 	found, err := src.List(r.Context(), memory.Query{Scope: sc, Project: req.Project})
 	if err != nil {

@@ -41,8 +41,8 @@ type Pipeline struct {
 	Memory   memory.Connector
 	Queue    chan session.Event
 
-	// Triage, when set, is asked about every turn before the decision model,
-	// and ends the turn itself when it is sure the turn needs nothing or needs
+	// Triage, when set, is asked about every event before the decision model,
+	// and settles the event itself when it is sure the event needs nothing or needs
 	// a stored fact repeated. Everything else still goes to the decision model.
 	Triage Triager
 
@@ -101,7 +101,7 @@ const activeWithin = time.Minute
 // pending advice are dropped.
 const IdleEviction = time.Hour
 
-// Run drains the queue until the context is cancelled. A turn boundary triggers
+// Run drains the queue until the context is cancelled. A prompt or an answer end triggers
 // an advisor call on its own goroutine so a slow advisor cannot back the queue
 // up behind itself. It returns only once that work has finished or been
 // cancelled, because the store is closed right after.
@@ -166,7 +166,7 @@ func (p *Pipeline) Run(ctx context.Context) {
 				p.Metrics.Inc("shoulder_sessions_evicted_total")
 			}
 			// Off the loop: this is one network write per dead session, and
-			// what is queued behind this tick is a turn waiting to be advised.
+			// what is queued behind this tick is an event waiting to be advised.
 			p.spawn(&p.chores, func(bg context.Context) { p.forgetNotes(bg, evicted) })
 			// An editor that is killed, crashes, or loses the machine under it
 			// never sends its goodbye, so the daemon would otherwise sit here
@@ -189,7 +189,7 @@ func (p *Pipeline) Run(ctx context.Context) {
 				// SessionEnd at the end of every invocation, and a session
 				// resumed with --continue keeps its id. Dropping the advice
 				// here would discard it a fraction of a second before the next
-				// turn collects it, and only the race between this goroutine and
+				// prompt collects it, and only the race between this goroutine and
 				// the next hook would decide whether anything was lost. Eviction is
 				// idle-time based and belongs to the janitor.
 				p.spawn(&p.chores, func(bg context.Context) { p.forgetNotes(bg, []session.Evicted{gone}) })
@@ -232,21 +232,21 @@ func (p *Pipeline) Run(ctx context.Context) {
 				}
 				continue
 			}
-			// Both ends of a turn, for different reasons. A prompt is where
+			// The prompt and the answer end, for different reasons. A prompt is where
 			// advice can still change what happens: the assistant is thinking,
-			// and the next PreToolUse of this same turn carries whatever the
-			// advisor says. A turn end is where the turn can finally be read
+			// and the next PreToolUse after it carries whatever the
+			// advisor says. An answer end is where the answer can finally be read
 			// whole, which is what facts are extracted from. Advising only at
 			// the end means every note lands after the thing it was about.
-			if ev.Kind != session.KindTurnEnd && ev.Kind != session.KindUserPrompt {
+			if ev.Kind != session.KindAnswerEnd && ev.Kind != session.KindUserPrompt {
 				continue
 			}
 			ask := askerOf(ev)
-			// Every few turns, not only at the end: a long session writes all
+			// Every few events, not only at the end: a long session writes all
 			// day and would otherwise carry its own clutter into every recall
 			// until it closes. It starts at the main thread's answer end, when
 			// what the answer established has been said.
-			if ev.Kind == session.KindTurnEnd && !ask.agent() && p.Registry.ConsolidationDue(ev.SessionID, consolidateEvery) {
+			if ev.Kind == session.KindAnswerEnd && !ask.agent() && p.Registry.ConsolidationDue(ev.SessionID, consolidateEvery) {
 				tidy(p.sessionSite([]session.Event{ev}))
 			}
 			// Every prompt and every answer end is consulted, and consults
@@ -353,7 +353,7 @@ const (
 
 	// decisionSteps caps the tool loop. Four is one look at the prompt, two
 	// lookups and an answer; a model still calling tools after that is not
-	// converging and the turn is better served by whatever it has already said.
+	// converging and the session is better served by whatever it has already said.
 	decisionSteps = 4
 
 	// searchToolLimit caps what the model may ask its own search for. The
@@ -364,20 +364,20 @@ const (
 	// maxKeywordChars bounds one keyword. The count cap says how many may
 	// arrive and nothing about how large each is, and the note is stored and
 	// then read back into every prompt for the rest of the session, so one long
-	// keyword is paid for on every turn that follows it. A keyword this long is
+	// keyword is paid for on every event that follows it. A keyword this long is
 	// already a sentence.
 	maxKeywordChars = 64
 
-	// shortTurnTokens divides turns that carry one subject from turns that
+	// shortEventTokens divides events that carry one subject from events that
 	// wandered. Tokens are estimated at four characters each, which is close
 	// enough for a threshold and costs nothing.
-	shortTurnTokens = 500
+	shortEventTokens = 500
 
-	// shortTurnKeywords and longTurnKeywords bound the note a turn may add. The
+	// shortEventKeywords and longEventKeywords bound the note an event may add. The
 	// model is told these numbers and they are enforced anyway: a note that
 	// grows at whatever rate the model chooses is a prompt nobody sized.
-	shortTurnKeywords = 8
-	longTurnKeywords  = 25
+	shortEventKeywords = 8
+	longEventKeywords  = 25
 )
 
 // windDown keeps its budget only if a cancelled result's grace fits inside it;
@@ -390,7 +390,7 @@ const _ = uint64(ShutdownBudget - decidedGrace)
 var sessionScopes = []scope.Scope{scope.Local, scope.Global}
 
 // asker is who a consult answers: the main thread, or one subagent running
-// inside it. It decides where advice is delivered and what the turn may store.
+// inside it. It decides where advice is delivered and what the event may store.
 type asker struct {
 	origin session.Origin
 	// agentID names the subagent the advice is for. Empty for the main thread,
@@ -431,7 +431,7 @@ func (p *Pipeline) Consult(ctx context.Context, sessionID string) {
 }
 
 func (p *Pipeline) consult(ctx context.Context, sessionID string, ask asker) {
-	events, turn, ok := p.Registry.Snapshot(sessionID)
+	events, count, ok := p.Registry.Snapshot(sessionID)
 	if !ok || len(events) == 0 {
 		return
 	}
@@ -449,16 +449,16 @@ func (p *Pipeline) consult(ctx context.Context, sessionID string, ask asker) {
 	at := p.sessionSite(events)
 	recalled := p.recall(ctx, render.RecallQuery(events), at, sessionScopes, RecallLimit, 0)
 
-	if p.Triage != nil && p.triaged(ctx, sessionID, turn, ask, at, window, recalled, pick, prov != nil) {
+	if p.Triage != nil && p.triaged(ctx, sessionID, count, ask, at, window, recalled, pick, prov != nil) {
 		return
 	}
 
 	cctx, cancel := context.WithTimeout(ctx, p.Cfg.AdvisorTimeout)
 	defer cancel()
 
-	// The decision is a tool loop rather than one question: a turn that says
+	// The decision is a tool loop rather than one question: an event that says
 	// only "do it" is unreadable without what came before, and the model is the
-	// one that knows whether this is such a turn.
+	// one that knows whether this is such an event.
 	counted := &countedSteps{Provider: prov, Log: p.Log, Session: sessionID, Slow: slowCall}
 	start := time.Now()
 	raw, err := llm.Run(cctx, counted, prompts.Decision(pick), decisionPrompt(window, recalled),
@@ -484,16 +484,16 @@ func (p *Pipeline) consult(ctx context.Context, sessionID string, ask asker) {
 	// asked, not the writing down of an answer already given.
 	wctx, done := Decided(ctx)
 	defer done()
-	p.queueInjection(sessionID, turn, ask, decision.Inject, decision.Level)
+	p.queueInjection(sessionID, count, ask, decision.Inject, decision.Level)
 	p.persist(wctx, sessionID, ask, at, decision.Facts, recalled)
 	p.rememberKeywords(wctx, sessionID, at, window+decision.Inject, decision.Keywords)
 }
 
-// Triager answers what a turn calls for without writing anything: nothing, a
+// Triager answers what an event calls for without writing anything: nothing, a
 // new fact, a change to a stored one, or a stored one repeated to the session.
 type Triager interface {
 	Name() string
-	Triage(ctx context.Context, turnWindow string, recalled []memory.Record) (llm.Verdict, error)
+	Triage(ctx context.Context, eventWindow string, recalled []memory.Record) (llm.Verdict, error)
 	// MinConfidence is the confidence below which a verdict is not acted on.
 	MinConfidence() float64
 }
@@ -505,11 +505,11 @@ func (p *Pipeline) triageTimeout() time.Duration {
 	return min(5*time.Second, p.Cfg.AdvisorTimeout/4)
 }
 
-// triaged asks the triage about the turn and reports whether that settled it.
-// With no decision model, every turn is settled here: there is nothing to
+// triaged asks the triage about the event and reports whether that settled it.
+// With no decision model, every event is settled here: there is nothing to
 // hand the rest to, and a create or update it could not act on is counted
 // rather than lost without a trace.
-func (p *Pipeline) triaged(ctx context.Context, sessionID string, turn uint64, ask asker, at site, window string, recalled []memory.Record, pick prompts.Pickiness, generative bool) bool {
+func (p *Pipeline) triaged(ctx context.Context, sessionID string, count uint64, ask asker, at site, window string, recalled []memory.Record, pick prompts.Pickiness, generative bool) bool {
 	tctx, cancel := context.WithTimeout(ctx, p.triageTimeout())
 	defer cancel()
 	start := time.Now()
@@ -525,7 +525,7 @@ func (p *Pipeline) triaged(ctx context.Context, sessionID string, turn uint64, a
 		p.Log.Debug("triage unsure", "session", sessionID, "action", v.Action, "confidence", v.Confidence)
 	case v.Action == llm.Nothing:
 		p.Metrics.Inc("shoulder_triage_nothing_total")
-		// Below Balanced the decision model is told to store what a turn
+		// Below Balanced the decision model is told to store what an event
 		// merely implies, which is exactly what a triage asked about stated
 		// facts answers "nothing" to. Settling there would make eager and
 		// open behave as balanced.
@@ -539,7 +539,7 @@ func (p *Pipeline) triaged(ctx context.Context, sessionID string, turn uint64, a
 				// A stored fact the session is about to act against is only
 				// worth repeating at the action; at the next prompt it arrives
 				// after the thing it was about.
-				p.queueInjection(sessionID, turn, ask, r.Content, string(session.LevelAction))
+				p.queueInjection(sessionID, count, ask, r.Content, string(session.LevelAction))
 				return settle()
 			}
 		}
@@ -623,16 +623,16 @@ func (c *countedSteps) exhausted(max int) bool {
 	return c.steps >= max && c.pending
 }
 
-// decisionPrompt renders the turn and whatever the first search matched.
+// decisionPrompt renders the event and whatever the first search matched.
 //
 // The scope is shown because the model is asked which stored fact a new one
 // replaces, and both scopes are in this list. Without it the only signal it has
 // is the wording, which is identical either way.
 func decisionPrompt(window string, recalled []memory.Record) string {
 	var b strings.Builder
-	b.WriteString("<recent-turn>\n")
+	b.WriteString("<recent-events>\n")
 	b.WriteString(window)
-	b.WriteString("\n</recent-turn>\n\n<stored-facts>\n")
+	b.WriteString("\n</recent-events>\n\n<stored-facts>\n")
 	if len(recalled) == 0 {
 		b.WriteString("(none matched)")
 	}
@@ -689,7 +689,7 @@ func (p *Pipeline) decisionTools(sessionID string, at site) []llm.Binding {
 	}, {
 		Tool: llm.Tool{
 			Name:        "session_history",
-			Description: "The keywords from every earlier turn of this session, in order.",
+			Description: "The keywords from every earlier event of this session, in order.",
 			Schema:      map[string]any{"type": "object", "properties": map[string]any{}},
 		},
 		Handler: func(context.Context, json.RawMessage) (string, error) {
@@ -703,14 +703,14 @@ func (p *Pipeline) decisionTools(sessionID string, at site) []llm.Binding {
 	}}
 }
 
-// rememberKeywords folds this turn's keywords into the session's running note
+// rememberKeywords folds this event's keywords into the session's running note
 // and rewrites the one record that holds it.
 //
 // It is a session record rather than a fact: it is worth having on the next
-// turn and noise a week later, and nothing that reads knowledge — recall, a
+// event and noise a week later, and nothing that reads knowledge — recall, a
 // digest, the fact list — asks for a kind, which is what keeps it out of them.
-func (p *Pipeline) rememberKeywords(ctx context.Context, sessionID string, at site, turn string, words []string) {
-	words = capKeywords(turn, words)
+func (p *Pipeline) rememberKeywords(ctx context.Context, sessionID string, at site, text string, words []string) {
+	words = capKeywords(text, words)
 	if len(words) == 0 || p.Memory == nil {
 		return
 	}
@@ -730,16 +730,16 @@ func (p *Pipeline) rememberKeywords(ctx context.Context, sessionID string, at si
 		return
 	}
 	if unchanged {
-		// This turn named nothing the session had not already named, so the
+		// This event named nothing the session had not already named, so the
 		// record already holds exactly what a write would put there. Sending it
 		// anyway is refused by any backend that deduplicates, and the refusal
-		// reads as the turn having been lost.
+		// reads as the event having been lost.
 		p.Metrics.Inc("shoulder_session_keywords_unchanged_total")
 		return
 	}
 	if p.Cfg.Budget.DryRun {
 		// Said out loud, like the fact path does. A dry run that skipped this
-		// in silence was indistinguishable from a session whose turns produced
+		// in silence was indistinguishable from a session whose events produced
 		// no keywords at all, which is the one thing a dry run is for finding
 		// out.
 		p.Metrics.Inc("shoulder_session_keywords_dry_run_total")
@@ -779,7 +779,7 @@ func (p *Pipeline) rememberKeywords(ctx context.Context, sessionID string, at si
 		}
 		if !errors.Is(err, memory.ErrNoBackend) {
 			p.Metrics.Inc("shoulder_memory_write_error_total")
-			p.Log.Warn("session keywords not written; the next turn loses this turn's context",
+			p.Log.Warn("session keywords not written; the next event loses this event's context",
 				"session", sessionID, "err", err)
 		}
 		return
@@ -788,14 +788,14 @@ func (p *Pipeline) rememberKeywords(ctx context.Context, sessionID string, at si
 	p.Metrics.Inc(counter)
 }
 
-// capKeywords bounds what one turn may add to the note, in count and in size.
+// capKeywords bounds what one event may add to the note, in count and in size.
 // Both are applied here rather than asked of the model, because a model that
 // ignores either decides how large the note grows and how large the prompts
 // that carry it back are, for the rest of the session.
-func capKeywords(turn string, words []string) []string {
-	max := longTurnKeywords
-	if len(turn)/4 < shortTurnTokens {
-		max = shortTurnKeywords
+func capKeywords(text string, words []string) []string {
+	max := longEventKeywords
+	if len(text)/4 < shortEventTokens {
+		max = shortEventKeywords
 	}
 	out := make([]string, 0, min(len(words), max))
 	for _, w := range words {
@@ -820,7 +820,7 @@ func capKeywords(turn string, words []string) []string {
 // so the boundary can only report that it is not in this scope — which of an id
 // this session wrote to this project cannot be true of anything except a record
 // that has gone. Taking that refusal at face value would leave the note frozen
-// at the turn it broke on, while the log blamed a scope violation that never
+// at the event it broke on, while the log blamed a scope violation that never
 // happened. The mark on the record is what makes the recovery exact: the
 // replacement that did commit still carries it.
 func (p *Pipeline) writeNote(ctx context.Context, sessionID string, at site, prevID string, rec memory.Record) (id, counter string, err error) {
@@ -901,10 +901,10 @@ func (p *Pipeline) forgetStale(ctx context.Context, at site, stale []memory.Reco
 }
 
 // forgetNotes removes the working notes of sessions that have ended, and is the
-// only thing that ever removes them. A note is superseded turn after turn while
+// only thing that ever removes them. A note is superseded event after event while
 // its session lives, and superseding replaces rather than deletes, so without
 // this every session every project has ever run leaves one record behind — each
-// of them worded out of that project's own turns, and therefore ranked
+// of them worded out of that project's own events, and therefore ranked
 // alongside its facts in every search that project makes afterwards.
 func (p *Pipeline) forgetNotes(ctx context.Context, evicted []session.Evicted) {
 	if p.Memory == nil {
@@ -933,7 +933,7 @@ func (p *Pipeline) forgetNotes(ctx context.Context, evicted []session.Evicted) {
 
 // site is where a session works: the project its local knowledge is filed
 // under, and the directory it was seen in. The two travel together because
-// the project is an identity nothing can turn back into a path, and a backend
+// the project is an identity nothing can convert back into a path, and a backend
 // that keeps local knowledge with the checkout needs the path.
 type site struct {
 	project string
@@ -971,7 +971,7 @@ func (p *Pipeline) sessionSite(events []session.Event) site {
 // towards whatever files were touched rather than what was said.
 //
 // Each scope is searched for the whole text and once more for every sentence
-// in it. One embedding of four turns of prose is an average of everything said,
+// in it. One embedding of a window of prose is an average of everything said,
 // and a fact that matches one sentence closely scores as a weak match to the
 // average; searched on its own, that sentence finds it.
 func (p *Pipeline) recall(ctx context.Context, text string, at site, scopes []scope.Scope, limit int, minScore float64) []memory.Record {
@@ -1004,7 +1004,7 @@ func (p *Pipeline) recall(ctx context.Context, text string, at site, scopes []sc
 		perScope = append(perScope, mergeHits(searches, i, limit, seen))
 	}
 
-	// Take one hit from each scope in turn rather than ranking them together.
+	// Take one hit from each scope in rotation rather than ranking them together.
 	// Score is optional at this boundary, so a backend that does not rank
 	// returns zeros and any ordering by it is a no-op: the first scope searched
 	// would fill the limit on its own and the global preferences a busy project
@@ -1031,7 +1031,7 @@ func (p *Pipeline) recall(ctx context.Context, text string, at site, scopes []sc
 
 const (
 	// recallSentenceCap bounds how many sentences a recall searches for on top
-	// of the whole text. Four turns of prose rarely hold more; a window that
+	// of the whole text. A window of prose rarely holds more; a window that
 	// does is counted in shoulder_recall_sentences_dropped_total.
 	recallSentenceCap = 16
 
@@ -1052,7 +1052,7 @@ type recallSearch struct {
 // recallTexts is the whole text followed by its sentences, less the one that
 // is the whole text, so a single sentence is searched once. Past the cap the
 // oldest sentences go: the text is built oldest first, and the newest prose
-// is what the turn is about.
+// is what the event is about.
 func (p *Pipeline) recallTexts(text string) []string {
 	whole := strings.TrimSpace(text)
 	texts := []string{whole}
@@ -1150,10 +1150,10 @@ const adviceTTL = 4
 // queueInjection sanitises the model's advice and queues it for the asker.
 // For a subagent the level is always action: it never submits a prompt, so
 // context queued at plan level would wait for a UserPromptSubmit that comes
-// only when the main thread's next turn starts, and land there instead. An
+// only when the user's next prompt arrives, and land there instead. An
 // agent that has started by the time its advice is written is named on it;
 // one that has not is named when it does.
-func (p *Pipeline) queueInjection(sessionID string, turn uint64, ask asker, raw, level string) {
+func (p *Pipeline) queueInjection(sessionID string, count uint64, ask asker, raw, level string) {
 	if sanitize.IsSilent(raw) {
 		p.Metrics.Inc("shoulder_advice_silent_total")
 		return
@@ -1164,17 +1164,17 @@ func (p *Pipeline) queueInjection(sessionID string, turn uint64, ask asker, raw,
 		return
 	}
 	a := session.Advice{
-		ID:          "adv_" + randomID(),
-		SessionID:   sessionID,
-		Kind:        session.AdviceNote,
-		Level:       adviceLevel(level),
-		AgentID:     ask.agentID,
-		SpawnID:     ask.spawnID,
-		AgentType:   ask.agentType,
-		Text:        text,
-		CreatedTurn: turn,
-		TTLTurns:    adviceTTL,
-		CreatedAt:   time.Now().UTC(),
+		ID:           "adv_" + randomID(),
+		SessionID:    sessionID,
+		Kind:         session.AdviceNote,
+		Level:        adviceLevel(level),
+		AgentID:      ask.agentID,
+		SpawnID:      ask.spawnID,
+		AgentType:    ask.agentType,
+		Text:         text,
+		CreatedEvent: count,
+		TTLEvents:    adviceTTL,
+		CreatedAt:    time.Now().UTC(),
 	}
 	if ask.agent() {
 		a.Level = session.LevelAction
@@ -1184,7 +1184,7 @@ func (p *Pipeline) queueInjection(sessionID string, turn uint64, ask asker, raw,
 	}
 	if !p.Outbox.Push(a) {
 		p.Metrics.Inc("shoulder_advice_duplicate_total")
-		p.Log.Info("advice already pending; not queued twice", "session", sessionID, "turn", turn,
+		p.Log.Info("advice already pending; not queued twice", "session", sessionID, "main_events", count,
 			"agent", a.AgentID, "text", text)
 		return
 	}
@@ -1192,7 +1192,7 @@ func (p *Pipeline) queueInjection(sessionID string, turn uint64, ask asker, raw,
 	// Logged in full, and at Info. This is the one thing the daemon exists to
 	// produce, and it lands somewhere only the model reads; without this line
 	// the only evidence a person can get is a counter going up.
-	p.Log.Info("advice queued", "id", a.ID, "session", sessionID, "turn", turn,
+	p.Log.Info("advice queued", "id", a.ID, "session", sessionID, "main_events", count,
 		"level", a.Level, "agent", a.AgentID, "text", text)
 }
 
@@ -1211,7 +1211,7 @@ func (p *Pipeline) persist(ctx context.Context, sessionID string, ask asker, at 
 
 // dropUserOnly removes the facts only the person may state. A subagent is told
 // what to do by the main thread, not by the user, so a rule or a preference
-// the model read into a subagent's turn is lost here, and the loss is counted.
+// the model read into a subagent's event is lost here, and the loss is counted.
 func (p *Pipeline) dropUserOnly(sessionID string, merged []facts.Fact) []facts.Fact {
 	kept := merged[:0]
 	for _, f := range merged {
@@ -1221,7 +1221,7 @@ func (p *Pipeline) dropUserOnly(sessionID string, merged []facts.Fact) []facts.F
 			continue
 		}
 		p.Metrics.Inc("shoulder_facts_agent_rule_dropped_total")
-		p.Log.Info("fact dropped: only the user states a rule or a preference, and this turn was a subagent's",
+		p.Log.Info("fact dropped: only the user states a rule or a preference, and this event was a subagent's",
 			"session", sessionID, "category", category, "content", f.Content)
 	}
 	return kept
@@ -1283,7 +1283,7 @@ func (p *Pipeline) store(ctx context.Context, origin string, at site, merged []f
 	}
 
 	// Link restatements of already-stored facts so they supersede rather than
-	// accumulate. Reconcile only sees one turn; this sees the whole store.
+	// accumulate. Reconcile only sees one event; this sees the whole store.
 	//
 	// Placement travels with each record, and by key on both sides: a read is
 	// entitled to hand back either form of a project, and a comparison that
@@ -1419,11 +1419,11 @@ func (p *Pipeline) writeFact(ctx context.Context, origin string, at site, f fact
 				"origin", origin, "content", f.Content)
 			return factFailed
 		}
-		// The supersede is attempted whether or not this turn happened to recall
+		// The supersede is attempted whether or not this event happened to recall
 		// the colliding record. Whether that record is in this scope is a
 		// question the store can answer and a recall window cannot: recall
 		// returns the nearest few, so a record sitting in this very scope is
-		// absent from it whenever the turn's wording did not rank it, and
+		// absent from it whenever the event's wording did not rank it, and
 		// treating that absence as evidence of another scope drops the write
 		// and leaves the two near-duplicates the refusal was reporting. The
 		// boundary re-checks placement against the store and refuses a genuine
@@ -1529,7 +1529,7 @@ func (p *Pipeline) Message(ctx context.Context, req MessageRequest) (MessageRepl
 	recalled := p.recall(ctx, text, site{project: req.Project, dir: req.Dir}, scopes, RecallLimit, 0)
 
 	// No budget gate here. The gate exists to stop unrequested advice
-	// interrupting somebody's turn; this answer was asked for and is being
+	// interrupting somebody's work; this answer was asked for and is being
 	// waited on.
 	mctx, cancel := context.WithTimeout(ctx, p.Cfg.MessageTimeout)
 	defer cancel()

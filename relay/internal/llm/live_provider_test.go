@@ -38,7 +38,7 @@ func TestLiveDecisionAcrossProviders(t *testing.T) {
 			}
 			t.Logf("inject=%q facts=%d", d.Inject, len(d.Facts))
 			if d.Inject == "" {
-				t.Error("a stored constraint contradicting the turn should have produced an injection")
+				t.Error("a stored constraint contradicting the event should have produced an injection")
 			}
 		})
 	}
@@ -73,7 +73,7 @@ func TestLiveProcedureIsSurfaced(t *testing.T) {
 	}
 }
 
-// TestLiveSilenceIsReachable is the more important half: an unremarkable turn
+// TestLiveSilenceIsReachable is the more important half: an unremarkable event
 // must produce no injection. A model that always speaks is useless here.
 func TestLiveSilenceIsReachable(t *testing.T) {
 	if os.Getenv("SHOULDER_LIVE") == "" {
@@ -95,7 +95,7 @@ func TestLiveSilenceIsReachable(t *testing.T) {
 			}
 			t.Logf("inject=%q facts=%d", d.Inject, len(d.Facts))
 			if d.Inject != "" {
-				t.Errorf("an unremarkable turn should stay silent, got %q", d.Inject)
+				t.Errorf("an unremarkable event should stay silent, got %q", d.Inject)
 			}
 		})
 	}
@@ -117,7 +117,7 @@ func affirmative(content string) (bool, string) {
 }
 
 // TestLiveProhibitionIsStoredAffirmatively is the rule in prompts.Decision
-// measured rather than asserted: a turn that states a prohibition has to come
+// measured rather than asserted: an event that states a prohibition has to come
 // back as a fact stating the same restriction as what holds, with its subject
 // intact.
 //
@@ -165,7 +165,7 @@ func TestLiveProhibitionIsStoredAffirmatively(t *testing.T) {
 				t.Fatalf("decide: %v", err)
 			}
 			if len(d.Facts) == 0 {
-				t.Fatalf("a turn stating a rule stored nothing (inject=%q)", d.Inject)
+				t.Fatalf("an event stating a rule stored nothing (inject=%q)", d.Inject)
 			}
 			for _, f := range d.Facts {
 				t.Logf("stored %q [%s]", f.Content, f.Category)

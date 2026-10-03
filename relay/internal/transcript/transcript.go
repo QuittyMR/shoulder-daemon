@@ -1,5 +1,5 @@
 // Package transcript reads the JSONL session files Claude Code writes beside a
-// session. The Stop hook carries only the last text block of a turn; the file
+// session. The Stop hook carries only the last text block of an answer; the file
 // holds every one, so it is the only place the text an assistant wrote between
 // tool calls can be read from.
 package transcript
@@ -14,8 +14,8 @@ import (
 	"strings"
 )
 
-// DefaultTail is how much of the end of a transcript is read for one turn. A
-// turn rarely runs past a few hundred kilobytes; a file is read whole only
+// DefaultTail is how much of the end of a transcript is read for one answer.
+// An answer rarely runs past a few hundred kilobytes; a file is read whole only
 // when it is smaller than this.
 const DefaultTail = 4 << 20
 
@@ -132,10 +132,10 @@ func IsSessionFile(path string) bool {
 	return strings.Contains(path, "/.claude/projects/") && strings.HasSuffix(path, ".jsonl")
 }
 
-// TurnAssistantText returns every text block the assistant wrote since the
+// AnswerText returns every text block the assistant wrote since the
 // last real prompt, in order, separated by blank lines. Only the last tail
-// bytes of the file are read; a turn longer than that yields what fits.
-func TurnAssistantText(path string, tail int) (string, error) {
+// bytes of the file are read; an answer longer than that yields what fits.
+func AnswerText(path string, tail int) (string, error) {
 	f, err := os.Open(path) //nolint:gosec // G304: callers gate on IsSessionFile; the hook names the file
 	if err != nil {
 		return "", err
