@@ -316,8 +316,12 @@ reads back, so a bare "do it" on a later turn still means something.
 That note is a stored record like any other, with one difference that decides
 everything about it: its kind is `session`, where a fact carries the zero value.
 A session record is local by definition, filed under the project this session is
-running in, and it's rewritten once per turn rather than appended to - each turn
-supersedes the last one, so there's one record per session and not one per turn.
+running in, and it's rewritten rather than appended to - each consult that names
+something new supersedes the record the last one wrote, so there's one record per
+session and not one per turn. A prompt and an answer end are each consulted, and
+the consults of one session run concurrently, so this rewrite is the one step
+they take turns at: without that, two of them would each replace the same record
+and leave two.
 A read that names no kind is asking for facts, and recall, a digest and
 `shoulderd fact list` all name none, so the note never appears in any of them and
 is never quoted back to a person as something the daemon learned. It's worth
@@ -394,7 +398,11 @@ Text that survives is:
 2. stripped of ANSI escapes, control characters, bidi overrides and zero-width
    characters;
 3. truncated to `BUDGET_MAX_CHARS` (default 800);
-4. put through the budget gate, which by default permits one note every three
+4. dropped if the same text is already waiting for the same session and the
+   same addressee, counted in `shoulder_advice_duplicate_total`: consults of
+   one session run concurrently over overlapping windows and can say the same
+   thing;
+5. put through the budget gate, which by default permits one note every three
    turns and 4000 characters per session, and holds it for at most two turns
    before it expires.
 

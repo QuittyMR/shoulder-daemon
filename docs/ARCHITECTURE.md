@@ -59,6 +59,18 @@ address goes to whichever hook can carry it first. A subagent's injections
 count against the session's character cap and leave the main thread's turn
 gap alone.
 
+Every prompt and every answer end starts a consult of its own, the main
+thread's and a subagent's alike, and the consults of one session run
+concurrently: none is dropped and none waits for another. A consult reads the
+window as it stands when it starts, so two that overlap can reach the same
+conclusion. Advice whose text is already pending for the same session and
+the same addressee is not queued again, counted in
+`shoulder_advice_duplicate_total`, and a fact stated twice is settled by the
+store, which refuses the near-duplicate and supersedes. The one write that
+is serialised is the rewrite of the session's keyword record, behind a lock
+that belongs to the session: each consult folds its keywords in and
+supersedes the record the consult before it left.
+
 ## Local and global
 
 Some of what it learns is about one repository - the main branch is called

@@ -174,6 +174,61 @@ func sequencedAdvisor(t *testing.T, bodies ...string) *httptest.Server {
 	return ts
 }
 
+// turn posts a prompt and the answer that ends its turn, and waits out the
+// consult each of them causes. The prompt's is over before the answer is
+// posted, so a sequenced advisor's first body is the prompt's.
+func (s *stack) turn(t *testing.T, promptBody, stopBody string) {
+	t.Helper()
+	s.post(t, "UserPromptSubmit", promptBody)
+	awaitConsult(t, s)
+	s.post(t, "Stop", stopBody)
+	awaitConsult(t, s)
+}
+
+// atAnswerEnd is a model with nothing to say at the prompt that answers with
+// body once the turn has ended.
+func atAnswerEnd(t *testing.T, body string) *httptest.Server {
+	t.Helper()
+	return sequencedAdvisor(t, decisionBody(t, ""), body)
+}
+
+// heldAdvisor holds every request until the test releases them all, and
+// answers each from what it was sent, so consults that overlap are answered
+// the same way in whatever order they arrive.
+type heldAdvisor struct {
+	arrived chan string
+	release chan struct{}
+}
+
+func newHeldAdvisor(t *testing.T, answer func(body string) string) (*heldAdvisor, *httptest.Server) {
+	t.Helper()
+	h := &heldAdvisor{arrived: make(chan string, 32), release: make(chan struct{})}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		h.arrived <- string(body)
+		select {
+		case <-h.release:
+		case <-r.Context().Done():
+			return
+		}
+		_, _ = w.Write([]byte(answer(string(body))))
+	}))
+	t.Cleanup(ts.Close)
+	return h, ts
+}
+
+// asked waits for the next request to reach the model and returns it.
+func (h *heldAdvisor) asked(t *testing.T) string {
+	t.Helper()
+	select {
+	case body := <-h.arrived:
+		return body
+	case <-time.After(3 * time.Second):
+		t.Fatal("the consult never reached the model")
+		return ""
+	}
+}
+
 func stop(sid, text string) string {
 	b, _ := json.Marshal(map[string]string{"session_id": sid, "hook_event_name": "Stop", "last_assistant_message": text})
 	return string(b)
@@ -186,15 +241,11 @@ func TestAdviceIsDeliveredOnTheNextHook(t *testing.T) {
 	s := newStack(t, ts.URL, 2*time.Second)
 
 	s.post(t, "UserPromptSubmit", prompt("s1", "do the thing"))
+	awaitConsult(t, s)
 	if got := s.post(t, "Stop", stop("s1", "done")); strings.TrimSpace(got) != "{}" {
 		t.Fatalf("Stop must never inject, got %q", got)
 	}
-
-	select {
-	case <-s.consults:
-	case <-time.After(3 * time.Second):
-		t.Fatal("advisor was never consulted after the turn ended")
-	}
+	awaitConsult(t, s)
 
 	got := s.post(t, "UserPromptSubmit", prompt("s1", "next turn"))
 	if !strings.Contains(got, "the marker advice") {
@@ -211,7 +262,12 @@ func TestAdviceIsDeliveredOnTheNextHook(t *testing.T) {
 func TestStalledAdvisorDoesNotSlowHooks(t *testing.T) {
 	fast := advisorServer(t, 0, decisionBody(t, ""))
 	sFast := newStack(t, fast.URL, 2*time.Second)
-	baseline := sFast.hookLatency(t, "UserPromptSubmit", prompt("base", "x"), 200)
+	// Measured on tool calls, which start no consult of their own: a prompt
+	// would add a model call per sample to the load being measured.
+	toolCall := func(sid string) string {
+		return `{"session_id":"` + sid + `","hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"/a"}}`
+	}
+	baseline := sFast.hookLatency(t, "PreToolUse", toolCall("base"), 200)
 
 	// The stall only has to dwarf the hook measurement, which is in milliseconds.
 	// A longer one proves nothing further and is paid on every run of the suite.
@@ -219,7 +275,7 @@ func TestStalledAdvisorDoesNotSlowHooks(t *testing.T) {
 	sSlow := newStack(t, stalled.URL, 2*time.Second)
 	sSlow.post(t, "Stop", stop("slow", "done")) // wedge one advisor call
 	time.Sleep(50 * time.Millisecond)
-	stalledLat := sSlow.hookLatency(t, "UserPromptSubmit", prompt("slow", "x"), 200)
+	stalledLat := sSlow.hookLatency(t, "PreToolUse", toolCall("slow"), 200)
 
 	if stalledLat > baseline+5*time.Millisecond {
 		t.Fatalf("a stalled advisor leaked into the hook path: baseline p99 %v, stalled p99 %v", baseline, stalledLat)
@@ -232,13 +288,7 @@ func TestStalledAdvisorDoesNotSlowHooks(t *testing.T) {
 func TestDeadAdvisorProducesNoInjectionAndNoError(t *testing.T) {
 	s := newStack(t, "http://127.0.0.1:1", 200*time.Millisecond)
 
-	s.post(t, "UserPromptSubmit", prompt("s1", "hi"))
-	s.post(t, "Stop", stop("s1", "done"))
-	select {
-	case <-s.consults:
-	case <-time.After(3 * time.Second):
-		t.Fatal("consult never completed against a dead advisor")
-	}
+	s.turn(t, prompt("s1", "hi"), stop("s1", "done"))
 
 	got := s.post(t, "UserPromptSubmit", prompt("s1", "again"))
 	if strings.TrimSpace(got) != "{}" {
@@ -254,7 +304,7 @@ func TestNoopAdvisorStaysSilent(t *testing.T) {
 	s := newStack(t, ts.URL, 2*time.Second)
 
 	s.post(t, "Stop", stop("s1", "done"))
-	<-s.consults
+	awaitConsult(t, s)
 
 	if got := s.post(t, "UserPromptSubmit", prompt("s1", "x")); strings.TrimSpace(got) != "{}" {
 		t.Fatalf("NOOP must mean silence, got %q", got)
@@ -270,7 +320,7 @@ func TestAdversarialAdvisorCannotEscapeTheEnvelope(t *testing.T) {
 	s := newStack(t, ts.URL, 2*time.Second)
 
 	s.post(t, "Stop", stop("s1", "done"))
-	<-s.consults
+	awaitConsult(t, s)
 
 	got := s.post(t, "UserPromptSubmit", prompt("s1", "x"))
 	if strings.Contains(got, "</shoulder-daemon>") && strings.Count(got, "</shoulder-daemon>") > 1 {
@@ -290,12 +340,9 @@ func TestBudgetLimitsInjectionRate(t *testing.T) {
 		if strings.Contains(s.post(t, "UserPromptSubmit", prompt("s1", "x")), "marker advice") {
 			injected++
 		}
+		awaitConsult(t, s)
 		s.post(t, "Stop", stop("s1", "done"))
-		select {
-		case <-s.consults:
-		case <-time.After(10 * time.Second):
-			t.Fatalf("consult stalled on turn %d with %d injected\n%s", turn, injected, s.srv.Metrics.Render())
-		}
+		awaitConsult(t, s)
 	}
 	if injected > 5 {
 		t.Fatalf("budget gate let %d injections through in 12 turns", injected)
@@ -334,13 +381,7 @@ func TestAdviceSurvivesSessionEnd(t *testing.T) {
 	ts := advisorServer(t, 0, decisionBody(t, "the marker advice"))
 	s := newStack(t, ts.URL, 2*time.Second)
 
-	s.post(t, "UserPromptSubmit", prompt("resumed", "first turn"))
-	s.post(t, "Stop", stop("resumed", "done"))
-	select {
-	case <-s.consults:
-	case <-time.After(3 * time.Second):
-		t.Fatal("advisor was never consulted")
-	}
+	s.turn(t, prompt("resumed", "first turn"), stop("resumed", "done"))
 
 	sessionEnd := `{"session_id":"resumed","hook_event_name":"SessionEnd","reason":"other"}`
 	if got := s.post(t, "SessionEnd", sessionEnd); strings.TrimSpace(got) != "{}" {
@@ -476,7 +517,7 @@ func TestSupersedeIsUsedWhenTheModelNamesAPriorFact(t *testing.T) {
 	s.pipe.Memory = mem
 
 	s.post(t, "Stop", stop("s1", "changed my mind"))
-	<-s.consults
+	awaitConsult(t, s)
 
 	_, superseded, _ := mem.snapshot()
 	if len(superseded) != 1 || superseded[0] != "mem_old" {
@@ -491,26 +532,10 @@ func TestRecallQueryUsesProseNotToolNoise(t *testing.T) {
 	s.pipe.Memory = mem
 
 	s.post(t, "UserPromptSubmit", prompt("s1", "deploy this to production"))
-	<-s.consults
+	awaitConsult(t, s)
 	s.post(t, "PreToolUse", `{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"/etc/hosts"}}`)
-
-	// The prompt and the end of the turn both trigger a pass, and one is
-	// refused while the other still holds the advisor claim - which is released
-	// after the consult is announced, so receiving above does not mean the next
-	// post will be taken. The turn-end pass is the one that can see the reply,
-	// so ask until it runs rather than asserting on whichever pass happened to
-	// win.
-	deadline := time.After(2 * time.Second)
-	for done := false; !done; {
-		s.post(t, "Stop", stop("s1", "Deploying now."))
-		select {
-		case <-s.consults:
-			done = true
-		case <-deadline:
-			t.Fatal("the turn-end pass never ran")
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
+	s.post(t, "Stop", stop("s1", "Deploying now."))
+	awaitConsult(t, s)
 
 	_, _, queries := mem.snapshot()
 	if len(queries) == 0 {
@@ -536,7 +561,7 @@ func TestMemoryFailureDoesNotBreakTheSession(t *testing.T) {
 	s.pipe.Memory = mem
 
 	s.post(t, "Stop", stop("s1", "done"))
-	<-s.consults
+	awaitConsult(t, s)
 
 	got := s.post(t, "UserPromptSubmit", prompt("s1", "next"))
 	if !strings.Contains(got, "still speak") {
@@ -556,7 +581,7 @@ func TestDryRunStoresNothing(t *testing.T) {
 	s.pipe.Cfg.Budget.DryRun = true
 
 	s.post(t, "Stop", stop("s1", "done"))
-	<-s.consults
+	awaitConsult(t, s)
 
 	stored, _, _ := mem.snapshot()
 	if len(stored) != 0 {
@@ -585,7 +610,7 @@ func (r *refusingMemory) Store(ctx context.Context, rec memory.Record) (string, 
 // deduplicates refuses exactly the writes worth keeping. Losing them silently
 // leaves the stale fact being recalled forever.
 func TestRefusedCorrectionBecomesASupersede(t *testing.T) {
-	ts := advisorServer(t, 0, decisionBody(t, "",
+	ts := atAnswerEnd(t, decisionBody(t, "",
 		map[string]any{"content": "the release branch is release/stable, not main", "category": "decision", "scope": "global"}))
 	s := newStack(t, ts.URL, 2*time.Second)
 	mem := &refusingMemory{refuseWith: "abc123def4567890"}
@@ -602,9 +627,7 @@ func TestRefusedCorrectionBecomesASupersede(t *testing.T) {
 	// the store named is one this scope may correct.
 	s.pipe.Memory = memory.Checked(mem)
 
-	s.post(t, "UserPromptSubmit", prompt("s1", "which branch do we release from"))
-	s.post(t, "Stop", stop("s1", "done"))
-	<-s.consults
+	s.turn(t, prompt("s1", "which branch do we release from"), stop("s1", "done"))
 
 	_, superseded, _ := mem.snapshot()
 	if len(superseded) != 1 || superseded[0] != "abc123def4567890" {
@@ -626,7 +649,7 @@ func TestRefusalWithoutACollisionIsReportedNotSwallowed(t *testing.T) {
 	s.pipe.Memory = &unattributedMemory{}
 
 	s.post(t, "Stop", stop("s1", "done"))
-	<-s.consults
+	awaitConsult(t, s)
 
 	if s.srv.Metrics.Get("shoulder_facts_refused_unattributed_total") == 0 {
 		t.Error("an unrecoverable refusal must be counted, not treated as success")
@@ -647,7 +670,7 @@ func TestExactDuplicateStaysBenign(t *testing.T) {
 	s.pipe.Memory = mem
 
 	s.post(t, "Stop", stop("s1", "done"))
-	<-s.consults
+	awaitConsult(t, s)
 
 	if s.srv.Metrics.Get("shoulder_facts_duplicate_total") == 0 {
 		t.Error("an exact duplicate should be counted as benign")
@@ -671,7 +694,7 @@ func TestInvalidCategoryIsDroppedNotPassedThrough(t *testing.T) {
 	s.pipe.Memory = mem
 
 	s.post(t, "Stop", stop("s1", "done"))
-	<-s.consults
+	awaitConsult(t, s)
 
 	stored, _, _ := mem.snapshot()
 	if len(stored) != 1 {
@@ -686,7 +709,7 @@ func TestInvalidCategoryIsDroppedNotPassedThrough(t *testing.T) {
 }
 
 func TestRestatementOfARecalledFactSupersedesIt(t *testing.T) {
-	ts := advisorServer(t, 0, decisionBody(t, "",
+	ts := atAnswerEnd(t, decisionBody(t, "",
 		map[string]any{"content": "the settings file sets output style Terse", "category": "decision", "scope": "global"}))
 	s := newStack(t, ts.URL, 2*time.Second)
 	mem := &fakeMemory{recalled: map[scope.Scope][]memory.Record{
@@ -694,9 +717,7 @@ func TestRestatementOfARecalledFactSupersedesIt(t *testing.T) {
 	}}
 	s.pipe.Memory = mem
 
-	s.post(t, "UserPromptSubmit", prompt("s1", "what output style is set"))
-	s.post(t, "Stop", stop("s1", "Terse."))
-	<-s.consults
+	s.turn(t, prompt("s1", "what output style is set"), stop("s1", "Terse."))
 
 	_, superseded, _ := mem.snapshot()
 	if len(superseded) != 1 || superseded[0] != "mem_old" {
@@ -714,7 +735,7 @@ func TestUnscopedFactIsDroppedAndCounted(t *testing.T) {
 	s.pipe.Memory = mem
 
 	s.post(t, "Stop", stop("s1", "done"))
-	<-s.consults
+	awaitConsult(t, s)
 
 	stored, _, _ := mem.snapshot()
 	if len(stored) != 0 {
@@ -727,15 +748,13 @@ func TestUnscopedFactIsDroppedAndCounted(t *testing.T) {
 
 func TestLocalFactIsStoredUnderTheSessionsProject(t *testing.T) {
 	dir := t.TempDir()
-	ts := advisorServer(t, 0, decisionBody(t, "",
+	ts := atAnswerEnd(t, decisionBody(t, "",
 		map[string]any{"content": "the release branch is release/stable", "category": "structure", "scope": "local"}))
 	s := newStack(t, ts.URL, 2*time.Second)
 	mem := &fakeMemory{}
 	s.pipe.Memory = mem
 
-	s.post(t, "UserPromptSubmit", promptIn("s1", "which branch do we release from", dir))
-	s.post(t, "Stop", stop("s1", "release/stable."))
-	<-s.consults
+	s.turn(t, promptIn("s1", "which branch do we release from", dir), stop("s1", "release/stable."))
 
 	stored, _, _ := mem.snapshot()
 	if len(stored) != 1 {
@@ -759,7 +778,7 @@ func TestLocalFactWithoutAProjectIsDroppedAndCounted(t *testing.T) {
 	s.pipe.Memory = mem
 
 	s.post(t, "Stop", stop("s1", "done"))
-	<-s.consults
+	awaitConsult(t, s)
 
 	stored, _, _ := mem.snapshot()
 	if len(stored) != 0 {
@@ -774,7 +793,7 @@ func TestLocalFactWithoutAProjectIsDroppedAndCounted(t *testing.T) {
 // session reads both scopes and the decision sees the union.
 func TestRecallReadsLocalAndGlobalTogether(t *testing.T) {
 	dir := t.TempDir()
-	ts := advisorServer(t, 0, decisionBody(t, "",
+	ts := atAnswerEnd(t, decisionBody(t, "",
 		map[string]any{"content": "the user prefers terse answers", "category": "preference", "scope": "global"}))
 	s := newStack(t, ts.URL, 2*time.Second)
 	mem := &fakeMemory{recalled: map[scope.Scope][]memory.Record{
@@ -789,9 +808,7 @@ func TestRecallReadsLocalAndGlobalTogether(t *testing.T) {
 	}}
 	s.pipe.Memory = mem
 
-	s.post(t, "UserPromptSubmit", promptIn("s1", "how should you answer me", dir))
-	s.post(t, "Stop", stop("s1", "Tersely."))
-	<-s.consults
+	s.turn(t, promptIn("s1", "how should you answer me", dir), stop("s1", "Tersely."))
 
 	_, superseded, queries := mem.snapshot()
 	var sawLocal, sawGlobal bool
@@ -1056,7 +1073,7 @@ func TestDigestRefusesALocalRequestWithNoProject(t *testing.T) {
 // word. Correcting the global record here would delete it everywhere else.
 func TestALocalFactNeverSupersedesAGlobalRecall(t *testing.T) {
 	dir := t.TempDir()
-	ts := advisorServer(t, 0, decisionBody(t, "",
+	ts := atAnswerEnd(t, decisionBody(t, "",
 		map[string]any{"content": "user prefers terse answers", "category": "preference", "scope": "local"}))
 	s := newStack(t, ts.URL, 2*time.Second)
 	mem := &fakeMemory{recalled: map[scope.Scope][]memory.Record{
@@ -1064,9 +1081,7 @@ func TestALocalFactNeverSupersedesAGlobalRecall(t *testing.T) {
 	}}
 	s.pipe.Memory = mem
 
-	s.post(t, "UserPromptSubmit", promptIn("s1", "how should you answer me", dir))
-	s.post(t, "Stop", stop("s1", "Tersely."))
-	<-s.consults
+	s.turn(t, promptIn("s1", "how should you answer me", dir), stop("s1", "Tersely."))
 
 	stored, superseded, _ := mem.snapshot()
 	if len(superseded) != 0 {
@@ -1084,7 +1099,7 @@ func TestALocalFactNeverSupersedesAGlobalRecall(t *testing.T) {
 // re-file the first one's record.
 func TestALocalFactNeverSupersedesAnotherProjectsRecall(t *testing.T) {
 	dir := t.TempDir()
-	ts := advisorServer(t, 0, decisionBody(t, "",
+	ts := atAnswerEnd(t, decisionBody(t, "",
 		map[string]any{"content": "the main branch is master", "category": "structure", "scope": "local"}))
 	s := newStack(t, ts.URL, 2*time.Second)
 	mem := &fakeMemory{recalled: map[scope.Scope][]memory.Record{
@@ -1095,9 +1110,7 @@ func TestALocalFactNeverSupersedesAnotherProjectsRecall(t *testing.T) {
 	}}
 	s.pipe.Memory = mem
 
-	s.post(t, "UserPromptSubmit", promptIn("s1", "which branch is the main one", dir))
-	s.post(t, "Stop", stop("s1", "master."))
-	<-s.consults
+	s.turn(t, promptIn("s1", "which branch is the main one", dir), stop("s1", "master."))
 
 	_, superseded, _ := mem.snapshot()
 	if len(superseded) != 0 {
@@ -1112,7 +1125,7 @@ func TestALocalFactNeverSupersedesAnotherProjectsRecall(t *testing.T) {
 // cannot place it refuses the correction.
 func TestARefusalNamingARecordOutsideThisScopeDropsTheWrite(t *testing.T) {
 	dir := t.TempDir()
-	ts := advisorServer(t, 0, decisionBody(t, "",
+	ts := atAnswerEnd(t, decisionBody(t, "",
 		map[string]any{"content": "the main branch is master", "category": "structure", "scope": "local"}))
 	s := newStack(t, ts.URL, 2*time.Second)
 	mem := &refusingMemory{refuseWith: "mem_in_project_a"}
@@ -1120,9 +1133,7 @@ func TestARefusalNamingARecordOutsideThisScopeDropsTheWrite(t *testing.T) {
 	// record the store named and refuses to move it here.
 	s.pipe.Memory = memory.Checked(mem)
 
-	s.post(t, "UserPromptSubmit", promptIn("s1", "which branch is the main one", dir))
-	s.post(t, "Stop", stop("s1", "master."))
-	<-s.consults
+	s.turn(t, promptIn("s1", "which branch is the main one", dir), stop("s1", "master."))
 
 	stored, superseded, _ := mem.snapshot()
 	if len(superseded) != 0 {
@@ -1280,16 +1291,14 @@ func TestCountedStepsWarnsOnSlowCall(t *testing.T) {
 // preference is the person's own and is marked so wherever it is filed.
 func TestASessionsDirectoryTravelsWithItsProject(t *testing.T) {
 	dir := t.TempDir()
-	ts := advisorServer(t, 0, decisionBody(t, "",
+	ts := atAnswerEnd(t, decisionBody(t, "",
 		map[string]any{"content": "the release branch is release/stable", "category": "structure", "scope": "local"},
 		map[string]any{"content": "prefers rebasing over merging", "category": "preference", "scope": "local"}))
 	s := newStack(t, ts.URL, 2*time.Second)
 	mem := &fakeMemory{}
 	s.pipe.Memory = mem
 
-	s.post(t, "UserPromptSubmit", promptIn("s1", "which branch do we release from", dir))
-	s.post(t, "Stop", stop("s1", "release/stable."))
-	<-s.consults
+	s.turn(t, promptIn("s1", "which branch do we release from", dir), stop("s1", "release/stable."))
 
 	stored, _, _ := mem.snapshot()
 	if len(stored) != 2 {
@@ -1316,16 +1325,14 @@ func TestASessionsDirectoryTravelsWithItsProject(t *testing.T) {
 // the model answers both: "Postgres listens on 5433 here" is local to this
 // project and still must not reach whoever clones it.
 func TestThePrivateFlagTheModelSetReachesTheStore(t *testing.T) {
-	ts := advisorServer(t, 0, decisionBody(t, "",
+	ts := atAnswerEnd(t, decisionBody(t, "",
 		map[string]any{"content": "postgres listens on 5433 on this machine", "category": "structure", "scope": "local", "private": true},
 		map[string]any{"content": "the release branch is release/stable", "category": "structure", "scope": "local"}))
 	s := newStack(t, ts.URL, 2*time.Second)
 	mem := &fakeMemory{}
 	s.pipe.Memory = mem
 
-	s.post(t, "UserPromptSubmit", promptIn("s1", "where is postgres", t.TempDir()))
-	s.post(t, "Stop", stop("s1", "5433."))
-	<-s.consults
+	s.turn(t, promptIn("s1", "where is postgres", t.TempDir()), stop("s1", "5433."))
 
 	stored, _, _ := mem.snapshot()
 	if len(stored) != 2 {
@@ -1348,7 +1355,7 @@ func TestACorrectionOfAPrivateFactStaysPrivate(t *testing.T) {
 		ID: "mem_91c2", Scope: scope.Global, Category: "structure", Private: true,
 		Content: "postgres listens on 5433 on this machine",
 	}
-	ts := advisorServer(t, 0, decisionBody(t, "",
+	ts := atAnswerEnd(t, decisionBody(t, "",
 		map[string]any{
 			"content":  "postgres listens on 5434 on this machine",
 			"category": "structure", "scope": "global", "supersedes": held.ID,
@@ -1362,9 +1369,7 @@ func TestACorrectionOfAPrivateFactStaysPrivate(t *testing.T) {
 	// read the record being replaced.
 	s.pipe.Memory = memory.Checked(mem)
 
-	s.post(t, "UserPromptSubmit", prompt("s1", "postgres moved to 5434"))
-	s.post(t, "Stop", stop("s1", "noted."))
-	<-s.consults
+	s.turn(t, prompt("s1", "postgres moved to 5434"), stop("s1", "noted."))
 
 	stored, superseded, _ := mem.snapshot()
 	if len(superseded) != 1 || superseded[0] != held.ID {
@@ -2178,6 +2183,39 @@ func TestASubagentsPromptIsConsultedAndAdvisedAtItsNextToolCall(t *testing.T) {
 	}
 }
 
+// Two agents spawned together each get their own note, with both consults
+// in flight at once: the start of each binds it to the call that spawned it,
+// and the note written for one is passed over by the other's first tool
+// call.
+func TestSiblingSubagentsEachGetTheirOwnNote(t *testing.T) {
+	// The second spawn's consult is the only one whose window holds the
+	// second prompt.
+	adv, ts := newHeldAdvisor(t, func(body string) string {
+		if strings.Contains(body, "review the migration") {
+			return decisionBody(t, "note for the reviewer")
+		}
+		return decisionBody(t, "note for the leak hunter")
+	})
+	s := newStack(t, ts.URL, 5*time.Second)
+
+	s.post(t, "PreToolUse", spawnAgentAs("s1", "toolu_1", "explore", "find the leak in the pool"))
+	adv.asked(t)
+	s.post(t, "PreToolUse", spawnAgentAs("s1", "toolu_2", "explore", "review the migration"))
+	adv.asked(t)
+	s.post(t, "SubagentStart", agentStart("s1", "agent-1", "explore"))
+	s.post(t, "SubagentStart", agentStart("s1", "agent-2", "explore"))
+	close(adv.release)
+	awaitConsult(t, s)
+	awaitConsult(t, s)
+
+	if got := s.post(t, "PreToolUse", agentToolCall("s1", "agent-2")); !strings.Contains(got, "note for the reviewer") || strings.Contains(got, "leak hunter") {
+		t.Fatalf("agent-2's first tool call got %s", got)
+	}
+	if got := s.post(t, "PreToolUse", agentToolCall("s1", "agent-1")); !strings.Contains(got, "note for the leak hunter") {
+		t.Fatalf("agent-1's first tool call got %s", got)
+	}
+}
+
 // A note that is ready by the time the agent starts is handed over at the
 // start, before its first step, and is not repeated at its first tool call.
 func TestANoteReadyAtTheSubagentsStartIsHandedOverThere(t *testing.T) {
@@ -2351,4 +2389,157 @@ func TestASubagentsStopDoesNotTidy(t *testing.T) {
 func tidies(mem *fakeMemory) int {
 	_, listed := mem.reads()
 	return len(listed)
+}
+
+// Every prompt and every answer end is consulted, and a consult still
+// waiting on the model holds nothing back: the answer's reaches the model
+// while the prompt's is still there.
+func TestAnAnswerEndIsConsultedWhileThePromptsConsultIsStillRunning(t *testing.T) {
+	adv, ts := newHeldAdvisor(t, func(string) string { return decisionBody(t, "") })
+	s := newStack(t, ts.URL, 5*time.Second)
+
+	s.post(t, "UserPromptSubmit", prompt("s1", "which port does postgres use"))
+	if first := adv.asked(t); strings.Contains(first, "It listens on 5433.") {
+		t.Fatalf("the prompt's consult read an answer not yet given: %s", first)
+	}
+	s.post(t, "Stop", stop("s1", "It listens on 5433."))
+	if second := adv.asked(t); !strings.Contains(second, "It listens on 5433.") {
+		t.Fatalf("the answer's consult did not read the answer: %s", second)
+	}
+	select {
+	case <-s.consults:
+		t.Fatal("a consult ended while the model was still holding both")
+	default:
+	}
+
+	close(adv.release)
+	awaitConsult(t, s)
+	awaitConsult(t, s)
+}
+
+// Consults of one session that end together each fold their keywords into
+// the one record: the first writes it and every later one replaces the
+// record the write before it left, so none is written beside another and
+// none is lost.
+func TestConcurrentConsultsRewriteOneKeywordRecord(t *testing.T) {
+	const consults = 8
+	var calls atomic.Int64
+	adv, ts := newHeldAdvisor(t, func(string) string {
+		return keywordBody(t, fmt.Sprintf("k%d", calls.Add(1)))
+	})
+	s := newStack(t, ts.URL, 5*time.Second)
+	mem := &fakeMemory{}
+	s.pipe.Memory = mem
+	dir := t.TempDir()
+
+	for i := range consults {
+		s.post(t, "UserPromptSubmit", promptIn("s1", fmt.Sprintf("step %d", i), dir))
+		adv.asked(t)
+	}
+	close(adv.release)
+	for range consults {
+		awaitConsult(t, s)
+	}
+
+	stored, superseded, _ := mem.snapshot()
+	written := notes(stored)
+	if len(written) != consults {
+		t.Fatalf("expected %d writes of one note, got %d", consults, len(written))
+	}
+	if len(superseded) != consults-1 {
+		t.Fatalf("expected every write after the first to replace a record, got %v", superseded)
+	}
+	for i, old := range superseded {
+		if want := fmt.Sprintf("mem_%d", i+1); old != want {
+			t.Fatalf("write %d replaced %q, want the record the write before it left, %q: %v", i+2, old, want, superseded)
+		}
+	}
+	last := strings.Split(written[consults-1].Content, ", ")
+	sort.Strings(last)
+	want := make([]string, 0, consults)
+	for i := 1; i <= consults; i++ {
+		want = append(want, fmt.Sprintf("k%d", i))
+	}
+	if strings.Join(last, ",") != strings.Join(want, ",") {
+		t.Fatalf("the record ended as %q, want every consult's keyword", written[consults-1].Content)
+	}
+	if n := s.srv.Metrics.Get("shoulder_session_keywords_stored_total"); n != 1 {
+		t.Fatalf("the note was stored %d times, want once", n)
+	}
+	if got := s.pipe.Registry.Keywords("s1"); len(got) != consults {
+		t.Fatalf("the session holds %v, want %d keywords", got, consults)
+	}
+}
+
+// Two consults that read overlapping windows reach the same conclusion. The
+// session is told once.
+func TestIdenticalAdviceIsQueuedOnce(t *testing.T) {
+	ts := advisorServer(t, 0, decisionBody(t, "the marker advice"))
+	s := newStack(t, ts.URL, 2*time.Second)
+
+	s.turn(t, prompt("s1", "do the thing"), stop("s1", "done"))
+
+	if n := s.pipe.Outbox.Depth(); n != 1 {
+		t.Fatalf("%d notes are pending, want one", n)
+	}
+	if n := s.srv.Metrics.Get("shoulder_advice_queued_total"); n != 1 {
+		t.Fatalf("queued %d, want 1", n)
+	}
+	if n := s.srv.Metrics.Get("shoulder_advice_duplicate_total"); n != 1 {
+		t.Fatalf("counted %d duplicates, want 1", n)
+	}
+	if got := s.post(t, "UserPromptSubmit", prompt("s1", "next turn")); strings.Count(got, "the marker advice") != 1 {
+		t.Fatalf("the advice should be delivered once, got %s", got)
+	}
+}
+
+// heldCalls holds every call until its context ends and counts the ones that
+// have returned.
+type heldCalls struct {
+	started  chan struct{}
+	finished atomic.Int64
+}
+
+func (h *heldCalls) Name() string { return "held" }
+
+func (h *heldCalls) Complete(ctx context.Context, _, _ string) (string, error) {
+	_, err := h.Chat(ctx, nil, nil)
+	return "", err
+}
+
+func (h *heldCalls) Chat(ctx context.Context, _ []llm.Message, _ []llm.Tool) (llm.Message, error) {
+	h.started <- struct{}{}
+	<-ctx.Done()
+	time.Sleep(50 * time.Millisecond)
+	h.finished.Add(1)
+	return llm.Message{}, ctx.Err()
+}
+
+// A session can have several consults running, and Run returns only once
+// every one of them has.
+func TestRunWaitsForEveryConsultOfASession(t *testing.T) {
+	held := &heldCalls{started: make(chan struct{}, 2)}
+	s, cancel, ran := stoppable(t, held, &fakeMemory{})
+
+	for _, post := range []func(){
+		func() { s.post(t, "UserPromptSubmit", prompt("s1", "which port does postgres use")) },
+		func() { s.post(t, "Stop", stop("s1", "It listens on 5433.")) },
+	} {
+		post()
+		select {
+		case <-held.started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("a consult never reached the model")
+		}
+	}
+
+	cancel()
+	select {
+	case <-ran:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after its context was cancelled")
+	}
+	if n := held.finished.Load(); n != 2 {
+		t.Fatalf("Run returned with %d of the session's 2 consults finished", n)
+	}
 }

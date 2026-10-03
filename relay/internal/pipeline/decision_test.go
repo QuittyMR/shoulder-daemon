@@ -97,15 +97,21 @@ func notes(recs []memory.Record) []memory.Record {
 	return out
 }
 
+// turnIn is one turn of a session working in dir: two consults, the prompt's
+// and then the answer's.
 func turnIn(t *testing.T, s *stack, sid, dir, userText, assistantText string) {
 	t.Helper()
-	s.post(t, "UserPromptSubmit", promptIn(sid, userText, dir))
-	s.post(t, "Stop", stop(sid, assistantText))
-	select {
-	case <-s.consults:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the advisor was never consulted")
+	s.turn(t, promptIn(sid, userText, dir), stop(sid, assistantText))
+}
+
+// perTurn repeats each body once, for a model that says the same at the
+// prompt and at the answer of a turn.
+func perTurn(bodies ...string) []string {
+	out := make([]string, 0, 2*len(bodies))
+	for _, b := range bodies {
+		out = append(out, b, b)
 	}
+	return out
 }
 
 func TestShortTurnKeepsEightKeywords(t *testing.T) {
@@ -131,6 +137,9 @@ func TestShortTurnKeepsEightKeywords(t *testing.T) {
 	}
 	if s.srv.Metrics.Get("shoulder_session_keywords_stored_total") != 1 {
 		t.Error("writing the note must be counted")
+	}
+	if s.srv.Metrics.Get("shoulder_session_keywords_unchanged_total") != 1 {
+		t.Error("the answer's consult named the same keywords and must leave the note alone")
 	}
 }
 
@@ -163,10 +172,10 @@ func TestLongTurnKeepsTwentyFiveKeywords(t *testing.T) {
 // about would answer with its own history three times over.
 func TestSessionNoteIsSupersededNotDuplicated(t *testing.T) {
 	dir := t.TempDir()
-	ts := sequencedAdvisor(t,
+	ts := sequencedAdvisor(t, perTurn(
 		keywordBody(t, "parser"),
 		keywordBody(t, "loader"),
-		keywordBody(t, "renderer"))
+		keywordBody(t, "renderer"))...)
 	s := newStack(t, ts.URL, 2*time.Second)
 	mem := &fakeMemory{}
 	s.pipe.Memory = mem
@@ -201,7 +210,7 @@ func TestSessionNoteIsSupersededNotDuplicated(t *testing.T) {
 // one.
 func TestSessionNoteStaysOutOfRecallAndDigest(t *testing.T) {
 	dir := t.TempDir()
-	ts := sequencedAdvisor(t, keywordBody(t, "parser"), proseBody(t, "A paragraph."))
+	ts := sequencedAdvisor(t, keywordBody(t, "parser"), keywordBody(t, "parser"), proseBody(t, "A paragraph."))
 	s := newStack(t, ts.URL, 2*time.Second)
 	mem := &fakeMemory{listed: map[scope.Scope][]memory.Record{
 		scope.Global: {{ID: "g1", Content: "prefers terse answers", Scope: scope.Global}},
@@ -249,6 +258,7 @@ func TestSessionHistoryToolAnswersWithEarlierKeywords(t *testing.T) {
 	dir := t.TempDir()
 	rec, ts := newRecordingAdvisor(t,
 		keywordBody(t, "parser", "tokenizer"),
+		keywordBody(t, "parser", "tokenizer"),
 		toolCallBody(t, "session_history", "{}"),
 		keywordBody(t, "parser"))
 	s := newStack(t, ts.URL, 2*time.Second)
@@ -257,12 +267,14 @@ func TestSessionHistoryToolAnswersWithEarlierKeywords(t *testing.T) {
 	turnIn(t, s, "s1", dir, "fix the parser", "Fixed.")
 	turnIn(t, s, "s1", dir, "do it", "Done.")
 
+	// Two calls for the first turn, the second turn's prompt asking for the
+	// tool and then answering, and one for its answer.
 	reqs := rec.requests()
-	if len(reqs) != 3 {
-		t.Fatalf("expected three model calls, got %d", len(reqs))
+	if len(reqs) != 5 {
+		t.Fatalf("expected five model calls, got %d", len(reqs))
 	}
-	if !strings.Contains(reqs[2], "parser, tokenizer") {
-		t.Fatalf("the earlier turn's keywords must reach the model: %s", reqs[2])
+	if !strings.Contains(reqs[3], "parser, tokenizer") {
+		t.Fatalf("the earlier turn's keywords must reach the model: %s", reqs[3])
 	}
 	if s.srv.Metrics.Get("shoulder_decision_tool_call_total") != 1 {
 		t.Error("the tool call must be counted")
@@ -295,9 +307,11 @@ func TestSearchMemoryToolSearchesAgainAndTheResultReachesTheModel(t *testing.T) 
 	if asked.Limit != 3 || asked.MinScore != 0.2 {
 		t.Errorf("the model's limit and floor must be honoured, got %+v", *asked)
 	}
+	// The prompt's consult calls the tool and answers; the answer's consult
+	// answers at once.
 	reqs := rec.requests()
-	if len(reqs) != 2 {
-		t.Fatalf("expected two model calls, got %d", len(reqs))
+	if len(reqs) != 3 {
+		t.Fatalf("expected three model calls, got %d", len(reqs))
 	}
 	if !strings.Contains(reqs[1], "releases go out from release/stable") {
 		t.Fatalf("the tool result must reach the model: %s", reqs[1])
@@ -313,11 +327,11 @@ func TestStepCapEndsTheTurnAndIsCounted(t *testing.T) {
 
 	turnIn(t, s, "s1", dir, "do it", "Done.")
 
-	if n := len(rec.requests()); n != decisionSteps {
-		t.Fatalf("the loop must stop at %d steps, got %d", decisionSteps, n)
+	if n := len(rec.requests()); n != 2*decisionSteps {
+		t.Fatalf("each of the turn's two consults must stop at %d steps, got %d calls", decisionSteps, n)
 	}
-	if s.srv.Metrics.Get("shoulder_decision_steps_exhausted_total") != 1 {
-		t.Error("hitting the cap must be counted")
+	if s.srv.Metrics.Get("shoulder_decision_steps_exhausted_total") != 2 {
+		t.Error("hitting the cap must be counted once for each consult")
 	}
 	if s.srv.Metrics.Get("shoulder_advisor_error_total") != 0 {
 		t.Error("running out of steps is not an error the session should see")
@@ -333,16 +347,14 @@ func TestKeywordsWithNoProjectAreDroppedAndCounted(t *testing.T) {
 	mem := &fakeMemory{}
 	s.pipe.Memory = mem
 
-	s.post(t, "UserPromptSubmit", prompt("s1", "fix the parser"))
-	s.post(t, "Stop", stop("s1", "Fixed."))
-	<-s.consults
+	s.turn(t, prompt("s1", "fix the parser"), stop("s1", "Fixed."))
 
 	stored, _, _ := mem.snapshot()
 	if n := len(notes(stored)); n != 0 {
 		t.Fatalf("a session with no project must not file a note, got %d", n)
 	}
-	if s.srv.Metrics.Get("shoulder_session_keywords_no_project_total") != 1 {
-		t.Error("the dropped note must be counted")
+	if s.srv.Metrics.Get("shoulder_session_keywords_no_project_total") != 2 {
+		t.Error("the dropped note must be counted for each of the turn's two consults")
 	}
 }
 
@@ -364,7 +376,7 @@ func noteIn(t *testing.T, id, sessionID, dir, content string) memory.Record {
 // session.
 func TestASessionThatLostItsStateRejoinsItsNoteInsteadOfWritingASecond(t *testing.T) {
 	dir := t.TempDir()
-	ts := sequencedAdvisor(t, keywordBody(t, "parser"), keywordBody(t, "loader"))
+	ts := sequencedAdvisor(t, perTurn(keywordBody(t, "parser"), keywordBody(t, "loader"))...)
 	s := newStack(t, ts.URL, 2*time.Second)
 	mem := &fakeMemory{}
 	s.pipe.Memory = mem
@@ -449,10 +461,10 @@ func (v *vanishingMemory) Supersede(ctx context.Context, old string, r memory.Re
 // never happened.
 func TestAHalfLandedSupersedeDoesNotWedgeTheNote(t *testing.T) {
 	dir := t.TempDir()
-	ts := sequencedAdvisor(t,
+	ts := sequencedAdvisor(t, perTurn(
 		keywordBody(t, "parser"),
 		keywordBody(t, "loader"),
-		keywordBody(t, "renderer"))
+		keywordBody(t, "renderer"))...)
 	s := newStack(t, ts.URL, 2*time.Second)
 	mem := &vanishingMemory{dead: "mem_1"}
 	s.pipe.Memory = mem
@@ -528,8 +540,8 @@ func TestDryRunSaysTheNoteWasNotWritten(t *testing.T) {
 	if n := len(notes(stored)); n != 0 {
 		t.Fatalf("a dry run must not write: %d", n)
 	}
-	if s.srv.Metrics.Get("shoulder_session_keywords_dry_run_total") != 1 {
-		t.Error("the skipped write must be counted, as the fact path counts its own")
+	if s.srv.Metrics.Get("shoulder_session_keywords_dry_run_total") != 2 {
+		t.Error("the skipped write must be counted for each of the turn's two consults, as the fact path counts its own")
 	}
 }
 

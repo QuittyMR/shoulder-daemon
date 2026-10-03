@@ -72,6 +72,16 @@ Notable changes to shoulder-daemon. The format follows
 
 ### Changed
 
+- Every prompt and every answer end is consulted, the main thread's and a
+  subagent's alike, and the consults of one session run concurrently. Before,
+  one consult ran per session at a time and a prompt or an answer end that
+  arrived meanwhile was dropped, so agents spawned together were not all
+  advised and a turn end behind a slow consult lost its facts.
+  `shoulder_advisor_skipped_inflight_total` is gone with the drop, and
+  `advisor_in_flight` is gone from the session summary. Only the rewrite of
+  the session's keyword record is serialised, one consult at a time. Advice
+  whose text is already pending for the same session and addressee is not
+  queued twice and is counted in `shoulder_advice_duplicate_total`.
 - The fact categories are now `finding` (something a session established by
   looking), `fact` (a durable truth about the project or the machine), `rule`
   (a constraint or decision that governs how work is done here) and

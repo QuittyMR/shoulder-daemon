@@ -60,24 +60,43 @@ func TestTurnCountsOnlyCompletedTurns(t *testing.T) {
 	}
 }
 
-// The advisor claim is what stops a slow pass being asked the same question
-// several times over while it is still thinking.
-func TestOnlyOneAdvisorCallIsClaimedAtATime(t *testing.T) {
+// The keyword lock is held by one writer at a time, and belongs to the state:
+// a session that is gone has none, and one reopened under the same id has its
+// own.
+func TestTheKeywordLockIsHeldByOneWriterAndGoesWithTheSession(t *testing.T) {
 	r := NewRegistry(10)
 	seen(r, "s1", KindUserPrompt, time.Now())
 
-	if !r.ClaimAdvisor("s1") {
-		t.Fatal("the first claim was refused")
+	if _, ok := r.LockKeywords("nobody"); ok {
+		t.Fatal("an unknown session was given a lock")
 	}
-	if r.ClaimAdvisor("s1") {
-		t.Fatal("a second claim was granted while the first was in flight")
+	unlock, ok := r.LockKeywords("s1")
+	if !ok {
+		t.Fatal("a live session was refused its lock")
 	}
-	r.ReleaseAdvisor("s1")
-	if !r.ClaimAdvisor("s1") {
-		t.Fatal("the claim was not released")
+	second := make(chan bool, 1)
+	go func() {
+		release, ok := r.LockKeywords("s1")
+		if ok {
+			release()
+		}
+		second <- ok
+	}()
+	select {
+	case <-second:
+		t.Fatal("a second writer was let in while the first held the lock")
+	default:
 	}
-	if r.ClaimAdvisor("nobody") {
-		t.Fatal("an unknown session was granted a claim")
+	r.CloseSession("s1")
+	seen(r, "s1", KindUserPrompt, time.Now())
+	unlock()
+	if !<-second {
+		t.Fatal("the writer that waited was refused the reopened session's lock")
+	}
+
+	r.CloseSession("s1")
+	if _, ok := r.LockKeywords("s1"); ok {
+		t.Fatal("a closed session still has a lock")
 	}
 }
 

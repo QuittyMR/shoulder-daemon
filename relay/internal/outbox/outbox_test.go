@@ -184,3 +184,41 @@ func TestANoteTypedByAgentGoesToTheFirstAgentOfThatType(t *testing.T) {
 		t.Fatalf("got %+v %v", got, ok)
 	}
 }
+
+// Advice already waiting for the same asker is not queued a second time, and
+// the same words for someone else, or once the first has been collected or
+// has gone stale, are.
+func TestAdviceAlreadyPendingForTheSameAskerIsRefused(t *testing.T) {
+	b := New()
+	said := func(id, agentID string, turn uint64) session.Advice {
+		a := note(id, session.LevelAction, turn)
+		a.Text, a.AgentID = "the pool is closed in main.go", agentID
+		return a
+	}
+
+	if !b.Push(said("first", "", 0)) {
+		t.Fatal("the first note was refused")
+	}
+	if b.Push(said("again", "", 0)) {
+		t.Fatal("the same advice for the same asker was queued twice")
+	}
+	if !b.Push(said("for-agent", "agent-a", 0)) {
+		t.Fatal("the same words for another asker were refused")
+	}
+	if b.Push(said("for-agent-again", "agent-a", 0)) {
+		t.Fatal("the same advice for the same agent was queued twice")
+	}
+	if b.Depth() != 2 {
+		t.Fatalf("depth %d, want 2", b.Depth())
+	}
+
+	if got, ok := b.Take("s1", 0, session.KindToolCall, "", ""); !ok || got.ID != "first" {
+		t.Fatalf("took %+v", got)
+	}
+	if !b.Push(said("after-delivery", "", 0)) {
+		t.Fatal("advice was refused though nothing like it is pending any more")
+	}
+	if !b.Push(said("after-expiry", "", 9)) {
+		t.Fatal("advice was refused because of a note too stale to be delivered")
+	}
+}

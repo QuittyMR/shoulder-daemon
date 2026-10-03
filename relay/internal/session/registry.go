@@ -82,9 +82,9 @@ type State struct {
 	// refusal is indistinguishable in the log from losing the turn.
 	KeywordsWritten string `json:"-"`
 
-	// AdvisorInFlight prevents a slow advisor from being asked the same
-	// question several times while it is still thinking.
-	AdvisorInFlight bool `json:"advisor_in_flight"`
+	// keywordWrite serialises the rewrite of the keyword record. It lives
+	// here so that it goes when the session does, with nothing to clean up.
+	keywordWrite *sync.Mutex
 }
 
 // Spawn is one subagent the session started: the tool call that spawned it,
@@ -121,7 +121,7 @@ func (r *Registry) Observe(e Event) (turn uint64, seq uint64) {
 
 	st, ok := r.sessions[e.SessionID]
 	if !ok {
-		st = &State{ID: e.SessionID, Harness: e.Harness, OpenedAt: e.TS}
+		st = &State{ID: e.SessionID, Harness: e.Harness, OpenedAt: e.TS, keywordWrite: &sync.Mutex{}}
 		r.sessions[e.SessionID] = st
 	}
 	st.Seq++
@@ -256,25 +256,33 @@ func (r *Registry) Snapshot(sessionID string) (events []Event, turn uint64, ok b
 	return out, st.Turn, true
 }
 
-// ClaimAdvisor returns true if the caller now owns the right to ask the advisor
-// about this session. It is released with ReleaseAdvisor.
-func (r *Registry) ClaimAdvisor(sessionID string) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	st, ok := r.sessions[sessionID]
-	if !ok || st.AdvisorInFlight {
-		return false
+// LockKeywords holds the session's keyword record for one rewrite: reading
+// the list, writing the record and noting where it now lives. Consults of
+// one session run concurrently, and two of them superseding the same record
+// would leave two. It reports false for a session that is gone.
+func (r *Registry) LockKeywords(sessionID string) (unlock func(), ok bool) {
+	for {
+		mu := r.keywordWrite(sessionID)
+		if mu == nil {
+			return nil, false
+		}
+		mu.Lock()
+		// A session closed and reopened while this waited has a new state,
+		// and the lock that guards it is the new one.
+		if r.keywordWrite(sessionID) == mu {
+			return mu.Unlock, true
+		}
+		mu.Unlock()
 	}
-	st.AdvisorInFlight = true
-	return true
 }
 
-func (r *Registry) ReleaseAdvisor(sessionID string) {
+func (r *Registry) keywordWrite(sessionID string) *sync.Mutex {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if st, ok := r.sessions[sessionID]; ok {
-		st.AdvisorInFlight = false
+		return st.keywordWrite
 	}
+	return nil
 }
 
 // BudgetState returns a copy for the gate to evaluate against, for the asker

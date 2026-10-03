@@ -17,16 +17,26 @@ type Box struct {
 
 func New() *Box { return &Box{pending: map[string][]session.Advice{}} }
 
-// Push queues advice. The queue is bounded; the oldest entry is discarded
-// rather than allowed to grow, because stale advice is worthless anyway.
-func (b *Box) Push(a session.Advice) {
+// Push queues advice and reports whether it did. Advice whose text is
+// already pending for the same session and addressee is refused: consults of
+// one session run concurrently over overlapping windows and reach the same
+// conclusion. The queue is bounded; the oldest entry is discarded rather than
+// allowed to grow, because stale advice is worthless anyway.
+func (b *Box) Push(a session.Advice) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	q := b.pending[a.SessionID]
+	for _, held := range q {
+		if held.Text == a.Text && held.AgentID == a.AgentID && held.SpawnID == a.SpawnID &&
+			held.AgentType == a.AgentType && !held.Expired(a.CreatedTurn) {
+			return false
+		}
+	}
 	if len(q) >= maxPerSession {
 		q = q[1:]
 	}
 	b.pending[a.SessionID] = append(q, a)
+	return true
 }
 
 // Take pops the first advice for the session that this event kind may carry,

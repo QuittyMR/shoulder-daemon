@@ -63,7 +63,7 @@ type Pipeline struct {
 	// OnIdle is called once when the daemon has decided to stop.
 	OnIdle func()
 
-	// done is closed per consult in tests that need to await completion.
+	// OnConsulted is called as each consult ends, with its session.
 	OnConsulted func(sessionID string)
 
 	// Everything handed off a goroutine is counted, because the store is
@@ -242,10 +242,6 @@ func (p *Pipeline) Run(ctx context.Context) {
 				continue
 			}
 			ask := askerOf(ev)
-			if !p.Registry.ClaimAdvisor(ev.SessionID) {
-				p.Metrics.Inc("shoulder_advisor_skipped_inflight_total")
-				continue
-			}
 			// Every few turns, not only at the end: a long session writes all
 			// day and would otherwise carry its own clutter into every recall
 			// until it closes. An agent's stop is not a turn of the session:
@@ -257,16 +253,11 @@ func (p *Pipeline) Run(ctx context.Context) {
 					tidy(p.sessionSite([]session.Event{ev}))
 				}
 			}
-			// The claim is released before anyone is told the consult is
-			// over. Whoever waits on that signal posts the next event, and
-			// an event that lands while the claim is still held is skipped
-			// as in flight; with nothing else coming, that is a stall.
+			// Every prompt and every answer end is consulted, and consults
+			// of one session run side by side: a slow one delays nobody.
 			sessionID := ev.SessionID
 			p.spawn(&p.consults, func(context.Context) {
-				func() {
-					defer p.Registry.ReleaseAdvisor(sessionID)
-					p.consult(ctx, sessionID, ask)
-				}()
+				p.consult(ctx, sessionID, ask)
 				if p.OnConsulted != nil {
 					p.OnConsulted(sessionID)
 				}
@@ -733,6 +724,11 @@ func (p *Pipeline) rememberKeywords(ctx context.Context, sessionID string, at si
 		p.Metrics.Inc("shoulder_session_keywords_no_project_total")
 		return
 	}
+	unlock, ok := p.Registry.LockKeywords(sessionID)
+	if !ok {
+		return
+	}
+	defer unlock()
 	prevID, note, unchanged := p.Registry.AddKeywords(sessionID, words)
 	if note == "" {
 		return
@@ -1186,7 +1182,12 @@ func (p *Pipeline) queueInjection(sessionID string, turn uint64, ask asker, raw,
 	if a.AgentID == "" && a.SpawnID != "" {
 		a.AgentID = p.Registry.AgentOf(sessionID, a.SpawnID)
 	}
-	p.Outbox.Push(a)
+	if !p.Outbox.Push(a) {
+		p.Metrics.Inc("shoulder_advice_duplicate_total")
+		p.Log.Info("advice already pending; not queued twice", "session", sessionID, "turn", turn,
+			"agent", a.AgentID, "text", text)
+		return
+	}
 	p.Metrics.Inc("shoulder_advice_queued_total")
 	// Logged in full, and at Info. This is the one thing the daemon exists to
 	// produce, and it lands somewhere only the model reads; without this line
