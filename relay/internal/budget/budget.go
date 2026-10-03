@@ -36,9 +36,10 @@ func (c Candidate) Expired(turn uint64) bool {
 	return turn > c.CreatedTurn+uint64(c.TTLTurns)
 }
 
-// State is the per-session counter set. The caller owns it; the gate is pure.
-// A zero LastInjectTurn means nothing has been injected: advice is only ever
-// created at a turn end, which has already advanced the turn past zero.
+// State is the counter set for one asker. The caller owns it; the gate is
+// pure. A zero LastInjectTurn means nothing has been injected for this asker
+// yet: the main thread's first injection lands at turn one or later, and a
+// subagent's state never carries a turn at all.
 type State struct {
 	LastInjectTurn uint64
 	CharsUsed      int

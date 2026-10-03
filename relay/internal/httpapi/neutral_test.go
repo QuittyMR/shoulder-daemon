@@ -65,6 +65,38 @@ func TestANeutralEventIsRecordedWithDefaultsFilledIn(t *testing.T) {
 	}
 }
 
+// An adapter that names the agent has said where the event came from, whether
+// or not it also sent origin: without it the agent's turn end would count as
+// the user's and its prompt would read as the user's words.
+func TestANeutralEventWithAnAgentIdComesFromTheAgent(t *testing.T) {
+	s, box := newTestServer(t)
+	h := s.Handler()
+
+	postNeutral(h, `{"session_id":"n3","event":"user_prompt","prompt":"find the leak","agent_id":"agent-1","agent_type":"explore"}`)
+	postNeutral(h, `{"session_id":"n3","event":"turn_end","assistant":"found it","agent_id":"agent-1","agent_type":"explore"}`)
+	events, turn, ok := s.Registry.Snapshot("n3")
+	if !ok || len(events) != 2 {
+		t.Fatalf("got %+v", events)
+	}
+	for _, ev := range events {
+		if ev.Origin != session.OriginAgent {
+			t.Fatalf("an event naming an agent was recorded as the user's: %+v", ev)
+		}
+	}
+	if turn != 0 {
+		t.Fatalf("an agent's turn end advanced the user's turn to %d", turn)
+	}
+
+	box.Push(session.Advice{ID: "a1", SessionID: "n3", Kind: session.AdviceNote, Level: session.LevelAction, Text: "for agent-1", AgentID: "agent-1", TTLTurns: 5})
+	if rec := postNeutral(h, `{"session_id":"n3","event":"tool_call","tool_name":"read"}`); strings.Contains(rec.Body.String(), "for agent-1") {
+		t.Fatal("the main thread was handed a subagent's note")
+	}
+	rec := postNeutral(h, `{"session_id":"n3","event":"tool_call","tool_name":"read","agent_id":"agent-1","agent_type":"explore"}`)
+	if !strings.Contains(rec.Body.String(), "for agent-1") {
+		t.Fatalf("the agent did not get its note: %s", rec.Body.String())
+	}
+}
+
 func TestANeutralEventThatIsNotOneIsCountedAndAnsweredAnyway(t *testing.T) {
 	s, _ := newTestServer(t)
 	h := s.Handler()

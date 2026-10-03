@@ -92,6 +92,40 @@
         ]
       }
     ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:8787/v1/hooks/claude-code/SubagentStart",
+            "timeout": 2,
+            "headers": {
+              "X-Shoulder-Token": "${SHOULDER_TOKEN}"
+            },
+            "allowedEnvVars": [
+              "SHOULDER_TOKEN"
+            ]
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:8787/v1/hooks/claude-code/SubagentStop",
+            "timeout": 2,
+            "headers": {
+              "X-Shoulder-Token": "${SHOULDER_TOKEN}"
+            },
+            "allowedEnvVars": [
+              "SHOULDER_TOKEN"
+            ]
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [

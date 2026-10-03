@@ -841,7 +841,7 @@ func drain(box *outbox.Box, sid string, turn uint64) []session.Advice {
 	var out []session.Advice
 	for _, kind := range []session.Kind{session.KindUserPrompt, session.KindToolCall} {
 		for {
-			a, ok := box.Take(sid, turn, kind)
+			a, ok := box.Take(sid, turn, kind, "", "")
 			if !ok {
 				break
 			}

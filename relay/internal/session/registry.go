@@ -8,6 +8,11 @@ import (
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/budget"
 )
 
+// maxSpawns bounds the subagent spawns a session remembers while waiting for
+// the harness to name them. A session fans out a handful at a time; one that
+// holds more has agents that never reported starting.
+const maxSpawns = 16
+
 // maxSessionKeywords bounds the running note a session accumulates. The
 // per-turn cap bounds one turn; nothing bounded the sum, and a long session is
 // hundreds of turns. The note is written to the store and read back into every
@@ -53,6 +58,12 @@ type State struct {
 	Events []Event      `json:"-"`
 	Budget budget.State `json:"budget"`
 
+	// Spawns are the subagents this session has started, in order, each
+	// bound to its harness id once the harness has reported it. A spawn is
+	// known by the tool call that made it, because that is all a subagent's
+	// prompt carries; the id arrives later, on the agent's first own event.
+	Spawns []Spawn `json:"-"`
+
 	// Keywords is what every turn of this session has been about so far, and
 	// KeywordRecord is the memory record holding it. They are kept together
 	// because the note is rewritten in place: each turn supersedes the record
@@ -74,6 +85,14 @@ type State struct {
 	// AdvisorInFlight prevents a slow advisor from being asked the same
 	// question several times while it is still thinking.
 	AdvisorInFlight bool `json:"advisor_in_flight"`
+}
+
+// Spawn is one subagent the session started: the tool call that spawned it,
+// its type, and the id the harness gave it, empty until it has.
+type Spawn struct {
+	SpawnID   string
+	AgentType string
+	AgentID   string
 }
 
 // Registry owns all session state behind one mutex. Every mutation is O(1) and
@@ -126,11 +145,91 @@ func (r *Registry) Observe(e Event) (turn uint64, seq uint64) {
 		}
 		st.Events = st.Events[:kept]
 	}
-	if e.Kind == KindTurnEnd {
+	// A turn is the user's: everything a subagent does happens inside the
+	// main thread's current turn, and advice is aged and budgeted in turns.
+	if e.Kind == KindTurnEnd && e.Origin == OriginUser {
 		st.Turn++
 	}
+	st.observeSpawn(e)
 	r.lastSeen = e.TS
 	return st.Turn, st.Seq
+}
+
+// observeSpawn keeps the spawn list current: a subagent's prompt opens a
+// spawn under its tool call, the agent's start binds the oldest unbound spawn
+// of its type - or of any type, when the harness names types differently in
+// the two places - to the id, and its stop closes it.
+func (st *State) observeSpawn(e Event) {
+	if e.Origin != OriginAgent {
+		return
+	}
+	switch e.Kind {
+	case KindUserPrompt:
+		if e.AgentID != "" || e.ToolUseID == "" {
+			return
+		}
+		if len(st.Spawns) >= maxSpawns {
+			st.Spawns = st.Spawns[1:]
+		}
+		st.Spawns = append(st.Spawns, Spawn{SpawnID: e.ToolUseID, AgentType: e.AgentType})
+	case KindAgentStart:
+		if e.AgentID == "" {
+			return
+		}
+		unbound := -1
+		for i, sp := range st.Spawns {
+			if sp.AgentID != "" {
+				continue
+			}
+			if strings.EqualFold(sp.AgentType, e.AgentType) {
+				st.Spawns[i].AgentID = e.AgentID
+				return
+			}
+			if unbound < 0 {
+				unbound = i
+			}
+		}
+		if unbound >= 0 {
+			st.Spawns[unbound].AgentID = e.AgentID
+		}
+	case KindTurnEnd:
+		for i, sp := range st.Spawns {
+			if sp.AgentID == e.AgentID {
+				st.Spawns = append(st.Spawns[:i], st.Spawns[i+1:]...)
+				return
+			}
+		}
+	}
+}
+
+// AgentOf returns the id the harness gave the subagent spawned by spawnID,
+// empty while it has not reported starting.
+func (r *Registry) AgentOf(sessionID, spawnID string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if st, ok := r.sessions[sessionID]; ok {
+		for _, sp := range st.Spawns {
+			if sp.SpawnID == spawnID {
+				return sp.AgentID
+			}
+		}
+	}
+	return ""
+}
+
+// SpawnOf returns the tool call that spawned the subagent agentID, empty when
+// the session never saw its prompt.
+func (r *Registry) SpawnOf(sessionID, agentID string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if st, ok := r.sessions[sessionID]; ok {
+		for _, sp := range st.Spawns {
+			if sp.AgentID == agentID {
+				return sp.SpawnID
+			}
+		}
+	}
+	return ""
 }
 
 // Turn reports the current turn number without mutating anything.
@@ -178,22 +277,39 @@ func (r *Registry) ReleaseAdvisor(sessionID string) {
 	}
 }
 
-// BudgetState returns a copy for the gate to evaluate against.
-func (r *Registry) BudgetState(sessionID string) budget.State {
+// BudgetState returns a copy for the gate to evaluate against, for the asker
+// named by agentID. The session's character cap is shared by everyone in it;
+// the turn gap is the main thread's alone. A subagent lives inside one turn,
+// so a gap keyed on it would either never pass for the agent or, counted
+// against the main thread, silence the person's next turns because an agent
+// was told something.
+func (r *Registry) BudgetState(sessionID, agentID string) budget.State {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if st, ok := r.sessions[sessionID]; ok {
-		return st.Budget
+	st, ok := r.sessions[sessionID]
+	if !ok {
+		return budget.State{}
 	}
-	return budget.State{}
+	if agentID != "" {
+		return budget.State{CharsUsed: st.Budget.CharsUsed}
+	}
+	return st.Budget
 }
 
-func (r *Registry) RecordInjection(sessionID string, turn uint64, a Advice) {
+// RecordInjection charges an injection to the session. One handed to a
+// subagent counts against the characters and leaves the turn gap alone.
+func (r *Registry) RecordInjection(sessionID string, turn uint64, agentID string, a Advice) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if st, ok := r.sessions[sessionID]; ok {
-		st.Budget.Record(turn, a.Candidate())
+	st, ok := r.sessions[sessionID]
+	if !ok {
+		return
 	}
+	if agentID != "" {
+		st.Budget.CharsUsed += a.Candidate().Len
+		return
+	}
+	st.Budget.Record(turn, a.Candidate())
 }
 
 // Evicted is what one dropped session leaves behind elsewhere. The id clears

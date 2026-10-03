@@ -154,24 +154,30 @@ func (s *Server) handleClaudeCode(w http.ResponseWriter, r *http.Request) {
 		s.Log.Debug("hook received", "event", event, "bytes", len(body))
 	}
 
-	ev, hook, ok := parseClaudeCode(event, body, s.Now())
+	events, hook, ok := parseClaudeCode(event, body, s.Now())
 	if !ok {
 		s.Metrics.Inc("shoulder_unmapped_event_total")
 		writeRaw(w, silentJSON)
 		return
 	}
-	if ev.Kind == session.KindTurnEnd {
+	// The hook's own event is first; whatever follows it is carried by the
+	// same request but is not what the request is answering. The transcript
+	// on a subagent's stop is the parent's, so a subagent's answer is only
+	// ever the hook's own message.
+	ev := events[0]
+	if ev.Kind == session.KindTurnEnd && ev.Origin == session.OriginUser {
 		ev.Assistant = s.assistantText(ev.SessionID, hook.TranscriptPath, ev.Assistant)
 	}
 
 	s.ingest(ev)
+	for _, extra := range events[1:] {
+		s.ingest(extra)
+	}
 
-	{
-		if a, ok := s.collect(ev.SessionID, ev.Kind); ok {
-			s.saidAdvice(ev.SessionID, event, a)
-			writeJSON(w, inject(event, a))
-			return
-		}
+	if a, ok := s.collect(ev.SessionID, ev.Kind, ev.AgentID, ev.AgentType); ok {
+		s.saidAdvice(ev.SessionID, event, a)
+		writeJSON(w, inject(event, a))
+		return
 	}
 	writeRaw(w, silentJSON)
 }
@@ -250,16 +256,19 @@ func (s *Server) handleNeutral(w http.ResponseWriter, r *http.Request) {
 	if ev.Harness == "" {
 		ev.Harness = "unknown"
 	}
+	// An adapter that names the agent has said where the event came from,
+	// whether or not it also said so.
+	if ev.AgentID != "" {
+		ev.Origin = session.OriginAgent
+	}
 	defer func() { s.Metrics.ObserveHook(string(ev.Kind), s.Now().Sub(start)) }()
 
 	s.ingest(ev)
 
-	{
-		if a, ok := s.collect(ev.SessionID, ev.Kind); ok {
-			s.saidAdvice(ev.SessionID, string(ev.Kind), a)
-			writeJSON(w, map[string]any{"advice": a})
-			return
-		}
+	if a, ok := s.collect(ev.SessionID, ev.Kind, ev.AgentID, ev.AgentType); ok {
+		s.saidAdvice(ev.SessionID, string(ev.Kind), a)
+		writeJSON(w, map[string]any{"advice": a})
+		return
 	}
 	writeRaw(w, noAdviceJSON)
 }
@@ -283,19 +292,20 @@ func (s *Server) ingest(ev session.Event) {
 }
 
 // collect pops one piece of advice if the budget gate allows it at this turn.
-func (s *Server) collect(sessionID string, kind session.Kind) (session.Advice, bool) {
+// agentID and agentType name the subagent asking, empty for the main thread.
+func (s *Server) collect(sessionID string, kind session.Kind, agentID, agentType string) (session.Advice, bool) {
 	turn := s.Registry.Turn(sessionID)
-	a, ok := s.Outbox.Take(sessionID, turn, kind)
+	a, ok := s.Outbox.Take(sessionID, turn, kind, agentID, agentType)
 	if !ok {
 		return session.Advice{}, false
 	}
-	d := s.Budget.Allow(s.Registry.BudgetState(sessionID), turn, a.Candidate())
+	d := s.Budget.Allow(s.Registry.BudgetState(sessionID, agentID), turn, a.Candidate())
 	if !d.Allow {
 		s.Metrics.Inc("shoulder_advice_suppressed_total")
 		s.Metrics.Inc("shoulder_advice_suppressed_" + suppressLabel(d.Reason) + "_total")
 		return session.Advice{}, false
 	}
-	s.Registry.RecordInjection(sessionID, turn, a)
+	s.Registry.RecordInjection(sessionID, turn, agentID, a)
 	s.Metrics.Inc("shoulder_advice_emitted_total")
 	return a, true
 }

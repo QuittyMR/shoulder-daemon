@@ -4,6 +4,7 @@ package session
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/budget"
@@ -18,8 +19,11 @@ const (
 	KindToolFailure      Kind = "tool_failure"
 	KindAssistantMessage Kind = "assistant_message"
 	KindTurnEnd          Kind = "turn_end"
-	KindCompact          Kind = "compact"
-	KindSessionEnd       Kind = "session_end"
+	// KindAgentStart is a subagent beginning its run, the first event that
+	// carries the id the harness gave it.
+	KindAgentStart Kind = "agent_start"
+	KindCompact    Kind = "compact"
+	KindSessionEnd Kind = "session_end"
 )
 
 // AdviceLevel says where in a turn a piece of advice is still worth delivering.
@@ -47,15 +51,26 @@ const (
 // only actionable before the assistant has committed to anything, and a warning
 // about an operation is only actionable at the operation. Everything else - a
 // tool result, an assistant message, a turn end - is after the fact, and
-// spending a note there is the same as discarding it.
+// spending a note there is the same as discarding it. A subagent's start is
+// before anything at all, so either level is still actionable there.
 func (k Kind) Delivers(level AdviceLevel) bool {
 	switch level {
 	case LevelAction:
-		return k == KindToolCall
+		return k == KindToolCall || k == KindAgentStart
 	default:
-		return k == KindUserPrompt
+		return k == KindUserPrompt || k == KindAgentStart
 	}
 }
+
+// Origin says who a prompt or an answer came from. A subagent runs inside its
+// parent's session id, so without it a subagent's prompt reads as the user's
+// and its answer as the main thread's.
+type Origin string
+
+const (
+	OriginUser  Origin = ""
+	OriginAgent Origin = "agent"
+)
 
 // Event is one observation from a coding session. Adapters translate their
 // harness's native payload into this shape; nothing downstream knows which
@@ -77,6 +92,13 @@ type Event struct {
 	ToolResult     string          `json:"tool_result,omitempty"`
 	Assistant      string          `json:"assistant,omitempty"`
 	StopReason     string          `json:"stop_reason,omitempty"`
+
+	// Origin is OriginAgent on every event fired from inside a subagent.
+	Origin Origin `json:"origin,omitempty"`
+	// AgentID is the harness's id for the subagent the event came from.
+	AgentID string `json:"agent_id,omitempty"`
+	// AgentType is the subagent's kind as the harness names it.
+	AgentType string `json:"agent_type,omitempty"`
 
 	// Thinking carries verbatim reasoning text. It is always empty on the
 	// Claude Code hook path: every thinking block Claude Code persists has an
@@ -105,6 +127,27 @@ type Advice struct {
 	CreatedTurn uint64      `json:"created_turn"`
 	TTLTurns    int         `json:"ttl_turns"`
 	CreatedAt   time.Time   `json:"created_at"`
+
+	// AgentID restricts the advice to one subagent. With it empty, SpawnID
+	// or AgentType restrict it to subagents: SpawnID names the tool call
+	// that spawned the one it is for, which is resolved to an id once the
+	// harness assigns one, and AgentType is the kind of subagent it was
+	// written for. All three empty means any asker.
+	AgentID   string `json:"agent_id,omitempty"`
+	SpawnID   string `json:"spawn_id,omitempty"`
+	AgentType string `json:"agent_type,omitempty"`
+}
+
+// For reports whether the asker named by agentID and agentType may collect
+// this advice. The main thread asks with both empty.
+func (a Advice) For(agentID, agentType string) bool {
+	switch {
+	case a.AgentID != "":
+		return agentID == a.AgentID
+	case a.SpawnID != "" || a.AgentType != "":
+		return agentID != "" && (a.AgentType == "" || strings.EqualFold(a.AgentType, agentType))
+	}
+	return true
 }
 
 // Expired reports whether the advice has sat unclaimed for longer than its TTL.

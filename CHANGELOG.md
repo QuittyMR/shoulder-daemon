@@ -8,6 +8,23 @@ Notable changes to shoulder-daemon. The format follows
 
 ### Added
 
+- Subagent prompts and results are observed as part of the session: the
+  `Agent` tool call's prompt and the `SubagentStop` answer are consulted like
+  the user's own prompt and turn end, under the parent's session id. The
+  plugin now registers `SubagentStart`, the first hook to carry the id Claude
+  Code gave the agent; the relay records it as an `agent_start` and pairs it
+  with the `Agent` call that spawned it, oldest of the type first. Advice from
+  a subagent's prompt is queued at the action level, addressed to that call
+  and from there to the id, and lands at the subagent's start when it is
+  ready by then or at its next tool call; neither the main thread nor a
+  sibling takes it. A subagent's injections are charged to the session's
+  character cap and leave the main thread's turn gap alone. A subagent's turn
+  may add findings and facts but never rules or preferences: those are
+  dropped before the write, counted in
+  `shoulder_facts_agent_rule_dropped_total`, and logged with their content. A
+  subagent's stop does not advance the session's turn and does not start the
+  periodic tidy. A neutral event that names an `agent_id` is taken as the
+  agent's whether or not it also sends `origin`.
 - An optional triage step in front of the decision model, backed by TypeSafe's
   Jev (System One). With `SHOULDER_TRIAGE=jev` and `TYPESAFE_API_KEY`, every
   turn is first classified as needing nothing, a new fact, a change to a stored

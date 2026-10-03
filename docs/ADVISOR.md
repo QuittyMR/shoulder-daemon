@@ -346,7 +346,8 @@ month. `category` is one of four, and who may add each is part of the definition
 
 A `rule` or a `preference` is stored only when the user said it in a `<user>`
 line. The prompt refuses one from an `<agent>` or `<agent-result>` line, from a
-tool result, or from what the assistant concluded: an agent that works out how
+tool result, or from what the assistant concluded, and the pipeline enforces the
+same for a consult that originates in a subagent: an agent that works out how
 things are done here has made a finding, and is filed as one or as nothing.
 `shoulderd fact add` is the one way past that: what reaches it is taken as the
 person's own typing and stored under the category it names, so an agent that

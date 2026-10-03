@@ -223,6 +223,15 @@ func (p *Pipeline) Run(ctx context.Context) {
 				}
 				continue
 			}
+			// A subagent's start is the first word of the id the harness
+			// gave it. Advice written for it before that was addressed to
+			// the call that spawned it, and is re-addressed to the agent.
+			if ev.Kind == session.KindAgentStart {
+				if spawnID := p.Registry.SpawnOf(ev.SessionID, ev.AgentID); spawnID != "" {
+					p.Outbox.Address(ev.SessionID, spawnID, ev.AgentID)
+				}
+				continue
+			}
 			// Both ends of a turn, for different reasons. A prompt is where
 			// advice can still change what happens: the assistant is thinking,
 			// and the next PreToolUse of this same turn carries whatever the
@@ -232,14 +241,18 @@ func (p *Pipeline) Run(ctx context.Context) {
 			if ev.Kind != session.KindTurnEnd && ev.Kind != session.KindUserPrompt {
 				continue
 			}
+			ask := askerOf(ev)
 			if !p.Registry.ClaimAdvisor(ev.SessionID) {
 				p.Metrics.Inc("shoulder_advisor_skipped_inflight_total")
 				continue
 			}
 			// Every few turns, not only at the end: a long session writes all
 			// day and would otherwise carry its own clutter into every recall
-			// until it closes.
-			if ev.Kind == session.KindTurnEnd {
+			// until it closes. An agent's stop is not a turn of the session:
+			// Turn stands where the user's last turn end left it, and a tidy
+			// keyed on it would run once more for every agent that stops
+			// while it sits on a multiple.
+			if ev.Kind == session.KindTurnEnd && !ask.agent() {
 				if turn := p.Registry.Turn(ev.SessionID); turn > 0 && turn%consolidateEvery == 0 {
 					tidy(p.sessionSite([]session.Event{ev}))
 				}
@@ -252,7 +265,7 @@ func (p *Pipeline) Run(ctx context.Context) {
 			p.spawn(&p.consults, func(context.Context) {
 				func() {
 					defer p.Registry.ReleaseAdvisor(sessionID)
-					p.Consult(ctx, sessionID)
+					p.consult(ctx, sessionID, ask)
 				}()
 				if p.OnConsulted != nil {
 					p.OnConsulted(sessionID)
@@ -389,11 +402,48 @@ const _ = uint64(ShutdownBudget - decidedGrace)
 // repository is still true in this one, and would otherwise never surface.
 var sessionScopes = []scope.Scope{scope.Local, scope.Global}
 
-// Consult runs one full pass for a session: recall what is known, decide, queue
-// any injection, and persist any new facts. Every outcome is counted separately
-// so "nothing to say" is never confused with "the pipe is broken". Nothing is
-// written to disk.
+// asker is who a consult answers: the main thread, or one subagent running
+// inside it. It decides where advice is delivered and what the turn may store.
+type asker struct {
+	origin session.Origin
+	// agentID names the subagent the advice is for. Empty for the main thread,
+	// for a subagent the harness has not named yet, and for one that has
+	// already stopped.
+	agentID string
+	// spawnID and agentType stand in for the id while the harness has not
+	// given one: the tool call that spawned the agent, and its kind.
+	spawnID   string
+	agentType string
+}
+
+func (a asker) agent() bool { return a.origin == session.OriginAgent }
+
+// askerOf reads the asker off the event that triggered a consult. A subagent
+// is addressed only while it can still be reached: from its prompt, by id
+// where the harness sent one with it and otherwise by the call that spawned
+// it, which the registry resolves to the id once the agent has started. Its
+// stop is the last thing it sends, so advice addressed from a stop would sit
+// in the outbox until it expired; from a stop, the advice is for whoever
+// acts on the result next.
+func askerOf(ev session.Event) asker {
+	ask := asker{origin: ev.Origin}
+	if ev.Kind == session.KindUserPrompt && ask.agent() {
+		ask.agentID = ev.AgentID
+		ask.spawnID = ev.ToolUseID
+		ask.agentType = ev.AgentType
+	}
+	return ask
+}
+
+// Consult runs one full pass for a session on the main thread's behalf: recall
+// what is known, decide, queue any injection, and persist any new facts. Every
+// outcome is counted separately so "nothing to say" is never confused with
+// "the pipe is broken". Nothing is written to disk.
 func (p *Pipeline) Consult(ctx context.Context, sessionID string) {
+	p.consult(ctx, sessionID, asker{})
+}
+
+func (p *Pipeline) consult(ctx context.Context, sessionID string, ask asker) {
 	events, turn, ok := p.Registry.Snapshot(sessionID)
 	if !ok || len(events) == 0 {
 		return
@@ -412,7 +462,7 @@ func (p *Pipeline) Consult(ctx context.Context, sessionID string) {
 	at := p.sessionSite(events)
 	recalled := p.recall(ctx, render.RecallQuery(events), at, sessionScopes, RecallLimit, 0)
 
-	if p.Triage != nil && p.triaged(ctx, sessionID, turn, at, window, recalled, pick, prov != nil) {
+	if p.Triage != nil && p.triaged(ctx, sessionID, turn, ask, at, window, recalled, pick, prov != nil) {
 		return
 	}
 
@@ -447,8 +497,8 @@ func (p *Pipeline) Consult(ctx context.Context, sessionID string) {
 	// asked, not the writing down of an answer already given.
 	wctx, done := Decided(ctx)
 	defer done()
-	p.queueInjection(sessionID, turn, decision.Inject, decision.Level)
-	p.persist(wctx, sessionID, at, decision.Facts, recalled)
+	p.queueInjection(sessionID, turn, ask, decision.Inject, decision.Level)
+	p.persist(wctx, sessionID, ask, at, decision.Facts, recalled)
 	p.rememberKeywords(wctx, sessionID, at, window+decision.Inject, decision.Keywords)
 }
 
@@ -472,7 +522,7 @@ func (p *Pipeline) triageTimeout() time.Duration {
 // With no decision model, every turn is settled here: there is nothing to
 // hand the rest to, and a create or update it could not act on is counted
 // rather than lost without a trace.
-func (p *Pipeline) triaged(ctx context.Context, sessionID string, turn uint64, at site, window string, recalled []memory.Record, pick prompts.Pickiness, generative bool) bool {
+func (p *Pipeline) triaged(ctx context.Context, sessionID string, turn uint64, ask asker, at site, window string, recalled []memory.Record, pick prompts.Pickiness, generative bool) bool {
 	tctx, cancel := context.WithTimeout(ctx, p.triageTimeout())
 	defer cancel()
 	start := time.Now()
@@ -502,7 +552,7 @@ func (p *Pipeline) triaged(ctx context.Context, sessionID string, turn uint64, a
 				// A stored fact the session is about to act against is only
 				// worth repeating at the action; at the next prompt it arrives
 				// after the thing it was about.
-				p.queueInjection(sessionID, turn, r.Content, string(session.LevelAction))
+				p.queueInjection(sessionID, turn, ask, r.Content, string(session.LevelAction))
 				return settle()
 			}
 		}
@@ -1101,7 +1151,13 @@ func mergeHits(searches []recallSearch, scopeIndex, limit int, seen map[string]b
 	return hits
 }
 
-func (p *Pipeline) queueInjection(sessionID string, turn uint64, raw, level string) {
+// queueInjection sanitises the model's advice and queues it for the asker.
+// For a subagent the level is always action: it never submits a prompt, so
+// context queued at plan level would wait for a UserPromptSubmit that comes
+// only when the main thread's next turn starts, and land there instead. An
+// agent that has started by the time its advice is written is named on it;
+// one that has not is named when it does.
+func (p *Pipeline) queueInjection(sessionID string, turn uint64, ask asker, raw, level string) {
 	if sanitize.IsSilent(raw) {
 		p.Metrics.Inc("shoulder_advice_silent_total")
 		return
@@ -1116,26 +1172,58 @@ func (p *Pipeline) queueInjection(sessionID string, turn uint64, raw, level stri
 		SessionID:   sessionID,
 		Kind:        session.AdviceNote,
 		Level:       adviceLevel(level),
+		AgentID:     ask.agentID,
+		SpawnID:     ask.spawnID,
+		AgentType:   ask.agentType,
 		Text:        text,
 		CreatedTurn: turn,
 		TTLTurns:    2,
 		CreatedAt:   time.Now().UTC(),
+	}
+	if ask.agent() {
+		a.Level = session.LevelAction
+	}
+	if a.AgentID == "" && a.SpawnID != "" {
+		a.AgentID = p.Registry.AgentOf(sessionID, a.SpawnID)
 	}
 	p.Outbox.Push(a)
 	p.Metrics.Inc("shoulder_advice_queued_total")
 	// Logged in full, and at Info. This is the one thing the daemon exists to
 	// produce, and it lands somewhere only the model reads; without this line
 	// the only evidence a person can get is a counter going up.
-	p.Log.Info("advice queued", "id", a.ID, "session", sessionID, "turn", turn, "text", text)
+	p.Log.Info("advice queued", "id", a.ID, "session", sessionID, "turn", turn,
+		"level", a.Level, "agent", a.AgentID, "text", text)
 }
 
-// persist folds the model's deduced facts into one list and writes what
-// survives.
-func (p *Pipeline) persist(ctx context.Context, sessionID string, at site, deduced []facts.Fact, recalled []memory.Record) {
+// persist folds the model's deduced facts into one list, drops what the
+// asker may not state, and writes what survives.
+func (p *Pipeline) persist(ctx context.Context, sessionID string, ask asker, at site, deduced []facts.Fact, recalled []memory.Record) {
 	if p.Memory == nil {
 		return
 	}
-	p.store(ctx, sessionID, at, facts.Reconcile(nil, deduced), recalled, replaceCollision)
+	merged := facts.Reconcile(nil, deduced)
+	if ask.agent() {
+		merged = p.dropUserOnly(sessionID, merged)
+	}
+	p.store(ctx, sessionID, at, merged, recalled, replaceCollision)
+}
+
+// dropUserOnly removes the facts only the person may state. A subagent is told
+// what to do by the main thread, not by the user, so a rule or a preference
+// the model read into a subagent's turn is lost here, and the loss is counted.
+func (p *Pipeline) dropUserOnly(sessionID string, merged []facts.Fact) []facts.Fact {
+	kept := merged[:0]
+	for _, f := range merged {
+		category, _ := facts.NormaliseCategory(f.Category)
+		if !facts.UserOnly(category) {
+			kept = append(kept, f)
+			continue
+		}
+		p.Metrics.Inc("shoulder_facts_agent_rule_dropped_total")
+		p.Log.Info("fact dropped: only the user states a rule or a preference, and this turn was a subagent's",
+			"session", sessionID, "category", category, "content", f.Content)
+	}
+	return kept
 }
 
 // store applies the scope rule and writes what survives it, returning the facts

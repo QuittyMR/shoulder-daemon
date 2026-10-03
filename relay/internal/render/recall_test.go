@@ -69,3 +69,36 @@ func TestEveryEventKindRendersAsItsOwnTag(t *testing.T) {
 		}
 	}
 }
+
+// A subagent's prompt and its answer are what was said, in a different voice:
+// they go into the query like the user's and the main thread's, and nothing of
+// the spawning tool call does.
+func TestRecallQueryHearsSubagentsAsProse(t *testing.T) {
+	events := []session.Event{
+		{Kind: session.KindUserPrompt, Prompt: "find the leak"},
+		{Kind: session.KindToolCall, ToolName: "Agent", ToolInput: json.RawMessage(`{"prompt":"search for the leak","subagent_type":"explore"}`)},
+		{Kind: session.KindUserPrompt, Origin: session.OriginAgent, AgentType: "explore", Prompt: "search for the leak"},
+		{Kind: session.KindTurnEnd, Origin: session.OriginAgent, AgentID: "a1", AgentType: "explore", Assistant: "it is in the pool"},
+	}
+	if got := RecallQuery(events); got != "find the leak\nsearch for the leak\nit is in the pool" {
+		t.Fatalf("RecallQuery = %q", got)
+	}
+}
+
+func TestSubagentLinesRenderAsAgentTags(t *testing.T) {
+	cases := []struct {
+		name string
+		ev   session.Event
+		want string
+	}{
+		{"agent prompt", session.Event{Kind: session.KindUserPrompt, Origin: session.OriginAgent, AgentType: "explore", Prompt: " look "}, `<agent type="explore">look</agent>`},
+		{"agent answer", session.Event{Kind: session.KindTurnEnd, Origin: session.OriginAgent, AgentID: "a1", AgentType: "explore", Assistant: "found"}, `<agent-result type="explore">found</agent-result>`},
+		{"silent agent answer", session.Event{Kind: session.KindTurnEnd, Origin: session.OriginAgent, AgentType: "explore", Assistant: " "}, ""},
+		{"a user prompt is still the user's", session.Event{Kind: session.KindUserPrompt, Prompt: "hi"}, "<user>hi</user>"},
+	}
+	for _, tc := range cases {
+		if got := line(tc.ev); got != tc.want {
+			t.Errorf("%s: line = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}

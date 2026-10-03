@@ -2098,3 +2098,257 @@ func TestRecallBoundsTheSearchesInFlight(t *testing.T) {
 		t.Fatalf("searches in flight peaked at %d, want between 2 and %d", peak, recallInFlight)
 	}
 }
+
+// spawnAgentAs is the main thread calling the Agent tool, which is the only
+// place a subagent's prompt is ever seen.
+func spawnAgentAs(sid, toolUseID, agentType, prompt string) string {
+	b, _ := json.Marshal(map[string]any{
+		"session_id": sid, "hook_event_name": "PreToolUse", "tool_name": "Agent", "tool_use_id": toolUseID,
+		"tool_input": map[string]string{"prompt": prompt, "subagent_type": agentType},
+	})
+	return string(b)
+}
+
+// agentStart is a subagent reporting that it has started, the first event to
+// carry the id Claude Code gave it.
+func agentStart(sid, agentID, agentType string) string {
+	b, _ := json.Marshal(map[string]string{
+		"session_id": sid, "hook_event_name": "SubagentStart", "agent_id": agentID, "agent_type": agentType,
+	})
+	return string(b)
+}
+
+// agentStop is a subagent's final answer, which arrives on SubagentStop under
+// the parent's session id.
+func agentStop(sid, agentID, text string) string {
+	b, _ := json.Marshal(map[string]string{
+		"session_id": sid, "hook_event_name": "SubagentStop", "agent_id": agentID, "agent_type": "explore",
+		"last_assistant_message": text,
+	})
+	return string(b)
+}
+
+// agentToolCall is a tool call fired from inside a subagent.
+func agentToolCall(sid, agentID string) string {
+	b, _ := json.Marshal(map[string]any{
+		"session_id": sid, "hook_event_name": "PreToolUse", "tool_name": "Read",
+		"tool_input": map[string]string{"file_path": "/a"}, "agent_id": agentID, "agent_type": "explore",
+	})
+	return string(b)
+}
+
+func awaitConsult(t *testing.T, s *stack) {
+	t.Helper()
+	select {
+	case <-s.consults:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the advisor was never consulted")
+	}
+}
+
+// A subagent never submits a prompt, so advice for it lands at its next tool
+// call. Its prompt arrives before Claude Code has given it an id and its start,
+// which carries the id, comes before the consult has answered; the advice is
+// addressed to the call that spawned it and from there to the id, and neither
+// the main thread nor a sibling of the same type may take it.
+func TestASubagentsPromptIsConsultedAndAdvisedAtItsNextToolCall(t *testing.T) {
+	ts := advisorServer(t, 100*time.Millisecond, decisionBody(t, "the pool is closed in main.go"))
+	s := newStack(t, ts.URL, 2*time.Second)
+
+	if got := s.post(t, "PreToolUse", spawnAgentAs("s1", "toolu_a", "explore", "find where the pool leaks")); strings.TrimSpace(got) != "{}" {
+		t.Fatalf("the spawning call must not be advised, got %q", got)
+	}
+	if got := s.post(t, "SubagentStart", agentStart("s1", "agent-a", "explore")); strings.TrimSpace(got) != "{}" {
+		t.Fatalf("a start before the consult has answered carries nothing, got %q", got)
+	}
+	awaitConsult(t, s)
+
+	if a, ok := s.pipe.Outbox.Take("s1", 0, session.KindUserPrompt, "", ""); ok {
+		t.Fatalf("advice for a subagent was queued for a prompt it will never submit: %+v", a)
+	}
+	if got := s.post(t, "PreToolUse", `{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"/a"}}`); strings.Contains(got, "the pool is closed") {
+		t.Fatalf("the main thread was handed a subagent's note: %s", got)
+	}
+	if got := s.post(t, "PreToolUse", agentToolCall("s1", "agent-b")); strings.Contains(got, "the pool is closed") {
+		t.Fatalf("a sibling was handed the note: %s", got)
+	}
+	got := s.post(t, "PreToolUse", agentToolCall("s1", "agent-a"))
+	if !strings.Contains(got, "the pool is closed in main.go") {
+		t.Fatalf("advice should land at the subagent's next tool call, got %s", got)
+	}
+}
+
+// A note that is ready by the time the agent starts is handed over at the
+// start, before its first step, and is not repeated at its first tool call.
+func TestANoteReadyAtTheSubagentsStartIsHandedOverThere(t *testing.T) {
+	ts := advisorServer(t, 0, decisionBody(t, "the pool is closed in main.go"))
+	s := newStack(t, ts.URL, 2*time.Second)
+
+	s.post(t, "PreToolUse", spawnAgentAs("s1", "toolu_a", "explore", "find where the pool leaks"))
+	awaitConsult(t, s)
+	got := s.post(t, "SubagentStart", agentStart("s1", "agent-a", "explore"))
+	if !strings.Contains(got, "the pool is closed in main.go") || !strings.Contains(got, `"hookEventName":"SubagentStart"`) {
+		t.Fatalf("the start did not carry the note: %s", got)
+	}
+	if got := s.post(t, "PreToolUse", agentToolCall("s1", "agent-a")); strings.Contains(got, "the pool is closed") {
+		t.Fatalf("the note was handed over twice: %s", got)
+	}
+}
+
+// Advice from a consult that knows the subagent's id is for that subagent
+// alone; a sibling asking first is passed over.
+func TestAdviceForASubagentIsAddressedToIt(t *testing.T) {
+	ts := advisorServer(t, 0, decisionBody(t, "the pool is closed in main.go"))
+	s := newStack(t, ts.URL, 2*time.Second)
+
+	ev := session.Event{
+		Protocol: 1, Harness: "claude-code", SessionID: "s1", TS: time.Now(), Kind: session.KindUserPrompt,
+		Prompt: "find where the pool leaks", Origin: session.OriginAgent, AgentID: "agent-7", AgentType: "explore",
+	}
+	s.pipe.Registry.Observe(ev)
+	s.pipe.Queue <- ev
+	awaitConsult(t, s)
+
+	if a, ok := s.pipe.Outbox.Take("s1", 0, session.KindToolCall, "agent-8", "explore"); ok {
+		t.Fatalf("a sibling agent took advice addressed to another: %+v", a)
+	}
+	a, ok := s.pipe.Outbox.Take("s1", 0, session.KindToolCall, "agent-7", "explore")
+	if !ok {
+		t.Fatal("no advice was queued for the subagent")
+	}
+	if a.AgentID != "agent-7" || a.Level != session.LevelAction {
+		t.Fatalf("advice = %+v, want it addressed to agent-7 at the action level", a)
+	}
+}
+
+// A subagent's stop ends its own run, not a turn of the session: the user's
+// turn count stands, and its result is still read for facts.
+func TestASubagentsStopIsConsultedWithoutAdvancingTheTurn(t *testing.T) {
+	ts := advisorServer(t, 0, decisionBody(t, "",
+		map[string]any{"content": "the pool is closed in main.go", "category": "finding", "scope": "global"}))
+	s := newStack(t, ts.URL, 2*time.Second)
+	mem := &fakeMemory{}
+	s.pipe.Memory = mem
+
+	s.post(t, "UserPromptSubmit", prompt("s1", "find the leak"))
+	awaitConsult(t, s)
+	s.post(t, "SubagentStop", agentStop("s1", "agent-7", "The pool is closed in main.go."))
+	awaitConsult(t, s)
+
+	if turn := s.pipe.Registry.Turn("s1"); turn != 0 {
+		t.Fatalf("a subagent's stop advanced the session's turn to %d", turn)
+	}
+	stored, _, _ := mem.snapshot()
+	if len(stored) != 2 {
+		t.Fatalf("stored %+v, want the finding from both consults", stored)
+	}
+}
+
+// Only the person states how work is done here. A subagent's turn may add what
+// it found and what is so, and whatever the model read into it as a rule or a
+// preference is dropped and counted, whether the consult was the agent's
+// prompt or its stop, and whether the decision model or a triage decided it.
+func TestASubagentsTurnCannotStateARuleOrAPreference(t *testing.T) {
+	body := decisionBody(t, "",
+		map[string]any{"content": "the pool is never closed in main.go", "category": "finding", "scope": "global"},
+		map[string]any{"content": "the build runs with make build", "category": "fact", "scope": "global"},
+		map[string]any{"content": "always close the pool in a defer", "category": "rule", "scope": "global"},
+		map[string]any{"content": "the user wants terse answers", "category": "preference", "scope": "global"},
+		map[string]any{"content": "never push to main", "category": "constraint", "scope": "global"})
+	for name, post := range map[string]func(t *testing.T, s *stack){
+		"stop": func(t *testing.T, s *stack) {
+			s.post(t, "SubagentStop", agentStop("s1", "agent-7", "The pool is never closed."))
+		},
+		"prompt": func(t *testing.T, s *stack) {
+			s.post(t, "PreToolUse", spawnAgentAs("s1", "toolu_1", "explore", "find where the pool leaks"))
+		},
+		"prompt under a triage that hands the turn on": func(t *testing.T, s *stack) {
+			s.pipe.Triage = &fakeTriage{verdict: llm.Verdict{Action: llm.Create, Confidence: 0.9}, min: 0.6}
+			s.post(t, "PreToolUse", spawnAgentAs("s1", "toolu_1", "explore", "find where the pool leaks"))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ts := advisorServer(t, 0, body)
+			s := newStack(t, ts.URL, 2*time.Second)
+			mem := &fakeMemory{}
+			s.pipe.Memory = mem
+
+			post(t, s)
+			awaitConsult(t, s)
+
+			stored, _, _ := mem.snapshot()
+			var categories []string
+			for _, r := range stored {
+				categories = append(categories, r.Category)
+			}
+			sort.Strings(categories)
+			if strings.Join(categories, ",") != "fact,finding" {
+				t.Fatalf("stored %v, want only the finding and the fact", stored)
+			}
+			if n := s.srv.Metrics.Get("shoulder_facts_agent_rule_dropped_total"); n != 3 {
+				t.Fatalf("counted %d dropped, want the rule, the preference and the legacy constraint", n)
+			}
+		})
+	}
+}
+
+func TestTheUsersTurnStoresARule(t *testing.T) {
+	ts := advisorServer(t, 0, decisionBody(t, "",
+		map[string]any{"content": "always close the pool in a defer", "category": "rule", "scope": "global"}))
+	s := newStack(t, ts.URL, 2*time.Second)
+	mem := &fakeMemory{}
+	s.pipe.Memory = mem
+
+	s.post(t, "UserPromptSubmit", prompt("s1", "always close the pool in a defer"))
+	awaitConsult(t, s)
+	s.post(t, "Stop", stop("s1", "Noted."))
+	awaitConsult(t, s)
+
+	stored, _, _ := mem.snapshot()
+	if len(stored) == 0 || stored[0].Category != "rule" {
+		t.Fatalf("stored %+v, want the user's rule", stored)
+	}
+	if s.srv.Metrics.Get("shoulder_facts_agent_rule_dropped_total") != 0 {
+		t.Fatal("a rule from the user's own turn was dropped")
+	}
+}
+
+// A subagent's stop sits on the user's turn count. Keyed on that alone the
+// periodic tidy would run again for every agent that stops while the count is
+// on a multiple; it runs only at the user's own turn end.
+func TestASubagentsStopDoesNotTidy(t *testing.T) {
+	ts := advisorServer(t, 0, decisionBody(t, ""))
+	s := newStack(t, ts.URL, 2*time.Second)
+	mem := &fakeMemory{}
+	s.pipe.Memory = mem
+
+	for i := 0; i < consolidateEvery; i++ {
+		s.post(t, "Stop", stop("s1", "done"))
+		awaitConsult(t, s)
+	}
+	if turn := s.pipe.Registry.Turn("s1"); turn != consolidateEvery {
+		t.Fatalf("turn = %d", turn)
+	}
+	// The user's own fifth turn end tidies; that pass lists the store once.
+	deadline := time.Now().Add(3 * time.Second)
+	for tidies(mem) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the user's turn end on a multiple never tidied")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	s.post(t, "SubagentStop", agentStop("s1", "agent-7", "done"))
+	awaitConsult(t, s)
+	s.post(t, "SubagentStop", agentStop("s1", "agent-8", "done"))
+	awaitConsult(t, s)
+	time.Sleep(100 * time.Millisecond)
+	if n := tidies(mem); n != 1 {
+		t.Fatalf("the store was listed %d times; agent stops started a tidy of their own", n)
+	}
+}
+
+// tidies counts the passes that read the whole store, which only a tidy does.
+func tidies(mem *fakeMemory) int {
+	_, listed := mem.reads()
+	return len(listed)
+}

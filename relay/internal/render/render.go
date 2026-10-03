@@ -59,10 +59,16 @@ func Window(events []session.Event, maxEvents, maxChars int) string {
 func line(e session.Event) string {
 	switch e.Kind {
 	case session.KindUserPrompt:
+		if e.Origin == session.OriginAgent {
+			return fmt.Sprintf("<agent type=%q>%s</agent>", e.AgentType, clip(e.Prompt, proseClip))
+		}
 		return "<user>" + clip(e.Prompt, proseClip) + "</user>"
 	case session.KindAssistantMessage, session.KindTurnEnd:
 		if strings.TrimSpace(e.Assistant) == "" {
 			return ""
+		}
+		if e.Origin == session.OriginAgent {
+			return fmt.Sprintf("<agent-result type=%q>%s</agent-result>", e.AgentType, clip(e.Assistant, proseClip))
 		}
 		s := "<assistant>" + clip(e.Assistant, proseClip) + "</assistant>"
 		if e.Thinking != "" {
@@ -134,7 +140,8 @@ func clip(s string, n int) string { return textutil.Clip(strings.TrimSpace(s), n
 // RecallQuery builds the text used to search long-term memory. It deliberately
 // ignores tool calls and results: they are the bulk of a window but they drag a
 // semantic search towards whichever files were touched, not towards what was
-// actually said or decided.
+// actually said or decided. A subagent's prompt and its answer are prose and
+// count the same as the user's and the main thread's.
 func RecallQuery(events []session.Event) string {
 	var parts []string
 	for i := len(events) - 1; i >= 0 && len(parts) < 4; i-- {
