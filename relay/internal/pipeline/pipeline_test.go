@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/outbox"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/scope"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/session"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/textutil"
 )
 
 type stack struct {
@@ -516,16 +518,13 @@ func TestRecallQueryUsesProseNotToolNoise(t *testing.T) {
 	}
 	full := false
 	for _, q := range queries {
-		if !strings.Contains(q.Text, "production") {
-			t.Errorf("recall query should carry the prompt: %q", q.Text)
-		}
 		if strings.Contains(q.Text, "/etc/hosts") {
 			t.Errorf("recall query should not carry tool noise: %q", q.Text)
 		}
-		full = full || strings.Contains(q.Text, "Deploying")
+		full = full || strings.Contains(q.Text, "production") && strings.Contains(q.Text, "Deploying")
 	}
 	if !full {
-		t.Errorf("no recall query carried the assistant's reply: %+v", queries)
+		t.Errorf("no recall query carried the prompt and the assistant's reply together: %+v", queries)
 	}
 }
 
@@ -1873,4 +1872,229 @@ func TestTheLastEvictionWaitsForATidyingPass(t *testing.T) {
 	stillUp(t, idle, "the last eviction stopped with the tidying pass still running")
 	close(periodic)
 	stopped(t, idle, mem, 1)
+}
+
+// answeringMemory answers each search from the text it was asked with, which
+// is what a recall that fans one text out into several needs a fake to do.
+type answeringMemory struct {
+	fakeMemory
+	answer func(q memory.Query) ([]memory.Record, error)
+}
+
+func (a *answeringMemory) Search(_ context.Context, q memory.Query) ([]memory.Record, error) {
+	a.mu.Lock()
+	a.queries = append(a.queries, q)
+	a.searched = append(a.searched, q)
+	a.mu.Unlock()
+	return a.answer(q)
+}
+
+// recallWindow is three sentences of prose, each long enough to be searched
+// on its own.
+const recallWindow = "Use the connection pool for every query. Never commit the env file. Which branch is main?"
+
+func recallOnly(t *testing.T, mem memory.Connector, text string, limit int) (*Pipeline, []memory.Record) {
+	t.Helper()
+	s := newStack(t, "http://127.0.0.1:1", time.Second)
+	s.pipe.Memory = mem
+	return s.pipe, s.pipe.recall(context.Background(), text, site{}, []scope.Scope{scope.Global}, limit, 0)
+}
+
+func TestRecallSearchesTheWholeTextAndEachSentence(t *testing.T) {
+	mem := &answeringMemory{answer: func(memory.Query) ([]memory.Record, error) { return nil, nil }}
+	recallOnly(t, mem, recallWindow, RecallLimit)
+
+	searched, _ := mem.reads()
+	want := append([]string{recallWindow}, textutil.Sentences(recallWindow)...)
+	if len(searched) != len(want) {
+		t.Fatalf("expected %d searches, got %d: %+v", len(want), len(searched), searched)
+	}
+	got := map[string]bool{}
+	for _, q := range searched {
+		got[q.Text] = true
+	}
+	for _, text := range want {
+		if !got[text] {
+			t.Errorf("no search asked for %q", text)
+		}
+	}
+}
+
+// With or without its full stop: the sentence cut drops the terminator, and
+// the whole text keeps it, and that difference is not a second sentence.
+func TestRecallSearchesASingleSentenceOnce(t *testing.T) {
+	for _, text := range []string{"  how should you answer me ", "Find the pool leak.", "Where is the pool closed?\n"} {
+		dir := t.TempDir()
+		s := newStack(t, "http://127.0.0.1:1", time.Second)
+		mem := &answeringMemory{answer: func(memory.Query) ([]memory.Record, error) { return nil, nil }}
+		s.pipe.Memory = mem
+
+		s.pipe.recall(context.Background(), text, site{project: projectOf(t, dir), dir: dir},
+			sessionScopes, RecallLimit, 0)
+
+		searched, _ := mem.reads()
+		if len(searched) != len(sessionScopes) {
+			t.Fatalf("%q: a one-sentence text is one search per scope, got %d: %+v", text, len(searched), searched)
+		}
+	}
+}
+
+// Both orders are pinned: the whole text is folded in first, so a merge that
+// kept the first or the last score would pass one of these and fail the other.
+func TestRecallKeepsTheBestScoreOfARecordFoundTwice(t *testing.T) {
+	for name, scores := range map[string][2]float64{
+		"the sentence scores higher":   {0.3, 0.9},
+		"the whole text scores higher": {0.9, 0.3},
+	} {
+		t.Run(name, func(t *testing.T) {
+			mem := &answeringMemory{answer: func(q memory.Query) ([]memory.Record, error) {
+				switch q.Text {
+				case recallWindow:
+					return []memory.Record{{ID: "pool", Content: "the connection pool is pgbouncer", Score: scores[0]}}, nil
+				case "Use the connection pool for every query":
+					return []memory.Record{{ID: "pool", Content: "the connection pool is pgbouncer", Score: scores[1]}}, nil
+				}
+				return nil, nil
+			}}
+			_, got := recallOnly(t, mem, recallWindow, RecallLimit)
+
+			if len(got) != 1 {
+				t.Fatalf("one record found twice must be returned once, got %+v", got)
+			}
+			if got[0].Score != 0.9 {
+				t.Fatalf("the record must keep its best score, got %v", got[0].Score)
+			}
+		})
+	}
+}
+
+func TestRecallReturnsWhatOnlyASentenceFinds(t *testing.T) {
+	mem := &answeringMemory{answer: func(q memory.Query) ([]memory.Record, error) {
+		if q.Text == "Which branch is main" {
+			return []memory.Record{{ID: "branch", Content: "main is release/stable", Score: 0.8}}, nil
+		}
+		return nil, nil
+	}}
+	_, got := recallOnly(t, mem, recallWindow, RecallLimit)
+
+	if len(got) != 1 || got[0].ID != "branch" {
+		t.Fatalf("a hit found only by a sentence must reach the result, got %+v", got)
+	}
+}
+
+// The merge orders by score, with ties in the order found, and the whole-text
+// search is folded in first; so an unranked backend still puts what the whole
+// text found ahead of what a sentence found.
+func TestRecallOrdersByScoreThenByFirstFound(t *testing.T) {
+	mem := &answeringMemory{answer: func(q memory.Query) ([]memory.Record, error) {
+		switch q.Text {
+		case recallWindow:
+			return []memory.Record{{ID: "w1", Score: 0.5}, {ID: "w2"}}, nil
+		case "Never commit the env file":
+			return []memory.Record{{ID: "s1", Score: 0.7}, {ID: "s2"}}, nil
+		}
+		return nil, nil
+	}}
+	_, got := recallOnly(t, mem, recallWindow, RecallLimit)
+
+	ids := make([]string, len(got))
+	for i, r := range got {
+		ids[i] = r.ID
+	}
+	if want := "s1 w1 w2 s2"; strings.Join(ids, " ") != want {
+		t.Fatalf("got %q, want %q", strings.Join(ids, " "), want)
+	}
+}
+
+func TestRecallCutsTheMergedScopeToTheLimit(t *testing.T) {
+	var calls atomic.Int64
+	mem := &answeringMemory{answer: func(q memory.Query) ([]memory.Record, error) {
+		n := calls.Add(1)
+		return []memory.Record{
+			{ID: fmt.Sprintf("%d-a", n), Score: 0.2},
+			{ID: fmt.Sprintf("%d-b", n), Score: 0.4},
+			{ID: fmt.Sprintf("%d-c", n), Score: 0.6},
+		}, nil
+	}}
+	_, got := recallOnly(t, mem, recallWindow, 2)
+
+	if len(got) != 2 {
+		t.Fatalf("recall should be capped at 2, got %d: %+v", len(got), got)
+	}
+	for _, r := range got {
+		if r.Score != 0.6 {
+			t.Errorf("the cut must keep the best-scored records, got %+v", got)
+		}
+	}
+}
+
+func TestRecallKeepsTheWholeTextHitsWhenASentenceSearchFails(t *testing.T) {
+	mem := &answeringMemory{answer: func(q memory.Query) ([]memory.Record, error) {
+		if q.Text == recallWindow {
+			return []memory.Record{{ID: "whole", Score: 0.4}}, nil
+		}
+		return nil, errors.New("backend hiccup")
+	}}
+	pipe, got := recallOnly(t, mem, recallWindow, RecallLimit)
+
+	if len(got) != 1 || got[0].ID != "whole" {
+		t.Fatalf("a failing sentence search must not drop the whole-text hits, got %+v", got)
+	}
+	if n := pipe.Metrics.Get("shoulder_memory_search_error_total"); n != uint64(len(textutil.Sentences(recallWindow))) {
+		t.Fatalf("every failed search must be counted, got %d", n)
+	}
+}
+
+// The cut takes the oldest sentences: the text is oldest first, and the
+// newest prose is what the turn is about.
+func TestRecallCapsTheSentencesAndCountsTheDrop(t *testing.T) {
+	var b strings.Builder
+	for i := 0; i < recallSentenceCap+3; i++ {
+		fmt.Fprintf(&b, "sentence number %d says something. ", i)
+	}
+	mem := &answeringMemory{answer: func(memory.Query) ([]memory.Record, error) { return nil, nil }}
+	pipe, _ := recallOnly(t, mem, b.String(), RecallLimit)
+
+	searched, _ := mem.reads()
+	if len(searched) != 1+recallSentenceCap {
+		t.Fatalf("expected the whole text and %d sentences, got %d searches", recallSentenceCap, len(searched))
+	}
+	if n := pipe.Metrics.Get("shoulder_recall_sentences_dropped_total"); n != 3 {
+		t.Fatalf("the dropped sentences must be counted, got %d", n)
+	}
+	asked := map[string]bool{}
+	for _, q := range searched {
+		asked[q.Text] = true
+	}
+	for i := 0; i < 3; i++ {
+		if asked[fmt.Sprintf("sentence number %d says something", i)] {
+			t.Fatalf("an old sentence survived the cut: %+v", searched)
+		}
+	}
+	if !asked[fmt.Sprintf("sentence number %d says something", recallSentenceCap+2)] {
+		t.Fatalf("the newest sentence was cut: %+v", searched)
+	}
+}
+
+func TestRecallBoundsTheSearchesInFlight(t *testing.T) {
+	var mu sync.Mutex
+	inFlight, peak := 0, 0
+	mem := &answeringMemory{answer: func(memory.Query) ([]memory.Record, error) {
+		mu.Lock()
+		inFlight++
+		if inFlight > peak {
+			peak = inFlight
+		}
+		mu.Unlock()
+		time.Sleep(5 * time.Millisecond)
+		mu.Lock()
+		inFlight--
+		mu.Unlock()
+		return nil, nil
+	}}
+	recallOnly(t, mem, recallWindow, RecallLimit)
+
+	if peak > recallInFlight || peak < 2 {
+		t.Fatalf("searches in flight peaked at %d, want between 2 and %d", peak, recallInFlight)
+	}
 }

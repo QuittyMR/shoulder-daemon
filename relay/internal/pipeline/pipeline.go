@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -926,6 +927,11 @@ func (p *Pipeline) sessionSite(events []session.Event) site {
 // The search text is the session's most recent prose. The whole rendered window
 // is a poor query: it is mostly tool noise, which drags a semantic search
 // towards whatever files were touched rather than what was said.
+//
+// Each scope is searched for the whole text and once more for every sentence
+// in it. One embedding of four turns of prose is an average of everything said,
+// and a fact that matches one sentence closely scores as a weak match to the
+// average; searched on its own, that sentence finds it.
 func (p *Pipeline) recall(ctx context.Context, text string, at site, scopes []scope.Scope, limit int, minScore float64) []memory.Record {
 	if p.Memory == nil || strings.TrimSpace(text) == "" {
 		return nil
@@ -933,31 +939,27 @@ func (p *Pipeline) recall(ctx context.Context, text string, at site, scopes []sc
 	rctx, cancel := context.WithTimeout(ctx, recallTimeout)
 	defer cancel()
 
-	perScope := make([][]memory.Record, 0, len(scopes))
-	seen := map[string]bool{}
-	for _, s := range scopes {
-		q := memory.Query{Text: text, Limit: limit, Scope: s, MinScore: minScore}
+	texts := p.recallTexts(text)
+	var searches []recallSearch
+	for i, s := range scopes {
+		q := memory.Query{Limit: limit, Scope: s, MinScore: minScore}
 		if s == scope.Local {
 			if at.project == "" {
 				continue
 			}
 			q.Project, q.Dir = at.project, at.dir
 		}
-		found, err := p.Memory.Search(rctx, q)
-		if err != nil {
-			p.Metrics.Inc("shoulder_memory_search_error_total")
-			p.Log.Warn("memory search failed; continuing without that scope", "scope", s, "err", err)
-			continue
+		for _, t := range texts {
+			q.Text = t
+			searches = append(searches, recallSearch{scope: i, query: q})
 		}
-		hits := make([]memory.Record, 0, len(found))
-		for _, r := range found {
-			if r.ID != "" && seen[r.ID] {
-				continue
-			}
-			seen[r.ID] = true
-			hits = append(hits, r)
-		}
-		perScope = append(perScope, hits)
+	}
+	p.runSearches(rctx, searches)
+
+	perScope := make([][]memory.Record, 0, len(scopes))
+	seen := map[string]bool{}
+	for i := range scopes {
+		perScope = append(perScope, mergeHits(searches, i, limit, seen))
 	}
 
 	// Take one hit from each scope in turn rather than ranking them together.
@@ -983,6 +985,120 @@ func (p *Pipeline) recall(ctx context.Context, text string, at site, scopes []sc
 	}
 	p.Metrics.Inc("shoulder_memory_recalled_total")
 	return merged
+}
+
+const (
+	// recallSentenceCap bounds how many sentences a recall searches for on top
+	// of the whole text. Four turns of prose rarely hold more; a window that
+	// does is counted in shoulder_recall_sentences_dropped_total.
+	recallSentenceCap = 16
+
+	// recallInFlight bounds the searches running at once. The backend is one
+	// process or one HTTP server, and seventeen queries per scope arriving
+	// together would be a burst it has to queue anyway.
+	recallInFlight = 4
+)
+
+// recallSearch is one query the recall fans out and what came back for it.
+type recallSearch struct {
+	scope int
+	query memory.Query
+	found []memory.Record
+	err   error
+}
+
+// recallTexts is the whole text followed by its sentences, less the one that
+// is the whole text, so a single sentence is searched once. Past the cap the
+// oldest sentences go: the text is built oldest first, and the newest prose
+// is what the turn is about.
+func (p *Pipeline) recallTexts(text string) []string {
+	whole := strings.TrimSpace(text)
+	texts := []string{whole}
+	bare := strings.TrimSpace(strings.TrimRight(whole, ".!?"))
+	for _, s := range textutil.Sentences(whole) {
+		if s != bare {
+			texts = append(texts, s)
+		}
+	}
+	if dropped := len(texts) - 1 - recallSentenceCap; dropped > 0 {
+		p.Metrics.IncBy("shoulder_recall_sentences_dropped_total", uint64(dropped))
+		texts = append(texts[:1], texts[1+dropped:]...)
+	}
+	return texts
+}
+
+// runSearches runs every search with recallInFlight in flight and leaves the
+// outcome on each. A failure is counted per query and logged once per scope:
+// a backend that is down fails every query, and one line says so.
+func (p *Pipeline) runSearches(ctx context.Context, searches []recallSearch) {
+	var wg sync.WaitGroup
+	slots := make(chan struct{}, recallInFlight)
+	for i := range searches {
+		wg.Add(1)
+		go func(s *recallSearch) {
+			defer wg.Done()
+			slots <- struct{}{}
+			defer func() { <-slots }()
+			s.found, s.err = p.Memory.Search(ctx, s.query)
+		}(&searches[i])
+	}
+	wg.Wait()
+
+	logged := map[int]bool{}
+	for i := range searches {
+		s := &searches[i]
+		if s.err == nil {
+			continue
+		}
+		p.Metrics.Inc("shoulder_memory_search_error_total")
+		if !logged[s.scope] {
+			logged[s.scope] = true
+			p.Log.Warn("memory search failed; continuing with what the scope's other searches found",
+				"scope", s.query.Scope, "err", s.err)
+		}
+	}
+}
+
+// mergeHits folds the searches of one scope into one list: a record found by
+// more than one query keeps its best score, the list is ordered by score with
+// ties in the order found - the whole-text search's hits first - and cut to
+// limit. seen is shared across scopes, so a record already taken from an
+// earlier scope is not offered twice.
+func mergeHits(searches []recallSearch, scopeIndex, limit int, seen map[string]bool) []memory.Record {
+	var hits []memory.Record
+	at := map[string]int{}
+	for _, s := range searches {
+		if s.scope != scopeIndex {
+			continue
+		}
+		for _, r := range s.found {
+			if r.ID == "" {
+				hits = append(hits, r)
+				continue
+			}
+			if seen[r.ID] {
+				continue
+			}
+			if j, ok := at[r.ID]; ok {
+				if r.Score > hits[j].Score {
+					hits[j].Score = r.Score
+				}
+				continue
+			}
+			at[r.ID] = len(hits)
+			hits = append(hits, r)
+		}
+	}
+	sort.SliceStable(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
+	if len(hits) > limit {
+		hits = hits[:limit]
+	}
+	for _, r := range hits {
+		if r.ID != "" {
+			seen[r.ID] = true
+		}
+	}
+	return hits
 }
 
 func (p *Pipeline) queueInjection(sessionID string, turn uint64, raw, level string) {

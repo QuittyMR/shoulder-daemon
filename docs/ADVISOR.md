@@ -239,6 +239,21 @@ was actually said.
 Recall reads both the session's project and the user's global knowledge, so a
 preference recorded in one repository reaches every other one.
 
+Each scope is searched for that prose as a whole and once more for each of its
+sentences. A sentence ends at a line break or at a full stop, an exclamation
+mark or a question mark that ends a word, so `conn.go`, `5.3` and
+`relay.local` stay whole; a one-word piece is not searched, and at most sixteen
+sentences are, the newest, with the cut counted in
+`shoulder_recall_sentences_dropped_total`. One embedding of four turns is an
+average of everything said, and a fact that matches a single sentence closely
+is only a weak match to the average - searched on its own, that sentence finds
+it. A record found by more than one search keeps its best score, each scope's
+hits are ordered by score with ties in the order found, the whole-text hits
+first, and cut to eight before the scopes are interleaved. A one-sentence
+window is searched once per scope, with or without its full stop. The searches
+run four at a time under the recall's ten-second budget; a failed one is
+counted in `shoulder_memory_search_error_total` and the others still count.
+
 ### The two tools
 
 The decision model is an agent, and the normal case is calling neither tool.

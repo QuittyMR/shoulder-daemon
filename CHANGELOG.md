@@ -69,6 +69,14 @@ Notable changes to shoulder-daemon. The format follows
   `USER.shoulder.md`, writes every category under its current name, and keeps
   reading and correcting in place the `ARCHITECTURE`, `DECISIONS`,
   `CONVENTIONS` and `REFERENCES.shoulder.md` files an older daemon wrote.
+- Recall searches each scope for the recent prose as a whole and once more for
+  each of its sentences, up to sixteen, and merges the hits by record with the
+  best score kept, so a stored fact that matches one sentence closely is found
+  rather than averaged away by the rest of the window. A sentence ends at a
+  line break or at a terminator that ends a word, so a file name, a version
+  or a hostname is not cut in two; a one-word piece is not searched, and a
+  window over the cap keeps its newest sentences. The searches run four at a
+  time; the cut is counted in `shoulder_recall_sentences_dropped_total`.
 - The built-in store returns a legacy category under its current name on
   every read, as the docs store and the memory service already did, so a
   `facts.json` written by an older daemon no longer puts `decision` or
