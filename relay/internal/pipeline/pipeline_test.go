@@ -20,7 +20,6 @@ import (
 
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/budget"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/config"
-	"gitlab.com/quittymr/shoulder-daemon/relay/internal/facts"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/httpapi"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/llm"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/memory"
@@ -465,33 +464,6 @@ func (f *fakeMemory) snapshot() ([]memory.Record, []string, []memory.Query) {
 	return append([]memory.Record(nil), f.stored...),
 		append([]string(nil), f.superseded...),
 		append([]memory.Query(nil), f.queries...)
-}
-
-// TestExplicitFactCollapsesWithTheProseRestatement is the whole point of
-// reconciliation: an agent that calls record_fact and also narrates it must
-// produce one stored fact, not two.
-func TestExplicitFactCollapsesWithTheProseRestatement(t *testing.T) {
-	ts := advisorServer(t, 0, decisionBody(t, "",
-		map[string]any{"content": "I will record that the best number is 1", "category": "preference", "scope": "global"}))
-	s := newStack(t, ts.URL, 2*time.Second)
-	mem := &fakeMemory{}
-	s.pipe.Memory = mem
-
-	s.post(t, "UserPromptSubmit", prompt("s1", "the best number is 1"))
-	s.pipe.Registry.AddFact("s1", facts.Fact{
-		Content: "the best number is 1", Category: "preference",
-		Tags: []string{"numbers"}, Scope: scope.Global,
-	})
-	s.post(t, "Stop", stop("s1", "Noted."))
-	<-s.consults
-
-	stored, _, _ := mem.snapshot()
-	if len(stored) != 1 {
-		t.Fatalf("expected exactly one stored fact, got %d: %+v", len(stored), stored)
-	}
-	if len(stored[0].Tags) != 1 || stored[0].Category != "preference" {
-		t.Fatalf("the explicit fact's own metadata must win: %+v", stored[0])
-	}
 }
 
 func TestSupersedeIsUsedWhenTheModelNamesAPriorFact(t *testing.T) {

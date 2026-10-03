@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"gitlab.com/quittymr/shoulder-daemon/relay/internal/facts"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/llm"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/memory"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/prompts"
@@ -69,12 +68,10 @@ func triageStack(t *testing.T, v llm.Verdict, err error) (*stack, *fakeTriage, *
 	return s, tr, adv, mem
 }
 
-// endTurn ends one turn in which the agent recorded a fact explicitly, and
-// waits for the one consult it causes. A prompt would cause a second, racing
-// the first for the same counters.
+// endTurn ends one turn and waits for the one consult it causes. A prompt
+// would cause a second, racing the first for the same counters.
 func endTurn(t *testing.T, s *stack) {
 	t.Helper()
-	s.pipe.Registry.AddFact("s1", facts.Fact{Content: "Deploys happen on Fridays.", Category: "convention", Scope: scope.Global})
 	s.post(t, "Stop", stop("s1", "Running npm install."))
 	select {
 	case <-s.consults:
@@ -120,10 +117,8 @@ func TestASureNothingSkipsTheDecisionModel(t *testing.T) {
 		len(recalled[0]) != 1 || recalled[0][0].ID != "f1" {
 		t.Fatalf("triage was shown %q with %+v", windows, recalled)
 	}
-	// The decision model is what writes the facts the agent recorded
-	// explicitly, so a turn settled without it must still write them.
-	if stored, _, _ := mem.snapshot(); len(stored) != 1 || stored[0].Content != "Deploys happen on Fridays." {
-		t.Fatalf("stored = %+v", stored)
+	if stored, _, _ := mem.snapshot(); len(stored) != 0 {
+		t.Fatalf("a settled nothing wrote %+v", stored)
 	}
 	if got := delivered(t, s); strings.TrimSpace(got) != "{}" {
 		t.Fatalf("nothing must mean silence, got %q", got)
@@ -140,8 +135,8 @@ func TestASureInjectRepeatsTheStoredFact(t *testing.T) {
 	if s.srv.Metrics.Get("shoulder_triage_inject_total") != 1 || s.srv.Metrics.Get("shoulder_advice_queued_total") != 1 {
 		t.Fatal("the injection was not counted")
 	}
-	if stored, _, _ := mem.snapshot(); len(stored) != 1 {
-		t.Fatalf("the explicit fact was not stored: %+v", stored)
+	if stored, _, _ := mem.snapshot(); len(stored) != 0 {
+		t.Fatalf("a repeat wrote %+v", stored)
 	}
 	if got := delivered(t, s); strings.Contains(got, reminder) {
 		t.Fatalf("the stored fact was spent on the prompt, after the action it is about: %s", got)
@@ -224,8 +219,8 @@ func TestTriageWithoutADecisionModel(t *testing.T) {
 			if n := s.srv.Metrics.Get("shoulder_triage_unhandled_total"); n != c.unhandled {
 				t.Fatalf("unhandled = %d, want %d", n, c.unhandled)
 			}
-			if stored, _, _ := mem.snapshot(); len(stored) != 1 {
-				t.Fatalf("the explicit fact was not stored: %+v", stored)
+			if stored, _, _ := mem.snapshot(); len(stored) != 0 {
+				t.Fatalf("a triage with nothing to write wrote %+v", stored)
 			}
 			if got := atToolCall(t, s); strings.Contains(got, reminder) != c.injected {
 				t.Fatalf("injected = %v, want %v: %s", !c.injected, c.injected, got)

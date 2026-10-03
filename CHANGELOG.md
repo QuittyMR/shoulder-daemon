@@ -53,6 +53,12 @@ Notable changes to shoulder-daemon. The format follows
   model and store as coming from the file. It leaves a running install alone
   and removes what it created.
 
+### Changed
+
+- The registry no longer holds facts recorded explicitly for a turn: nothing
+  ever recorded one, so the path that reconciled them with the model's was
+  dead, and a turn triage settles now writes nothing.
+
 ### Fixed
 
 - The container reads the daemon's one env file, `$SHOULDER_ENV_FILE` or

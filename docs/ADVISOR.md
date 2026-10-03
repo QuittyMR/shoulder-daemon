@@ -140,8 +140,8 @@ model. A confident `nothing` ends the turn the same way, but only at pickiness `
 stricter: `eager` and `open` tell the decision model to store rules a turn merely implies, which a
 "nothing" does not rule out, so at those two the turn still goes to it. `create`, `update`, a
 verdict below the threshold, and any triage failure go to the decision model exactly as if triage
-were off. Facts the agent recorded explicitly are written either way, but a turn triage ends
-records no session keywords, because only the decision model produces them.
+were off. A turn triage ends writes nothing and records no session keywords, because only the
+decision model produces either.
 
 Triage without `SHOULDER_LLM` is allowed: stored facts can still be repeated, and a confident
 `create` or `update` that nothing can write is logged and counted in

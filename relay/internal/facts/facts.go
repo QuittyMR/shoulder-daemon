@@ -1,10 +1,11 @@
-// Package facts reconciles what an agent said it would remember with what it
-// explicitly asked to be remembered.
+// Package facts is the vocabulary of what the daemon stores, and the merge
+// that keeps one statement from being written twice.
 //
-// An agent that calls record_fact(fact="the best number is 1") usually also
-// writes "I will record that the best number is 1" in the same turn. Both reach
-// shoulder-daemon. Without reconciliation the memory backend gets the same fact
-// twice in slightly different words, which is worse than getting it once.
+// A turn that states "the best number is 1" and later "I will record that the
+// best number is 1" yields two facts in slightly different words, and a person
+// who types one on the command line that the model also reads out of the
+// exchange yields two more. Without reconciliation the memory backend gets
+// the same fact several times over, which is worse than getting it once.
 package facts
 
 import (
@@ -18,8 +19,8 @@ import (
 type Source string
 
 const (
-	// Explicit came from a record_fact tool call. It is authoritative: the
-	// agent chose those words and those tags deliberately.
+	// Explicit is what the person typed, through the CLI. It is authoritative:
+	// they chose those words and that scope deliberately.
 	Explicit Source = "explicit"
 	// Deduced was inferred from the turn's prose by the decision model.
 	Deduced Source = "deduced"

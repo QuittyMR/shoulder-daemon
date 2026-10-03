@@ -5,12 +5,7 @@ import (
 	"time"
 
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/budget"
-	"gitlab.com/quittymr/shoulder-daemon/relay/internal/facts"
 )
-
-func factFor(i int) facts.Fact {
-	return facts.Fact{Content: string(rune('a'+i%26)) + " fact", Category: "structure", Scope: "global"}
-}
 
 func seen(r *Registry, id string, kind Kind, at time.Time) {
 	r.Observe(Event{SessionID: id, Kind: kind, TS: at, Harness: "test", CWD: "/w"})
@@ -196,26 +191,5 @@ func TestBudgetStateFollowsInjections(t *testing.T) {
 	got := r.BudgetState("s1")
 	if got.LastInjectTurn != 3 || got.CharsUsed == 0 {
 		t.Fatalf("the injection was not recorded: %+v", got)
-	}
-}
-
-// Facts named explicitly during a turn are held until the turn is reconciled,
-// and the queue is bounded so one runaway turn cannot grow it without limit.
-func TestPendingFactsAreHeldPerTurnAndBounded(t *testing.T) {
-	r := NewRegistry(10)
-	seen(r, "s1", KindUserPrompt, time.Now())
-
-	for i := 0; i < maxPendingFacts+5; i++ {
-		r.AddFact("s1", factFor(i))
-	}
-	got := r.TakeFacts("s1")
-	if len(got) != maxPendingFacts {
-		t.Fatalf("held %d facts, want the cap of %d", len(got), maxPendingFacts)
-	}
-	if again := r.TakeFacts("s1"); len(again) != 0 {
-		t.Fatalf("taking twice returned %d facts", len(again))
-	}
-	if len(r.TakeFacts("nobody")) != 0 {
-		t.Fatal("an unknown session had pending facts")
 	}
 }

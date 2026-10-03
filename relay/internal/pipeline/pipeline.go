@@ -468,10 +468,8 @@ func (p *Pipeline) triageTimeout() time.Duration {
 }
 
 // triaged asks the triage about the turn and reports whether that settled it.
-// A turn it settles still gets the facts the agent recorded explicitly written,
-// because the decision model that would otherwise have written them is not
-// asked. With no decision model, every turn is settled here: there is nothing
-// to hand the rest to, and a create or update it could not act on is counted
+// With no decision model, every turn is settled here: there is nothing to
+// hand the rest to, and a create or update it could not act on is counted
 // rather than lost without a trace.
 func (p *Pipeline) triaged(ctx context.Context, sessionID string, turn uint64, at site, window string, recalled []memory.Record, pick prompts.Pickiness, generative bool) bool {
 	tctx, cancel := context.WithTimeout(ctx, p.triageTimeout())
@@ -479,12 +477,7 @@ func (p *Pipeline) triaged(ctx context.Context, sessionID string, turn uint64, a
 	start := time.Now()
 	v, err := p.Triage.Triage(tctx, window, recalled)
 	p.Metrics.ObserveTriage(time.Since(start))
-	settle := func() bool {
-		wctx, done := Decided(ctx)
-		defer done()
-		p.persist(wctx, sessionID, at, nil, recalled)
-		return true
-	}
+	settle := func() bool { return true }
 	switch {
 	case err != nil:
 		p.Metrics.Inc("shoulder_triage_error_total")
@@ -1020,14 +1013,13 @@ func (p *Pipeline) queueInjection(sessionID string, turn uint64, raw, level stri
 	p.Log.Info("advice queued", "id", a.ID, "session", sessionID, "turn", turn, "text", text)
 }
 
-// persist reconciles the model's deduced facts against any the agent recorded
-// explicitly this turn, then writes what survives.
+// persist folds the model's deduced facts into one list and writes what
+// survives.
 func (p *Pipeline) persist(ctx context.Context, sessionID string, at site, deduced []facts.Fact, recalled []memory.Record) {
 	if p.Memory == nil {
 		return
 	}
-	explicit := p.Registry.TakeFacts(sessionID)
-	p.store(ctx, sessionID, at, facts.Reconcile(explicit, deduced), recalled, replaceCollision)
+	p.store(ctx, sessionID, at, facts.Reconcile(nil, deduced), recalled, replaceCollision)
 }
 
 // store applies the scope rule and writes what survives it, returning the facts

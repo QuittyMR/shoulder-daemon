@@ -6,11 +6,7 @@ import (
 	"time"
 
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/budget"
-	"gitlab.com/quittymr/shoulder-daemon/relay/internal/facts"
 )
-
-// maxPendingFacts bounds explicit record_fact calls held for one turn.
-const maxPendingFacts = 32
 
 // maxSessionKeywords bounds the running note a session accumulates. The
 // per-turn cap bounds one turn; nothing bounded the sum, and a long session is
@@ -56,9 +52,6 @@ type State struct {
 	// output verbatim, so it is never part of a listing.
 	Events []Event      `json:"-"`
 	Budget budget.State `json:"budget"`
-
-	// PendingFacts are explicit record_fact calls awaiting reconciliation.
-	PendingFacts []facts.Fact `json:"pending_facts,omitempty"`
 
 	// Keywords is what every turn of this session has been about so far, and
 	// KeywordRecord is the memory record holding it. They are kept together
@@ -297,23 +290,6 @@ func (r *Registry) Sessions() []State {
 	return out
 }
 
-// AddFact records a fact the agent asked to store explicitly, via the
-// record_fact tool. It is held until the turn ends, so it can be reconciled
-// against whatever the decision model deduced from the same turn's prose.
-func (r *Registry) AddFact(sessionID string, f facts.Fact) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	st, ok := r.sessions[sessionID]
-	if !ok {
-		st = &State{ID: sessionID, OpenedAt: time.Now(), LastSeen: time.Now()}
-		r.sessions[sessionID] = st
-	}
-	if len(st.PendingFacts) >= maxPendingFacts {
-		return
-	}
-	st.PendingFacts = append(st.PendingFacts, f)
-}
-
 // AddKeywords folds this turn's keywords into the session's running note and
 // returns the accumulated list along with the id of the record that currently
 // holds it, empty on the first turn. Repeats are dropped: a session that works
@@ -380,17 +356,4 @@ func (r *Registry) Keywords(sessionID string) []string {
 		return nil
 	}
 	return append([]string(nil), st.Keywords...)
-}
-
-// TakeFacts drains the explicitly recorded facts for a session.
-func (r *Registry) TakeFacts(sessionID string) []facts.Fact {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	st, ok := r.sessions[sessionID]
-	if !ok || len(st.PendingFacts) == 0 {
-		return nil
-	}
-	out := st.PendingFacts
-	st.PendingFacts = nil
-	return out
 }
