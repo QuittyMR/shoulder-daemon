@@ -235,12 +235,14 @@ func TestMessageAnswersFromBothScopesAndRecordsWhatItLearns(t *testing.T) {
 		t.Fatalf("reply = %q", got.Reply)
 	}
 
-	var scopes []scope.Scope
+	// Both scopes are read; the searches run concurrently, so which one the
+	// store hears first is not something the test can pin.
+	asked := map[scope.Scope]bool{}
 	for _, q := range mem.asked() {
-		scopes = append(scopes, q.Scope)
+		asked[q.Scope] = true
 	}
-	if len(scopes) != 2 || scopes[0] != scope.Local || scopes[1] != scope.Global {
-		t.Fatalf("a local question must read local then global, read %v", scopes)
+	if len(asked) != 2 || !asked[scope.Local] || !asked[scope.Global] {
+		t.Fatalf("a local question must read local and global, read %v", asked)
 	}
 
 	// The command line said local; the model said the fact is about the user.
@@ -334,7 +336,7 @@ func TestFactAddStoresVerbatim(t *testing.T) {
 		t.Fatalf("stored %+v", writes)
 	}
 	got := writes[0]
-	if got.Content != "deploys go to staging first" || got.Category != "constraint" ||
+	if got.Content != "deploys go to staging first" || got.Category != "rule" ||
 		got.Scope != scope.Local || got.Project != "/p" || len(got.Tags) != 1 {
 		t.Fatalf("stored %+v", got)
 	}
@@ -362,7 +364,7 @@ func TestFactAddRejectsAnUnknownCategory(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status %d, want 400: %s", rec.Code, rec.Body.String())
 	}
-	if msg := errorOf(t, rec); !strings.Contains(msg, "constraint") {
+	if msg := errorOf(t, rec); !strings.Contains(msg, "rule") || !strings.Contains(msg, "finding") {
 		t.Fatalf("error %q does not list the categories", msg)
 	}
 	if len(mem.writes()) != 0 {

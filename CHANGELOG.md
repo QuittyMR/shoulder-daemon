@@ -55,6 +55,24 @@ Notable changes to shoulder-daemon. The format follows
 
 ### Changed
 
+- The fact categories are now `finding` (something a session established by
+  looking), `fact` (a durable truth about the project or the machine), `rule`
+  (a constraint or decision that governs how work is done here) and
+  `preference` (how the person wants work or communication done; private).
+  A `rule` or a `preference` is stored only when the user said it: the
+  decision prompt refuses one from an agent line or from what the assistant
+  concluded, and `facts.UserOnly` names the two for the pipeline to enforce on
+  a consult that comes from a subagent. The old names map forward on read, on
+  `fact add`, on migration and in the model's reply: `decision`, `constraint`
+  and `correction` become `rule`, `structure` and `reference` become `fact`.
+  The docs store files new records in `FINDINGS`, `FACTS`, `RULES` and
+  `USER.shoulder.md`, writes every category under its current name, and keeps
+  reading and correcting in place the `ARCHITECTURE`, `DECISIONS`,
+  `CONVENTIONS` and `REFERENCES.shoulder.md` files an older daemon wrote.
+- The built-in store returns a legacy category under its current name on
+  every read, as the docs store and the memory service already did, so a
+  `facts.json` written by an older daemon no longer puts `decision` or
+  `structure` in front of the decision model or in `shoulderd fact list`.
 - The registry no longer holds facts recorded explicitly for a turn: nothing
   ever recorded one, so the path that reconciled them with the model's was
   dead, and a turn triage settles now writes nothing.

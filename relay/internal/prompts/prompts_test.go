@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"unicode"
+
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/facts"
 )
 
 // The three rewrites the rule is taught by. They are spelled out here rather
@@ -113,4 +115,94 @@ func words(s string) []string {
 	return strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
 		return !unicode.IsLetter(r) && r != '\''
 	})
+}
+
+var workedCategory = regexp.MustCompile(`"category":"([^"]*)"`)
+
+// consolidateRow is one line of the Consolidate example: an id, a category and
+// the sentence, pipe-separated.
+var consolidateRow = regexp.MustCompile(`(?m)^\s*(?:in:\s+)?[a-z]\d+ \| ([a-z]+)\s+\|`)
+
+// The category set is closed in facts.Categories, and a prompt that teaches
+// a name outside it teaches the model to write what the pipeline drops. The
+// legacy names are the ones most likely to creep back in: they were in every
+// example for a year.
+func TestEveryPromptNamesOnlyTheCurrentCategories(t *testing.T) {
+	prompts := map[string]string{"learn": Learn, "consolidate": Consolidate}
+	for i := range PickinessNames() {
+		p := Pickiness(i)
+		prompts["decision/"+p.String()] = Decision(p)
+	}
+	for name, out := range prompts {
+		t.Run(name, func(t *testing.T) {
+			var used []string
+			for _, m := range workedCategory.FindAllStringSubmatch(out, -1) {
+				if m[1] != "" {
+					used = append(used, m[1])
+				}
+			}
+			for _, m := range consolidateRow.FindAllStringSubmatch(out, -1) {
+				used = append(used, m[1])
+			}
+			if len(used) == 0 {
+				t.Fatal("the prompt shows no category at all, so it teaches no vocabulary")
+			}
+			for _, c := range used {
+				if !facts.Categories[c] {
+					t.Errorf("worked example uses category %q, which the pipeline would drop", c)
+				}
+			}
+			if name == "consolidate" {
+				return
+			}
+			flat := strings.Join(strings.Fields(out), " ")
+			for _, c := range []string{"finding", "fact", "rule", "preference"} {
+				if !strings.Contains(flat, c+" - ") {
+					t.Errorf("the prompt does not define the category %q", c)
+				}
+			}
+		})
+	}
+}
+
+// A rule or a preference is the person's to state. The decision prompt has to
+// say so at every pickiness, and has to show it: one agent line that yields a
+// finding, and one that reads like a rule and yields nothing, because the
+// model copies the examples more faithfully than the sentence above them.
+func TestDecisionPromptReservesRuleAndPreferenceForTheUser(t *testing.T) {
+	agentExample := regexp.MustCompile(`<example><agent-result type="[^"]+">[^\n]*\n(\{[^\n]*\})</example>`)
+	for i := range PickinessNames() {
+		p := Pickiness(i)
+		t.Run(p.String(), func(t *testing.T) {
+			out := Decision(p)
+			flat := strings.Join(strings.Fields(out), " ")
+			if !strings.Contains(flat, "A rule or a preference is stored only when the user said it in a <user> line") {
+				t.Fatal("the prompt does not reserve rule and preference for a <user> line")
+			}
+			if !strings.Contains(flat, "Never store one from an <agent> or <agent-result> line") {
+				t.Fatal("the prompt does not name the agent lines a rule may never come from")
+			}
+			var finding, nothing bool
+			for _, m := range agentExample.FindAllStringSubmatch(out, -1) {
+				reply := m[1]
+				switch {
+				case strings.Contains(reply, `"facts":[]`):
+					nothing = true
+				case strings.Contains(reply, `"category":"finding"`):
+					finding = true
+				}
+				for _, c := range []string{"rule", "preference"} {
+					if strings.Contains(reply, `"category":"`+c+`"`) {
+						t.Errorf("an agent line is shown yielding a %s: %s", c, reply)
+					}
+				}
+			}
+			if !finding {
+				t.Error("no example shows an agent line yielding a finding")
+			}
+			if !nothing {
+				t.Error("no example shows a rule-shaped agent line yielding nothing")
+			}
+		})
+	}
 }

@@ -161,7 +161,7 @@ $ shoulderd message "this is my git repository"
 main branch is master
 
 $ shoulderd fact add --global "I prefer terse answers with no preamble"
-$ shoulderd fact add --local --category=structure "integration tests need a live Postgres"
+$ shoulderd fact add --local --category=fact "integration tests need a live Postgres"
 $ shoulderd fact add --local --private "postgres listens on 5433 on this machine"
 $ shoulderd fact list --local
 $ shoulderd digest                      # narrative summary; --local or --global to narrow
@@ -177,6 +177,16 @@ than about the project, so a backend that files facts beside the checkout keeps
 it out of what the team commits. Writes demand `--local` or `--global`; reads
 default to this project, except `digest`, which covers both. `shoulderd help`
 spells out each one.
+
+Every fact carries one of four categories. A `finding` is something a session
+established by looking - a bug located, the state of a file, a measurement -
+and a `fact` is a durable truth about the project or the machine; anyone may
+record either, the assistant and its subagents included. A `rule` governs how
+work is done here and a `preference` is how you want work or communication
+done; only you may state those, so the daemon stores them from what you typed
+and never from what an agent concluded. `shoulderd fact add` counts as your
+typing whoever runs it. A preference is private by default.
+
 ## Configuration and tweaking
 
 Every setting is a line in `~/.config/shoulder-daemon/env`, and the four that
@@ -226,7 +236,7 @@ shows the whole file, `--no-follow` prints and exits, `--json` passes the raw
 records through.
 
 ```
-14:02:11  stored      local shoulder-daemon     (structure) "main branch is master"  id=mem_12
+14:02:11  stored      local shoulder-daemon     (fact) "main branch is master"  id=mem_12
 14:09:40  queued      session 3f9a1c07 turn 6   "the branch is master, not main"  id=adv_4
 14:09:41  injected    session 3f9a1c07 UserPromptSubmit  "the branch is master, not main"  id=adv_4
 14:31:05  superseded  global                   [cli]  (preference) "terse answers, no preamble"  supersedes=mem_2

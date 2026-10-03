@@ -121,16 +121,34 @@ func TestMigrateMovesOneScopeOfTheJSONStoreIntoTheRunningOne(t *testing.T) {
 	}
 
 	project := filepath.Join(base, "projects", scope.Key(migrateProject))
-	arch := read(t, filepath.Join(project, "ARCHITECTURE.shoulder.md"))
+	// The JSON store holds the category names the set had when it was written.
+	// They file where their current names do, and are written and reported as
+	// the current name.
+	arch := read(t, filepath.Join(project, "FACTS.shoulder.md"))
 	if !strings.Contains(arch, "the api listens on 8081") || !strings.Contains(arch, "deployments run from ci") {
-		t.Fatalf("the structure facts are not in the architecture file:\n%s", arch)
+		t.Fatalf("the structure facts are not in the facts file:\n%s", arch)
 	}
 	// Oldest first, so the file reads in the order the facts were learned.
 	if strings.Index(arch, "the api listens on 8081") > strings.Index(arch, "deployments run from ci") {
 		t.Fatalf("the facts were written newest first:\n%s", arch)
 	}
-	if !strings.Contains(arch, "category=structure") || !strings.Contains(arch, "tags=api") {
+	if !strings.Contains(arch, "category=fact") || !strings.Contains(arch, "tags=api") {
 		t.Fatalf("the category and tags did not survive the move:\n%s", arch)
+	}
+	if strings.Contains(arch, "category=structure") {
+		t.Fatalf("a legacy category name was written into the destination:\n%s", arch)
+	}
+	reported := map[string]string{}
+	for _, f := range got.Facts {
+		reported[f.Content] = f.Category
+	}
+	want := map[string]string{
+		"the api listens on 8081": "fact", "deployments run from ci": "fact", "prefers terse answers": "preference",
+	}
+	for content, category := range want {
+		if reported[content] != category {
+			t.Fatalf("%q was reported as %q, want %q", content, reported[content], category)
+		}
 	}
 	if !strings.Contains(arch, "at=2024-01-02T03:04:05Z") {
 		t.Fatalf("the fact was redated by the migration:\n%s", arch)

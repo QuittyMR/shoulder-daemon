@@ -126,7 +126,7 @@ func gitIn(t *testing.T, dir string, args ...string) {
 	}
 }
 
-const oneFact = `{"facts":[{"content":"Deploys go to eu-west-2.","category":"decision","scope":"local","tags":["deploy"]}]}`
+const oneFact = `{"facts":[{"content":"Deploys go to eu-west-2.","category":"rule","scope":"local","tags":["deploy"]}]}`
 
 func TestLearnReadsWhatARepositoryDocumentsAndLeavesTheRest(t *testing.T) {
 	dir := t.TempDir()
@@ -174,7 +174,7 @@ func TestLearnReadsWhatARepositoryDocumentsAndLeavesTheRest(t *testing.T) {
 		if r.Scope != scope.Global || r.Project != "" {
 			t.Fatalf("stored %+v, want a global record", r)
 		}
-		if r.Category != "decision" || len(r.Tags) != 1 {
+		if r.Category != "rule" || len(r.Tags) != 1 {
 			t.Fatalf("stored %+v, want the category and tags the model gave", r)
 		}
 	}

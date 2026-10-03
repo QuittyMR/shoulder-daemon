@@ -135,7 +135,7 @@ func (s *Server) handleMigrate(w http.ResponseWriter, r *http.Request) {
 	// migration.
 	for ; i >= 0; i-- {
 		reply.add(MigratedFact{
-			Content: found[i].Content, Category: found[i].Category,
+			Content: found[i].Content, Category: facts.CurrentName(found[i].Category),
 			Outcome: MigrateFailed, Error: "the daemon stopped before this record was copied",
 		})
 	}
@@ -149,9 +149,13 @@ func (s *Server) handleMigrate(w http.ResponseWriter, r *http.Request) {
 // failure: the destination already says this, which is the state the caller
 // asked for.
 func (s *Server) migrate(ctx context.Context, src memory.Record, sc scope.Scope, req MigrateRequest, held map[string]string) MigratedFact {
+	// The category is carried under its current name. The JSON store predates
+	// the current set, so what it holds is the old vocabulary, and a destination
+	// handed "decision" would file it as the stray word it now is.
+	category := facts.CurrentName(src.Category)
 	rec := memory.Record{
 		Content:  src.Content,
-		Category: src.Category,
+		Category: category,
 		Tags:     src.Tags,
 		// The timestamp is the fact's, not the migration's. A store that dates
 		// what it holds would otherwise report a decade of decisions as taken
@@ -162,13 +166,13 @@ func (s *Server) migrate(ctx context.Context, src memory.Record, sc scope.Scope,
 		// JSON store had nowhere to put that and never marked one, so a store
 		// that files by it is told here rather than committing somebody's
 		// habits with the team's code.
-		Private: src.Private || facts.Private(src.Category),
+		Private: src.Private || facts.Private(category),
 	}
 	if sc == scope.Local {
 		rec.Project, rec.Dir = req.Project, req.Dir
 	}
 
-	out := MigratedFact{Content: src.Content, Category: src.Category}
+	out := MigratedFact{Content: src.Content, Category: category}
 	wctx, done := pipeline.Decided(ctx)
 	defer done()
 	id, err := s.Pipe.Memory.Store(wctx, rec)

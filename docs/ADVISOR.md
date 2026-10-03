@@ -207,7 +207,7 @@ The user message is two sections:
 </recent-turn>
 
 <stored-facts>
-id=a3f19c4e8b2d7015 scope=local category=structure: the main branch is master
+id=a3f19c4e8b2d7015 scope=local category=fact: the main branch is master
 id=7c02b8de41af9330 scope=global category=preference: prefers terse answers
 </stored-facts>
 ```
@@ -277,7 +277,7 @@ final content must be a JSON object with three fields:
   "facts": [
     {
       "content": "the integration tests need a live Postgres on 5544",
-      "category": "structure",
+      "category": "fact",
       "scope": "local",
       "tags": [],
       "supersedes": ""
@@ -320,13 +320,31 @@ nobody sized.
 
 **`facts`** are durable statements the turn established that are not already
 stored - something that would still be true and useful in another session next
-month. `category` must be one of `decision`, `constraint`, `preference`,
-`correction`, `structure`, `reference`. That vocabulary is closed, and anything
-outside it is dropped rather than passed through: shoulder-daemon can only
-recall on categories it knows, and it will not hand a backend a value whose
-treatment it cannot see. `supersedes` names the id of a stored fact this one
-replaces, and is honoured only when that fact sits in the same scope and
-project as this one. A correction crossing that line is not a correction.
+month. `category` is one of four, and who may add each is part of the definition:
+
+| Category | What it is | Who may state it |
+|---|---|---|
+| `finding` | something this session established by looking: a bug located, the state of a file or an environment, a measurement | anyone - the user, the assistant, a subagent |
+| `fact` | a durable truth about the project or the machine: how something is structured, what a command does, where things live | anyone |
+| `rule` | a constraint or decision that governs how work is done here | the user only |
+| `preference` | how this person wants work or communication done; private by default | the user only |
+
+A `rule` or a `preference` is stored only when the user said it in a `<user>`
+line. The prompt refuses one from an `<agent>` or `<agent-result>` line, from a
+tool result, or from what the assistant concluded: an agent that works out how
+things are done here has made a finding, and is filed as one or as nothing.
+`shoulderd fact add` is the one way past that: what reaches it is taken as the
+person's own typing and stored under the category it names, so an agent that
+runs the command from a shell stores whatever it asked for.
+That vocabulary is closed, and anything outside it is dropped rather than
+passed through: shoulder-daemon can only recall on categories it knows, and it
+will not hand a backend a value whose treatment it cannot see. The names the
+set had before - `decision`, `constraint` and `correction` are now `rule`,
+`structure` and `reference` are now `fact` - are still accepted from a model, a
+`fact add` and every record already stored, and come back under the current
+name. `supersedes` names the id of a stored fact this one replaces, and is
+honoured only when that fact sits in the same scope and project as this one. A
+correction crossing that line is not a correction.
 
 **`scope`** is required on every fact and is either `local` or `global`. Local
 means it is about this codebase and is noise everywhere else; global means it is

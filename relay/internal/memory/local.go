@@ -17,6 +17,7 @@ import (
 	"time"
 	"unicode"
 
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/facts"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/scope"
 )
 
@@ -866,11 +867,13 @@ func storedProject(r Record) string {
 }
 
 // readable is a record as a caller gets it: the project it asked about, rather
-// than the key that is stored, when it named one.
+// than the key that is stored, when it named one, and the category under its
+// current name, whatever name the file was written with.
 func readable(r Record, q Query) Record {
 	if q.Project != "" && r.Scope == scope.Local {
 		r.Project = q.Project
 	}
+	r.Category = facts.CurrentName(r.Category)
 	return r
 }
 

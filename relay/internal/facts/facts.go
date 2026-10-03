@@ -171,25 +171,67 @@ var stop = map[string]bool{
 // here, where the model's output can still be inspected, because a category is
 // only worth storing if it still means the same thing on the way out, and a
 // store handed a word it does not know is free to keep or rewrite it.
+//
+// Two of the four are split by who may state them rather than by what they
+// say, which is the axis an agent-driven session needs: a subagent that
+// decides "tests here use the standard library" has made a finding, and the
+// same sentence from the person is a rule.
 var Categories = map[string]bool{
-	"decision":   true,
-	"constraint": true,
+	// finding: something this session established by looking - a bug located,
+	// the state of a file or an environment, a measurement.
+	"finding": true,
+	// fact: a durable truth about the project or the machine - how something
+	// is structured, what a command does, where things live.
+	"fact": true,
+	// rule: a constraint or decision that governs how work is done here.
+	"rule": true,
+	// preference: how this person wants work or communication done.
 	"preference": true,
-	"correction": true,
-	"structure":  true,
-	"reference":  true,
+}
+
+// legacyCategories are the names stores were given before the set above and
+// still hold. They are accepted on the way in and mapped forward, never
+// written back, so a file that mixes both generations reads as one.
+var legacyCategories = map[string]string{
+	"decision":   "rule",
+	"constraint": "rule",
+	"correction": "rule",
+	"structure":  "fact",
+	"reference":  "fact",
 }
 
 // Private reports whether a category describes the person rather than the
 // code. A preference is theirs: it belongs in the file a backend keeps out of
 // the repository, not in the conventions the team commits.
-func Private(category string) bool { return category == "preference" }
+func Private(category string) bool { return CurrentName(category) == "preference" }
 
-// NormaliseCategory returns the category if it is valid, and false otherwise.
-// An invalid category is dropped rather than passed through, so the backend
-// stores no category instead of a wrong one.
+// UserOnly reports whether a category may only be stated by the person. A rule
+// governs how work is done here and a preference is how they want it done;
+// an agent that reaches either has concluded it, and a conclusion is a finding
+// however much it is phrased as a rule.
+func UserOnly(category string) bool {
+	c := CurrentName(category)
+	return c == "rule" || c == "preference"
+}
+
+// CurrentName returns the current name of a category. A legacy name maps
+// forward; anything else, valid or not, is returned as given, so a read path
+// can modernise what a store holds without deciding what to do with a value
+// the set never contained.
+func CurrentName(category string) string {
+	c := strings.ToLower(strings.TrimSpace(category))
+	if now, ok := legacyCategories[c]; ok {
+		return now
+	}
+	return c
+}
+
+// NormaliseCategory returns the current name of the category if it is valid,
+// and false otherwise. A legacy name is valid and comes back as the name it
+// maps to. An invalid category is dropped rather than passed through, so the
+// backend stores no category instead of a wrong one.
 func NormaliseCategory(c string) (string, bool) {
-	c = strings.ToLower(strings.TrimSpace(c))
+	c = CurrentName(c)
 	if c == "" {
 		return "", true
 	}

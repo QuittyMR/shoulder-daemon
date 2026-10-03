@@ -106,7 +106,7 @@ func TestSearchDropsSupersededFacts(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("expected the superseded fact to be dropped, got %+v", got)
 	}
-	if got[0].ID != "new" || got[0].Category != "decision" || got[0].Score != 0.7 {
+	if got[0].ID != "new" || got[0].Category != "rule" || got[0].Score != 0.7 {
 		t.Fatalf("wrong record survived: %+v", got[0])
 	}
 	if got[0].CreatedAt.IsZero() {

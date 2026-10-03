@@ -138,7 +138,8 @@ func TestEveryRenderingKeepsWhatTheParserNeeds(t *testing.T) {
 		`"supersedes"`,
 		`"scope"`,
 		`"private"`,
-		"decision | constraint | preference | correction | structure | reference",
+		`"category": one of four.`,
+		"finding - ", "fact - ", "rule - ", "preference - ",
 		"local for this codebase, global for the person",
 		"teammate cloning the repository must not receive",
 	}

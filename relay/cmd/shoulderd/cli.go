@@ -149,8 +149,9 @@ Store a fact exactly as typed, without asking a model about it.
 
   --local        this project only          } exactly one is required;
   --global       you, in every project      } there is no default
-  --category C   one of: constraint, correction, decision, preference,
-                 reference, structure
+  --category C   one of: finding (what a session established by looking),
+                 fact (how the project or machine is), rule (how work is
+                 done here), preference (how you want it done; private)
   --tag T        a tag to attach; repeatable
   --private      about this machine, an account, a path or a habit of yours,
                  so a backend that files facts with the checkout keeps it out
@@ -171,8 +172,9 @@ Replace a stored fact with a corrected one.
   --local        this project only          } exactly one is required;
   --global       you, in every project      } there is no default
   --id ID        the fact this replaces; required
-  --category C   one of: constraint, correction, decision, preference,
-                 reference, structure
+  --category C   one of: finding (what a session established by looking),
+                 fact (how the project or machine is), rule (how work is
+                 done here), preference (how you want it done; private)
   --tag T        a tag to attach; repeatable
   --private      keep this out of what the team commits; the flag only ever
                  adds, so a correction of an already private fact stays
@@ -469,7 +471,7 @@ func (c *cli) factWrite(verb, method string, args []string) int {
 	addr := bindAddr(fs)
 	var sf scopeFlags
 	sf.bind(fs)
-	category := fs.String("category", "", "one of: decision, constraint, preference, correction, structure, reference")
+	category := fs.String("category", "", "one of: finding, fact, rule, preference")
 	var tags stringList
 	fs.Var(&tags, "tag", "tag to attach; repeatable")
 	private := fs.Bool("private", false, "about this machine, an account, a path or a habit of yours")

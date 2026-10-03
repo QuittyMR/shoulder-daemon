@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/facts"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/scope"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/textutil"
 )
@@ -218,10 +219,13 @@ func (r restMemory) supersededBy() string {
 
 // toRecord rebuilds a Record, splitting shoulder-daemon's placement tags back
 // out of the user-visible ones. project is the path the query asked about,
-// which the tags cannot carry: they hold its key, not the directory.
+// which the tags cannot carry: they hold its key, not the directory. The
+// memory type comes back under its current category name: the server holds
+// whatever it was given when the record was written, and that may be a name
+// the set has since dropped.
 func (r restMemory) toRecord(score float64, project string) Record {
 	rec := Record{
-		ID: r.ContentHash, Content: r.Content, Category: r.MemoryType,
+		ID: r.ContentHash, Content: r.Content, Category: facts.CurrentName(r.MemoryType),
 		Score: score, Project: project,
 	}
 	rec.Private, _ = r.Metadata["private"].(bool)

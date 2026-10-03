@@ -92,14 +92,19 @@ func TestDocsConformance(t *testing.T) {
 func TestDocsPlacesEachCategoryInItsFile(t *testing.T) {
 	d, base := newDocs(t)
 	const project = "/srv/app"
-	for _, place := range []struct{ category, file, content string }{
-		{"structure", "ARCHITECTURE.shoulder.md", "the api is versioned in the path"},
-		{"decision", "DECISIONS.shoulder.md", "releases are cut on the last Thursday of the month"},
-		{"constraint", "CONVENTIONS.shoulder.md", "the integration tests need a live Postgres"},
-		{"preference", "CONVENTIONS.shoulder.md", "prefers terse answers with no preamble"},
-		{"correction", "CONVENTIONS.shoulder.md", "the main branch is called master, not main"},
-		{"reference", "REFERENCES.shoulder.md", "the release rota is kept in docs/rota.md"},
-		{"", "NOTES.shoulder.md", "the office cat is called Biscuit"},
+	for _, place := range []struct{ category, file, written, content string }{
+		{"finding", "FINDINGS.shoulder.md", "finding", "the retry loop re-sends on a 401"},
+		{"fact", "FACTS.shoulder.md", "fact", "the api is versioned in the path"},
+		{"rule", "RULES.shoulder.md", "rule", "releases are cut on the last Thursday of the month"},
+		{"preference", "USER.shoulder.md", "preference", "prefers terse answers with no preamble"},
+		// The names the set had before file where their current names do, and
+		// are written under the current name.
+		{"structure", "FACTS.shoulder.md", "fact", "the migrations live in db/"},
+		{"reference", "FACTS.shoulder.md", "fact", "the release rota is kept in docs/rota.md"},
+		{"decision", "RULES.shoulder.md", "rule", "deploys go to eu-west-2"},
+		{"constraint", "RULES.shoulder.md", "rule", "the integration tests need a live Postgres"},
+		{"correction", "RULES.shoulder.md", "rule", "the main branch is called master"},
+		{"", "NOTES.shoulder.md", "", "the office cat is called Biscuit"},
 	} {
 		category, file, content := place.category, place.file, place.content
 		docsStore(t, d, Record{Content: content, Category: category, Scope: scope.Local, Project: project})
@@ -107,13 +112,16 @@ func TestDocsPlacesEachCategoryInItsFile(t *testing.T) {
 		if !strings.Contains(got, "- "+content+" <!-- sd id="+contentID(content)) {
 			t.Errorf("category %q did not land in %s as a bullet:\n%s", category, file, got)
 		}
+		if place.written != "" && !strings.Contains(got, "id="+contentID(content)+" category="+place.written+" ") {
+			t.Errorf("category %q was not written as %q in %s:\n%s", category, place.written, file, got)
+		}
 	}
 	// A private record goes to the person's file whatever it is about.
-	docsStore(t, d, Record{Content: "prefers rebasing over merging", Category: "structure", Private: true, Scope: scope.Local, Project: project})
+	docsStore(t, d, Record{Content: "prefers rebasing over merging", Category: "fact", Private: true, Scope: scope.Local, Project: project})
 	if got := readFile(t, filepath.Join(docsDirOf(base, project), "USER.shoulder.md")); !strings.Contains(got, "prefers rebasing") {
 		t.Errorf("the private record is not in USER.shoulder.md:\n%s", got)
 	}
-	if got := readFile(t, filepath.Join(docsDirOf(base, project), "ARCHITECTURE.shoulder.md")); strings.Contains(got, "prefers rebasing") {
+	if got := readFile(t, filepath.Join(docsDirOf(base, project), "FACTS.shoulder.md")); strings.Contains(got, "prefers rebasing") {
 		t.Error("the private record was also filed by category")
 	}
 
@@ -128,8 +136,8 @@ func TestDocsPlacesEachCategoryInItsFile(t *testing.T) {
 func TestDocsANewFileOpensWithItsTitleAndANote(t *testing.T) {
 	d, base := newDocs(t)
 	docsStore(t, d, Record{Content: "the api is versioned in the path", Category: "structure", Scope: scope.Local, Project: "/srv/app"})
-	lines := strings.Split(readFile(t, filepath.Join(docsDirOf(base, "/srv/app"), "ARCHITECTURE.shoulder.md")), "\n")
-	if lines[0] != "# Architecture" {
+	lines := strings.Split(readFile(t, filepath.Join(docsDirOf(base, "/srv/app"), "FACTS.shoulder.md")), "\n")
+	if lines[0] != "# Facts" {
 		t.Errorf("first line %q, want the title", lines[0])
 	}
 	if !strings.Contains(strings.Join(lines[1:4], "\n"), "shoulder-daemon") {
@@ -144,18 +152,24 @@ func TestDocsWritesTheLineFormat(t *testing.T) {
 	d, base := newDocs(t)
 	at := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
 	docsStore(t, d, Record{
-		Content: "releases ship\non Fridays", Category: "decision", Tags: []string{"release", "cadence"},
+		Content: "releases ship\non Fridays", Category: "rule", Tags: []string{"release", "cadence"},
 		CreatedAt: at, Scope: scope.Global,
 	})
-	got := readFile(t, filepath.Join(docsDirOf(base, ""), "DECISIONS.shoulder.md"))
+	got := readFile(t, filepath.Join(docsDirOf(base, ""), "RULES.shoulder.md"))
 	want := "- releases ship on Fridays <!-- sd id=" + contentID("releases ship on Fridays") +
-		" category=decision tags=release,cadence at=2026-03-04T05:06:07Z -->"
+		" category=rule tags=release,cadence at=2026-03-04T05:06:07Z -->"
 	if !strings.Contains(got, want+"\n") {
 		t.Fatalf("line not written as specified:\n%s\nwant\n%s", got, want)
 	}
 	rec, ok := parseDocsLine(want)
-	if !ok || rec.Category != "decision" || len(rec.Tags) != 2 || !rec.CreatedAt.Equal(at) {
+	if !ok || rec.Category != "rule" || len(rec.Tags) != 2 || !rec.CreatedAt.Equal(at) {
 		t.Fatalf("the line does not read back: %+v", rec)
+	}
+	// A line written under the old set reads back under the current one, so
+	// nothing above the parser has to know there were two.
+	legacy := strings.Replace(want, "category=rule", "category=decision", 1)
+	if rec, ok := parseDocsLine(legacy); !ok || rec.Category != "rule" {
+		t.Fatalf("a legacy category did not map forward on read: %+v", rec)
 	}
 }
 
@@ -240,7 +254,7 @@ func TestDocsSupersedeStaysInFileAndPosition(t *testing.T) {
 	for _, f := range facts {
 		ids = append(ids, docsStore(t, d, Record{Content: f, Category: "structure", Scope: scope.Local, Project: project}))
 	}
-	path := filepath.Join(docsDirOf(base, project), "ARCHITECTURE.shoulder.md")
+	path := filepath.Join(docsDirOf(base, project), "FACTS.shoulder.md")
 	before := strings.Split(readFile(t, path), "\n")
 	at := -1
 	for i, line := range before {
@@ -254,7 +268,7 @@ func TestDocsSupersedeStaysInFileAndPosition(t *testing.T) {
 
 	// A correction that changes the category would file elsewhere if it were
 	// a new fact; a replacement is not one.
-	replacement := Record{Content: "the catalogue service listens on port 8092", Category: "decision", Scope: scope.Local, Project: project}
+	replacement := Record{Content: "the catalogue service listens on port 8092", Category: "rule", Scope: scope.Local, Project: project}
 	newID, err := d.Supersede(ctx, ids[1], replacement)
 	if err != nil {
 		t.Fatalf("supersede: %v", err)
@@ -265,7 +279,7 @@ func TestDocsSupersedeStaysInFileAndPosition(t *testing.T) {
 	}
 	for i := range before {
 		if i == at {
-			if !strings.Contains(after[i], newID) || !strings.Contains(after[i], "port 8092") || !strings.Contains(after[i], "category=decision") {
+			if !strings.Contains(after[i], newID) || !strings.Contains(after[i], "port 8092") || !strings.Contains(after[i], "category=rule") {
 				t.Errorf("line %d is not the replacement: %q", i, after[i])
 			}
 			continue
@@ -274,12 +288,12 @@ func TestDocsSupersedeStaysInFileAndPosition(t *testing.T) {
 			t.Errorf("line %d changed on a supersede of another record: %q -> %q", i, before[i], after[i])
 		}
 	}
-	if _, err := os.Stat(filepath.Join(docsDirOf(base, project), "DECISIONS.shoulder.md")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(docsDirOf(base, project), "RULES.shoulder.md")); !errors.Is(err, os.ErrNotExist) {
 		t.Error("the replacement was moved to the file its category names")
 	}
 
 	// A replacement already stored elsewhere would leave two lines with one id.
-	if _, err := d.Supersede(ctx, ids[0], Record{Content: facts[2], Category: "structure", Scope: scope.Local, Project: project}); !errors.Is(err, ErrDuplicateExact) {
+	if _, err := d.Supersede(ctx, ids[0], Record{Content: facts[2], Category: "fact", Scope: scope.Local, Project: project}); !errors.Is(err, ErrDuplicateExact) {
 		t.Errorf("got %v, want ErrDuplicateExact", err)
 	}
 }
@@ -433,12 +447,12 @@ func TestDocsListSeesAnExternalEdit(t *testing.T) {
 	d, base := newDocs(t)
 	ctx := context.Background()
 	const project = "/srv/app"
-	first := docsStore(t, d, Record{Content: "the main branch is called master", Category: "decision", Scope: scope.Local, Project: project})
+	first := docsStore(t, d, Record{Content: "the main branch is called master", Category: "rule", Scope: scope.Local, Project: project})
 	if got, _ := d.List(ctx, Query{Scope: scope.Local, Project: project}); len(got) != 1 {
 		t.Fatalf("list before the edit: %+v", got)
 	}
 
-	path := filepath.Join(docsDirOf(base, project), "DECISIONS.shoulder.md")
+	path := filepath.Join(docsDirOf(base, project), "RULES.shoulder.md")
 	const added = "tags are cut from master only"
 	body := strings.Replace(readFile(t, path), "- the main branch", "- (see git history) the main branch", 1) +
 		"- " + added + " <!-- sd id=" + contentID(added) + " category=decision at=2026-05-05T00:00:00Z -->\n"
@@ -452,8 +466,8 @@ func TestDocsListSeesAnExternalEdit(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("the edit was not seen: %+v", got)
 	}
-	if _, ok := conformanceFind(got, added); !ok {
-		t.Errorf("the bullet added by hand is not listed: %+v", got)
+	if rec, ok := conformanceFind(got, added); !ok || rec.Category != "rule" {
+		t.Errorf("the bullet added by hand under the old category name is not listed as a rule: %+v", got)
 	}
 	if rec, ok := conformanceFind(got, "(see git history) the main branch is called master"); !ok || rec.ID != first {
 		t.Errorf("the reworded record lost its identity: %+v", got)
@@ -467,11 +481,62 @@ func TestDocsListSeesAnExternalEdit(t *testing.T) {
 	}
 }
 
+// A store written under the old category set has files the current set never
+// creates. They are still the store: every record in them is listed under its
+// current category, and a correction lands in the file the record is in, so a
+// checkout with a year of DECISIONS.shoulder.md behind it keeps that history
+// in place instead of forking into RULES.shoulder.md.
+func TestDocsReadsTheFilesTheOldCategorySetCreated(t *testing.T) {
+	d, base := newDocs(t)
+	ctx := context.Background()
+	const project = "/srv/app"
+	dir := docsDirOf(base, project)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const decided = "deploys go to eu-west-2"
+	const laidOut = "the migrations live in db/"
+	write := func(name, category, content string) string {
+		path := filepath.Join(dir, name)
+		body := "# Old\n\n- " + content + " <!-- sd id=" + contentID(content) + " category=" + category + " at=2025-01-02T03:04:05Z -->\n"
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	decisions := write("DECISIONS.shoulder.md", "decision", decided)
+	write("ARCHITECTURE.shoulder.md", "structure", laidOut)
+
+	got, err := d.List(ctx, Query{Scope: scope.Local, Project: project})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("the legacy files were not read: %+v", got)
+	}
+	for content, want := range map[string]string{decided: "rule", laidOut: "fact"} {
+		if rec, ok := conformanceFind(got, content); !ok || rec.Category != want {
+			t.Errorf("%q should list as a %s: %+v", content, want, got)
+		}
+	}
+
+	const corrected = "deploys go to eu-central-1"
+	if _, err := d.Supersede(ctx, contentID(decided), Record{Content: corrected, Category: "rule", Scope: scope.Local, Project: project}); err != nil {
+		t.Fatalf("supersede: %v", err)
+	}
+	if body := readFile(t, decisions); !strings.Contains(body, "- "+corrected+" <!-- sd id="+contentID(corrected)+" category=rule ") {
+		t.Errorf("the correction did not land in the legacy file under the current name:\n%s", body)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "RULES.shoulder.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Error("the correction forked into RULES.shoulder.md")
+	}
+}
+
 func TestDocsForgetRemovesTheLineAndKeepsTheFile(t *testing.T) {
 	d, base := newDocs(t)
 	ctx := context.Background()
 	id := docsStore(t, d, Record{Content: "prefers terse answers", Category: "preference", Scope: scope.Global})
-	path := filepath.Join(docsDirOf(base, ""), "CONVENTIONS.shoulder.md")
+	path := filepath.Join(docsDirOf(base, ""), "USER.shoulder.md")
 	if err := d.Forget(ctx, id, Query{Scope: scope.Global}); err != nil {
 		t.Fatalf("forget: %v", err)
 	}
@@ -479,7 +544,7 @@ func TestDocsForgetRemovesTheLineAndKeepsTheFile(t *testing.T) {
 	if strings.Contains(got, id) {
 		t.Errorf("the record is still in the file:\n%s", got)
 	}
-	if !strings.HasPrefix(got, "# Conventions\n") {
+	if !strings.HasPrefix(got, "# User notes\n") {
 		t.Errorf("the file lost its header, or was deleted:\n%s", got)
 	}
 }
@@ -500,8 +565,8 @@ func TestDocsFileModes(t *testing.T) {
 	docsStore(t, d, Record{Content: "the api is versioned in the path", Category: "structure", Scope: scope.Local, Project: "/srv/app"})
 	docsStore(t, d, Record{Content: "prefers terse answers", Category: "preference", Scope: scope.Global})
 	for path, want := range map[string]os.FileMode{
-		filepath.Join(docsDirOf(base, "/srv/app"), "ARCHITECTURE.shoulder.md"): 0o644,
-		filepath.Join(docsDirOf(base, ""), "CONVENTIONS.shoulder.md"):          0o600,
+		filepath.Join(docsDirOf(base, "/srv/app"), "FACTS.shoulder.md"): 0o644,
+		filepath.Join(docsDirOf(base, ""), "USER.shoulder.md"):          0o600,
 	} {
 		info, err := os.Stat(path)
 		if err != nil {
@@ -646,7 +711,7 @@ func TestDocsDefaultRootsFindTheWorktreeAndAnExistingDocDir(t *testing.T) {
 	t.Cleanup(func() { _ = d.Close() })
 	docsStore(t, d, Record{Content: "the api is versioned in the path", Category: "structure", Scope: scope.Local, Project: inside})
 	docsStore(t, d, Record{Content: "prefers rebasing", Category: "preference", Private: true, Scope: scope.Local, Project: inside})
-	if !strings.Contains(readFile(t, filepath.Join(repo, "doc", "ARCHITECTURE.shoulder.md")), "versioned") {
+	if !strings.Contains(readFile(t, filepath.Join(repo, "doc", "FACTS.shoulder.md")), "versioned") {
 		t.Error("the existing doc/ directory was not reused")
 	}
 	if _, err := os.Stat(filepath.Join(repo, "docs")); !errors.Is(err, os.ErrNotExist) {
@@ -656,7 +721,7 @@ func TestDocsDefaultRootsFindTheWorktreeAndAnExistingDocDir(t *testing.T) {
 		t.Errorf(".gitignore is %q; the line must be relative to the worktree, whatever the docs directory is", got)
 	}
 	docsStore(t, d, Record{Content: "prefers terse answers", Category: "preference", Scope: scope.Global})
-	if _, err := os.Stat(filepath.Join(base, "global", "CONVENTIONS.shoulder.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(base, "global", "USER.shoulder.md")); err != nil {
 		t.Errorf("the global fact did not land in GlobalDir: %v", err)
 	}
 
@@ -736,7 +801,7 @@ func TestDocsResolvesTheCheckoutFromTheDirectoryAndRemembersIt(t *testing.T) {
 		Content: "the api is versioned in the path", Category: "structure",
 		Scope: scope.Local, Project: project, Dir: inside,
 	})
-	if !strings.Contains(readFile(t, filepath.Join(repo, "docs", "ARCHITECTURE.shoulder.md")), "versioned") {
+	if !strings.Contains(readFile(t, filepath.Join(repo, "docs", "FACTS.shoulder.md")), "versioned") {
 		t.Fatal("the fact did not land in the worktree's docs directory")
 	}
 
@@ -749,7 +814,7 @@ func TestDocsResolvesTheCheckoutFromTheDirectoryAndRemembersIt(t *testing.T) {
 	if err := d.Forget(ctx, id, Query{Scope: scope.Local, Project: project}); err != nil {
 		t.Fatalf("forget by identity alone: %v", err)
 	}
-	if got := readFile(t, filepath.Join(repo, "docs", "ARCHITECTURE.shoulder.md")); strings.Contains(got, "versioned") {
+	if got := readFile(t, filepath.Join(repo, "docs", "FACTS.shoulder.md")); strings.Contains(got, "versioned") {
 		t.Fatal("the forgotten fact is still in the file")
 	}
 
@@ -761,7 +826,7 @@ func TestDocsResolvesTheCheckoutFromTheDirectoryAndRemembersIt(t *testing.T) {
 	if _, err := fresh.Supersede(ctx, kept, corrected); err != nil {
 		t.Fatalf("a supersede with the directory on a fresh store was refused: %v", err)
 	}
-	if got := readFile(t, filepath.Join(repo, "docs", "ARCHITECTURE.shoulder.md")); !strings.Contains(got, "header") || strings.Contains(got, "in the path") {
+	if got := readFile(t, filepath.Join(repo, "docs", "FACTS.shoulder.md")); !strings.Contains(got, "header") || strings.Contains(got, "in the path") {
 		t.Fatalf("the correction did not land in place:\n%s", got)
 	}
 
@@ -829,7 +894,7 @@ func TestDocsHonoursTheConfiguredDirectoryName(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = d.Close() })
 	docsStore(t, d, Record{Content: "the api is versioned in the path", Category: "structure", Scope: scope.Local, Project: repo, Dir: repo})
-	if _, err := os.Stat(filepath.Join(repo, "notes", "ARCHITECTURE.shoulder.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(repo, "notes", "FACTS.shoulder.md")); err != nil {
 		t.Fatalf("the configured name was not used: %v", err)
 	}
 	if dir, worktree := DocsDirFor(repo, "notes"); dir != filepath.Join(repo, "notes") || worktree != repo {
@@ -920,7 +985,7 @@ func TestDocsSupersedeMovesARecordThatChangedPrivacy(t *testing.T) {
 	repo := gitRepo(t)
 	d := newDocsIn(t, t.TempDir(), nil, repoRoots(repo, t.TempDir()))
 	ctx := context.Background()
-	arch := filepath.Join(repo, "docs", "ARCHITECTURE.shoulder.md")
+	arch := filepath.Join(repo, "docs", "FACTS.shoulder.md")
 	user := filepath.Join(repo, "docs", "USER.shoulder.md")
 
 	rec := Record{Content: "the integration tests need a live Postgres", Category: "structure", Scope: scope.Local, Project: repo}
@@ -1011,7 +1076,7 @@ func TestDocsReadsADirectoryWhosePathHoldsAGlobCharacter(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("supersede: %v", err)
 	}
-	if body := readFile(t, filepath.Join(docsDirOf(base, project), "ARCHITECTURE.shoulder.md")); strings.Contains(body, "bin/ship") {
+	if body := readFile(t, filepath.Join(docsDirOf(base, project), "FACTS.shoulder.md")); strings.Contains(body, "bin/ship") {
 		t.Fatalf("the superseded line is still in the file:\n%s", body)
 	}
 }
@@ -1135,7 +1200,7 @@ func TestDocsSupersedeStoresTheReplacementBeforeItRemovesTheOriginal(t *testing.
 	ctx := context.Background()
 	const project = "/repos/durable"
 	dir := docsDirOf(base, project)
-	arch := filepath.Join(dir, "ARCHITECTURE.shoulder.md")
+	arch := filepath.Join(dir, "FACTS.shoulder.md")
 	user := filepath.Join(dir, "USER.shoulder.md")
 
 	rec := Record{Content: "the integration tests need a live Postgres", Category: "structure", Scope: scope.Local, Project: project}

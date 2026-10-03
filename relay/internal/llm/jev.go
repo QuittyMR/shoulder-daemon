@@ -60,7 +60,7 @@ const (
 
 var actionCriteria = map[Action]string{
 	Nothing: "The turn neither establishes anything durable, nor contradicts a stored fact, nor makes one urgently relevant. This is the usual answer.",
-	Create:  "The turn establishes something durable that none of the stored facts records: a decision, a convention, a preference of the person, or a fact about the project that will still be true next week.",
+	Create:  "The turn establishes something durable that none of the stored facts records: a rule the user stated about how work is done here, a preference of theirs, a fact about the project or the machine that will still be true next week, or a finding the session made by looking.",
 	Update:  "The turn contradicts, corrects or refines one of the stored facts, so that stored fact is now wrong or incomplete and should be replaced.",
 	Inject:  "One of the stored facts bears directly on what the session is doing right now, and the session appears unaware of it or about to act against it, so it should be reminded of that fact.",
 }

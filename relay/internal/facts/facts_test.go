@@ -71,17 +71,65 @@ func TestReconcileSeparatesNegation(t *testing.T) {
 }
 
 func TestNormaliseCategory(t *testing.T) {
-	for _, c := range []string{"decision", "Constraint", " preference ", ""} {
-		if _, ok := NormaliseCategory(c); !ok {
-			t.Errorf("%q should be valid", c)
+	for in, want := range map[string]string{
+		"finding": "finding", "Fact": "fact", " rule ": "rule", "preference": "preference", "": "",
+		// The names stores were given before the set was redrawn still come in
+		// from the model, the CLI and every record already written, and each
+		// one has exactly one place in the new set.
+		"decision": "rule", "Constraint": "rule", "correction": "rule",
+		"structure": "fact", "reference": "fact", " PREFERENCE ": "preference",
+	} {
+		got, ok := NormaliseCategory(in)
+		if !ok || got != want {
+			t.Errorf("NormaliseCategory(%q) = %q ok=%v, want %q", in, got, ok, want)
 		}
 	}
 	// A word outside the set means nothing once it is stored, so it must be
 	// caught while the model's output can still be inspected.
-	for _, c := range []string{"observation", "note", "fact", "misc"} {
+	for _, c := range []string{"observation", "note", "convention", "misc"} {
 		got, ok := NormaliseCategory(c)
 		if ok || got != "" {
 			t.Errorf("%q should be rejected, got %q ok=%v", c, got, ok)
+		}
+	}
+}
+
+// Only the person may state a rule or a preference. The legacy names that
+// mapped into rule carry the same restriction, because a model still writing
+// "decision" is naming a rule.
+func TestUserOnlyIsRuleAndPreferenceUnderEitherName(t *testing.T) {
+	for _, c := range []string{"rule", "preference", "decision", "constraint", "correction", "Rule"} {
+		if !UserOnly(c) {
+			t.Errorf("UserOnly(%q) should be true", c)
+		}
+	}
+	for _, c := range []string{"finding", "fact", "structure", "reference", "", "observation"} {
+		if UserOnly(c) {
+			t.Errorf("UserOnly(%q) should be false", c)
+		}
+	}
+}
+
+func TestPrivateIsPreferenceAlone(t *testing.T) {
+	if !Private("preference") || !Private(" Preference ") {
+		t.Error("a preference is private")
+	}
+	for _, c := range []string{"rule", "fact", "finding", "decision", "structure", ""} {
+		if Private(c) {
+			t.Errorf("Private(%q) should be false", c)
+		}
+	}
+}
+
+// CurrentName is what a read path uses: it modernises a stored legacy name
+// and leaves a value it has never heard of alone, so a foreign store's own
+// vocabulary survives a round trip rather than being blanked.
+func TestCurrentNameLeavesUnknownValuesAlone(t *testing.T) {
+	for in, want := range map[string]string{
+		"decision": "rule", "structure": "fact", "fact": "fact", "convention": "convention", "": "",
+	} {
+		if got := CurrentName(in); got != want {
+			t.Errorf("CurrentName(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -248,7 +296,7 @@ func TestReconcileKeepsPrivacyWhenItDropsTheRestatement(t *testing.T) {
 	}
 }
 
-// The agent that called record_fact was told the rule in those words and said
+// The person who typed the fact was told the rule in those words and said
 // what it was. A deduced paraphrase does not get to overrule that, in either
 // direction.
 func TestReconcilePrivacyOfAnExplicitFactIsItsOwn(t *testing.T) {

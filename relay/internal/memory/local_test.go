@@ -60,7 +60,7 @@ func TestLocalKeepsFactsAcrossARestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "facts.json")
 	first := openLocal(t, path, vectors.Embedder{})
 	const fact = "the integration tests need a live Postgres"
-	id, err := first.Store(ctx, Record{Content: fact, Category: "structure", Scope: scope.Local, Project: "/tmp/project"})
+	id, err := first.Store(ctx, Record{Content: fact, Category: "fact", Scope: scope.Local, Project: "/tmp/project"})
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestLocalKeepsFactsAcrossARestart(t *testing.T) {
 	if len(got) != 1 || got[0].Content != fact {
 		t.Fatalf("the facts did not survive the restart: %+v", got)
 	}
-	if got[0].ID != id || got[0].Category != "structure" {
+	if got[0].ID != id || got[0].Category != "fact" {
 		t.Errorf("the record came back different: %+v", got[0])
 	}
 }
@@ -1002,5 +1002,57 @@ func TestLocalRefusesTheDenialOfAStoredClaim(t *testing.T) {
 				t.Fatalf("collided with %q, want the contradicted claim %q", dup.Collided, id)
 			}
 		})
+	}
+}
+
+// A file an older daemon wrote holds the categories it knew; every read
+// returns them under the names in use now.
+func TestLocalReadsLegacyCategoriesUnderTheirCurrentNames(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "facts.json")
+	l := openLocal(t, path, nil)
+	for content, category := range map[string]string{
+		"the main branch is release/stable": "decision",
+		"the pool lives in internal/db":     "structure",
+		"answers are kept terse":            "preference",
+	} {
+		if _, err := l.Store(ctx, Record{Content: content, Category: category, Scope: scope.Global}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"decision"`) {
+		t.Fatalf("the test must read a file that holds the old name, got %s", raw)
+	}
+
+	l = openLocal(t, path, nil)
+	want := map[string]string{
+		"the main branch is release/stable": "rule",
+		"the pool lives in internal/db":     "fact",
+		"answers are kept terse":            "preference",
+	}
+	listed, err := l.List(ctx, Query{Scope: scope.Global, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found, err := l.Search(ctx, Query{Text: "where is the main branch and the pool", Scope: scope.Global, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, recs := range map[string][]Record{"List": listed, "Search": found} {
+		if len(recs) == 0 {
+			t.Fatalf("%s returned nothing", name)
+		}
+		for _, r := range recs {
+			if r.Category != want[r.Content] {
+				t.Errorf("%s returned %q as %q, want %q", name, r.Content, r.Category, want[r.Content])
+			}
+		}
 	}
 }

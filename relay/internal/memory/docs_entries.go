@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/facts"
 )
 
 // docsSuffix marks the files the connector owns. Nothing else under a docs
@@ -16,22 +18,27 @@ const docsSuffix = ".shoulder.md"
 
 // docsFileFor is the whole of the placement rule. It is a table rather than a
 // model because a person reading the directory has to be able to predict where
-// a fact went, and because the six categories were closed upstream for exactly
+// a fact went, and because the categories were closed upstream for exactly
 // this: a category is only worth having if it still means the same thing on
 // the way out.
+//
+// A legacy name files where its current name does, so a store that was written
+// under the old set keeps growing in the files it has rather than forking. The
+// files the old set created are still read: the connector lists by suffix, and
+// a supersede lands in place whatever the file is called.
 func docsFileFor(r Record) string {
 	if r.Private {
 		return "USER" + docsSuffix
 	}
-	switch r.Category {
-	case "structure":
-		return "ARCHITECTURE" + docsSuffix
-	case "decision":
-		return "DECISIONS" + docsSuffix
-	case "constraint", "preference", "correction":
-		return "CONVENTIONS" + docsSuffix
-	case "reference":
-		return "REFERENCES" + docsSuffix
+	switch facts.CurrentName(r.Category) {
+	case "finding":
+		return "FINDINGS" + docsSuffix
+	case "fact":
+		return "FACTS" + docsSuffix
+	case "rule":
+		return "RULES" + docsSuffix
+	case "preference":
+		return "USER" + docsSuffix
 	}
 	return "NOTES" + docsSuffix
 }
@@ -41,12 +48,11 @@ func docsFileFor(r Record) string {
 // bullets are safe to edit by hand.
 func docsHeader(name string) string {
 	title := map[string]string{
-		"ARCHITECTURE": "Architecture",
-		"DECISIONS":    "Decisions",
-		"CONVENTIONS":  "Conventions",
-		"REFERENCES":   "References",
-		"NOTES":        "Notes",
-		"USER":         "User notes",
+		"FINDINGS": "Findings",
+		"FACTS":    "Facts",
+		"RULES":    "Rules",
+		"NOTES":    "Notes",
+		"USER":     "User notes",
 	}[strings.TrimSuffix(name, docsSuffix)]
 	if title == "" {
 		title = strings.TrimSuffix(name, docsSuffix)
@@ -83,7 +89,9 @@ func docsSentence(content string) string {
 	return strings.Join(strings.Fields(content), " ")
 }
 
-// formatDocsLine renders a record as a bullet.
+// formatDocsLine renders a record as a bullet. The category is written under
+// its current name: a file is read by people as well as by the daemon, and one
+// that mixed two generations of names would make the reader learn both.
 func formatDocsLine(r Record) string {
 	var b strings.Builder
 	b.WriteString("- ")
@@ -91,8 +99,8 @@ func formatDocsLine(r Record) string {
 	b.WriteString(" ")
 	b.WriteString(docsMarkOpen)
 	b.WriteString("id=" + r.ID)
-	if r.Category != "" {
-		b.WriteString(" category=" + url.QueryEscape(r.Category))
+	if c := facts.CurrentName(r.Category); c != "" {
+		b.WriteString(" category=" + url.QueryEscape(c))
 	}
 	if len(r.Tags) > 0 {
 		escaped := make([]string, len(r.Tags))
@@ -134,7 +142,7 @@ func parseDocsLine(line string) (Record, bool) {
 		case "id":
 			r.ID = value
 		case "category":
-			r.Category = unescapeDocs(value)
+			r.Category = facts.CurrentName(unescapeDocs(value))
 		case "tags":
 			for _, t := range strings.Split(value, ",") {
 				if t = unescapeDocs(t); t != "" {
