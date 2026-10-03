@@ -53,7 +53,12 @@ func TestParseEnvReadsTheFileAsComposeDoes(t *testing.T) {
 // which makes a missing python-dotenv a failure there instead of a skip.
 func TestTheTableIsWhatPythonDotenvSays(t *testing.T) {
 	required := os.Getenv("SHOULDER_DOTENV_REQUIRED") != ""
-	if err := exec.Command("python3", "-c", "import dotenv").Run(); err != nil {
+	// Where python-dotenv lives is asked for with the real environment and
+	// handed on, because a per-user install is found through HOME and the
+	// table is taken with HOME set to something else.
+	site, err := exec.Command("python3", "-c",
+		"import dotenv, os; print(os.path.dirname(os.path.dirname(dotenv.__file__)))").Output()
+	if err != nil {
 		if required {
 			t.Fatalf("python-dotenv is not importable: %v", err)
 		}
@@ -77,12 +82,16 @@ for src in json.load(sys.stdin):
     out.append({k: v for k, v in vals.items() if v is not None})
 json.dump(out, sys.stdout)
 `)
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=/home/u", "EMPTY="}
+	cmd.Env = []string{
+		"PATH=" + os.Getenv("PATH"), "HOME=/home/u", "EMPTY=",
+		"PYTHONPATH=" + strings.TrimSpace(string(site)),
+	}
 	cmd.Stdin = strings.NewReader(string(payload))
-	cmd.Stderr = nil
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
 	raw, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("python-dotenv: %v", err)
+		t.Fatalf("python-dotenv: %v\n%s", err, stderr.String())
 	}
 	var got []map[string]string
 	if err := json.Unmarshal(raw, &got); err != nil {
