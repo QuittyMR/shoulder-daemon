@@ -315,7 +315,10 @@ func TestLocalIgnoresVectorsFromAnotherModel(t *testing.T) {
 		t.Fatalf("store: %v", err)
 	}
 
-	second := openLocal(t, path, stubEmbedder{id: "stub-v2"})
+	// The pass behind the store is held until the search has run, so the
+	// search is the one against the old model's vector.
+	emb := settling{Embedder: stubEmbedder{id: "stub-v2"}, settled: make(chan struct{})}
+	second := openLocal(t, path, emb)
 	got, err := second.Search(ctx, Query{Text: "what is the deploy target", Limit: 5, Scope: scope.Global})
 	if err != nil {
 		t.Fatalf("search: %v", err)
@@ -326,8 +329,18 @@ func TestLocalIgnoresVectorsFromAnotherModel(t *testing.T) {
 		t.Fatalf("the record was lost when the model changed: %+v", got)
 	}
 	// The pass behind the store brings the vector up to the new model.
+	close(emb.settled)
 	waitForModel(t, second, got[0].ID, "stub-v2")
 }
+
+// settling is an embedder that settles when a test says so, which holds the
+// pass the store starts on opening until then.
+type settling struct {
+	Embedder
+	settled chan struct{}
+}
+
+func (s settling) Settled() <-chan struct{} { return s.settled }
 
 // An embedder that is down must not take the daemon's memory down with it.
 type brokenEmbedder struct{}
