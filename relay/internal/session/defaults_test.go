@@ -18,9 +18,15 @@ func TestARegistryWithNoCapGetsTheDefaultOne(t *testing.T) {
 // The outbox and the budget gate must agree about what has gone stale, so
 // Advice defers to the gate's rule rather than carrying its own.
 func TestAdviceExpiresByTheGatesRule(t *testing.T) {
-	a := Advice{Text: "x", CreatedTurn: 3, TTLTurns: 2}
+	a := Advice{Text: "x", CreatedTurn: 3, TTLTurns: 4}
 	if a.Expired(3) {
 		t.Fatal("advice created this turn is not stale")
+	}
+	if a.Expired(7) {
+		t.Fatal("advice is not stale while the count is within its TTL")
+	}
+	if !a.Expired(8) {
+		t.Fatal("advice is stale once the count has moved past its TTL")
 	}
 	if !a.Expired(100) {
 		t.Fatal("advice from ninety-seven turns ago is stale")

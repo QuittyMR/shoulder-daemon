@@ -72,6 +72,19 @@ Notable changes to shoulder-daemon. The format follows
 
 ### Changed
 
+- The session's counter, which advice is aged and budgeted in, advances on
+  every prompt of the user and on every answer end of the main thread, where
+  it advanced on the answer end alone; a subagent's prompt and stop still
+  leave it alone. Everything counted in it is doubled so that a session
+  behaves as before: the default of `BUDGET_MIN_TURN_GAP` is 6 where it was 3,
+  advice expires 4 counts after it was written where it was 2, and the
+  periodic tidy runs every 10 where it was 5. A `BUDGET_MIN_TURN_GAP` set in
+  an env file keeps its number and now spans half as much of the session:
+  double it to keep the gap it had. The tidy runs at the first answer end in
+  each span of 10, so a prompt whose answer was interrupted does not put it
+  off. A note delivered before the first answer ended did not open the gap;
+  it does now. A note written at an answer end is current for the next two
+  prompts, where it was three.
 - Every prompt and every answer end is consulted, the main thread's and a
   subagent's alike, and the consults of one session run concurrently. Before,
   one consult ran per session at a time and a prompt or an answer end that

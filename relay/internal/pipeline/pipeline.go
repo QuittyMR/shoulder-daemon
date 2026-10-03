@@ -244,14 +244,10 @@ func (p *Pipeline) Run(ctx context.Context) {
 			ask := askerOf(ev)
 			// Every few turns, not only at the end: a long session writes all
 			// day and would otherwise carry its own clutter into every recall
-			// until it closes. An agent's stop is not a turn of the session:
-			// Turn stands where the user's last turn end left it, and a tidy
-			// keyed on it would run once more for every agent that stops
-			// while it sits on a multiple.
-			if ev.Kind == session.KindTurnEnd && !ask.agent() {
-				if turn := p.Registry.Turn(ev.SessionID); turn > 0 && turn%consolidateEvery == 0 {
-					tidy(p.sessionSite([]session.Event{ev}))
-				}
+			// until it closes. It starts at the main thread's answer end, when
+			// what the answer established has been said.
+			if ev.Kind == session.KindTurnEnd && !ask.agent() && p.Registry.ConsolidationDue(ev.SessionID, consolidateEvery) {
+				tidy(p.sessionSite([]session.Event{ev}))
 			}
 			// Every prompt and every answer end is consulted, and consults
 			// of one session run side by side: a slow one delays nobody.
@@ -1147,6 +1143,10 @@ func mergeHits(searches []recallSearch, scopeIndex, limit int, seen map[string]b
 	return hits
 }
 
+// adviceTTL is how far the session's count may move past the one advice was
+// written at before the advice is stale: two prompts and their answers.
+const adviceTTL = 4
+
 // queueInjection sanitises the model's advice and queues it for the asker.
 // For a subagent the level is always action: it never submits a prompt, so
 // context queued at plan level would wait for a UserPromptSubmit that comes
@@ -1173,7 +1173,7 @@ func (p *Pipeline) queueInjection(sessionID string, turn uint64, ask asker, raw,
 		AgentType:   ask.agentType,
 		Text:        text,
 		CreatedTurn: turn,
-		TTLTurns:    2,
+		TTLTurns:    adviceTTL,
 		CreatedAt:   time.Now().UTC(),
 	}
 	if ask.agent() {

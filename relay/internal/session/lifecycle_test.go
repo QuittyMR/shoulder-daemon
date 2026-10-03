@@ -43,20 +43,69 @@ func TestDeliversMatchesLevelToKind(t *testing.T) {
 	}
 }
 
-func TestTurnCountsOnlyCompletedTurns(t *testing.T) {
+func TestTurnCountsPromptsAndAnswerEnds(t *testing.T) {
 	r := NewRegistry(10)
 	now := time.Now()
 	if got := r.Turn("nobody"); got != 0 {
-		t.Fatalf("an unknown session is at turn %d", got)
+		t.Fatalf("an unknown session is at %d", got)
 	}
 	seen(r, "s1", KindUserPrompt, now)
-	seen(r, "s1", KindToolCall, now)
-	if got := r.Turn("s1"); got != 0 {
-		t.Fatalf("turn %d before the turn ended", got)
+	if got := r.Turn("s1"); got != 1 {
+		t.Fatalf("%d after one prompt, want 1", got)
+	}
+	for _, kind := range []Kind{KindToolCall, KindToolResult, KindToolFailure, KindAssistantMessage, KindAgentStart, KindCompact} {
+		seen(r, "s1", kind, now)
+	}
+	if got := r.Turn("s1"); got != 1 {
+		t.Fatalf("%d after events that are neither a prompt nor an answer end, want 1", got)
 	}
 	seen(r, "s1", KindTurnEnd, now)
-	if got := r.Turn("s1"); got != 1 {
-		t.Fatalf("turn %d after one turn", got)
+	if got := r.Turn("s1"); got != 2 {
+		t.Fatalf("%d after a prompt and its answer, want 2", got)
+	}
+	// An interrupted answer has no end; the next prompt still counts.
+	seen(r, "s1", KindUserPrompt, now)
+	seen(r, "s1", KindUserPrompt, now)
+	if got := r.Turn("s1"); got != 4 {
+		t.Fatalf("%d after two more prompts, want 4", got)
+	}
+}
+
+// The periodic tidy is due once for every span of the count, wherever in the
+// span the asking happens, and an answer that never ended does not push it
+// off the multiples for good.
+func TestConsolidationIsDueOncePerSpanOfTheCount(t *testing.T) {
+	r := NewRegistry(10)
+	now := time.Now()
+	if r.ConsolidationDue("nobody", 4) {
+		t.Fatal("an unknown session is due a tidy")
+	}
+	seen(r, "s1", KindUserPrompt, now)
+	seen(r, "s1", KindUserPrompt, now)
+	seen(r, "s1", KindTurnEnd, now)
+	if r.ConsolidationDue("s1", 4) {
+		t.Fatal("due at 3 of 4")
+	}
+	seen(r, "s1", KindUserPrompt, now)
+	seen(r, "s1", KindTurnEnd, now)
+	if !r.ConsolidationDue("s1", 4) {
+		t.Fatal("not due at 5, the first answer end past 4")
+	}
+	if r.ConsolidationDue("s1", 4) {
+		t.Fatal("due twice in one span")
+	}
+	seen(r, "s1", KindUserPrompt, now)
+	seen(r, "s1", KindTurnEnd, now)
+	if r.ConsolidationDue("s1", 4) {
+		t.Fatal("due at 7, inside the span that already had its tidy")
+	}
+	seen(r, "s1", KindUserPrompt, now)
+	seen(r, "s1", KindTurnEnd, now)
+	if !r.ConsolidationDue("s1", 4) {
+		t.Fatal("not due at 9, in the span after")
+	}
+	if r.ConsolidationDue("s1", 0) {
+		t.Fatal("due with no interval")
 	}
 }
 
@@ -107,7 +156,7 @@ func TestSnapshotCopiesTheWindow(t *testing.T) {
 	seen(r, "s1", KindTurnEnd, now)
 
 	events, turn, ok := r.Snapshot("s1")
-	if !ok || len(events) != 2 || turn != 1 {
+	if !ok || len(events) != 2 || turn != 2 {
 		t.Fatalf("snapshot: %d events, turn %d, ok %v", len(events), turn, ok)
 	}
 	// Mutating the copy must not reach the registry, which the advisor reads
@@ -208,7 +257,7 @@ func TestBudgetStateFollowsInjections(t *testing.T) {
 		t.Fatalf("an unknown session has budget state %+v", got)
 	}
 
-	r.RecordInjection("s1", 3, "", Advice{ID: "a", Text: "twelve chars", TTLTurns: 2})
+	r.RecordInjection("s1", 3, "", Advice{ID: "a", Text: "twelve chars", TTLTurns: 4})
 	got := r.BudgetState("s1", "")
 	if got.LastInjectTurn != 3 || got.CharsUsed == 0 {
 		t.Fatalf("the injection was not recorded: %+v", got)
@@ -222,11 +271,11 @@ func TestASubagentsInjectionIsChargedToTheSessionNotToTheTurnGap(t *testing.T) {
 	r := NewRegistry(10)
 	seen(r, "s1", KindUserPrompt, time.Now())
 
-	r.RecordInjection("s1", 3, "agent-1", Advice{ID: "a", Text: "twelve chars", TTLTurns: 2})
+	r.RecordInjection("s1", 3, "agent-1", Advice{ID: "a", Text: "twelve chars", TTLTurns: 4})
 	if got := r.BudgetState("s1", ""); got.LastInjectTurn != 0 || got.CharsUsed != len("twelve chars") {
 		t.Fatalf("the main thread's state after an agent's injection: %+v", got)
 	}
-	r.RecordInjection("s1", 3, "", Advice{ID: "b", Text: "twelve chars", TTLTurns: 2})
+	r.RecordInjection("s1", 3, "", Advice{ID: "b", Text: "twelve chars", TTLTurns: 4})
 	if got := r.BudgetState("s1", "agent-1"); got.LastInjectTurn != 0 || got.CharsUsed != 2*len("twelve chars") {
 		t.Fatalf("the agent's state after the main thread's injection: %+v", got)
 	}

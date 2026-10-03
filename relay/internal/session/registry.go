@@ -50,7 +50,9 @@ type State struct {
 	Project    string `json:"project,omitempty"`
 	ProjectDir string `json:"-"`
 
-	Seq  uint64 `json:"seq"`
+	Seq uint64 `json:"seq"`
+	// Turn counts the main thread's prompts and answer ends. Advice is aged
+	// and budgeted in it.
 	Turn uint64 `json:"turn"`
 
 	// Events is the window the advisor reads. It carries prompts and tool
@@ -85,6 +87,10 @@ type State struct {
 	// keywordWrite serialises the rewrite of the keyword record. It lives
 	// here so that it goes when the session does, with nothing to clean up.
 	keywordWrite *sync.Mutex
+
+	// consolidated is the last span of the count a periodic tidy was started
+	// in.
+	consolidated uint64
 }
 
 // Spawn is one subagent the session started: the tool call that spawned it,
@@ -145,9 +151,10 @@ func (r *Registry) Observe(e Event) (turn uint64, seq uint64) {
 		}
 		st.Events = st.Events[:kept]
 	}
-	// A turn is the user's: everything a subagent does happens inside the
-	// main thread's current turn, and advice is aged and budgeted in turns.
-	if e.Kind == KindTurnEnd && e.Origin == OriginUser {
+	// Only the main thread counts: a subagent runs between one of its
+	// prompts and the answer to it, and advice written for the main thread
+	// must not age while a subagent talks.
+	if e.Origin == OriginUser && (e.Kind == KindUserPrompt || e.Kind == KindTurnEnd) {
 		st.Turn++
 	}
 	st.observeSpawn(e)
@@ -240,6 +247,25 @@ func (r *Registry) Turn(sessionID string) uint64 {
 		return st.Turn
 	}
 	return 0
+}
+
+// ConsolidationDue reports whether the session's count has entered a new
+// span of every since the last time this said yes, and notes that it has.
+// The count is compared by span rather than by remainder because prompts and
+// answer ends do not strictly alternate: an interrupted answer has no end.
+func (r *Registry) ConsolidationDue(sessionID string, every uint64) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	st, ok := r.sessions[sessionID]
+	if !ok || every == 0 {
+		return false
+	}
+	span := st.Turn / every
+	if span <= st.consolidated {
+		return false
+	}
+	st.consolidated = span
+	return true
 }
 
 // Snapshot copies the event window for a session so the advisor can be called

@@ -16,10 +16,11 @@ import (
 )
 
 const (
-	// consolidateEvery is how many completed turns pass between tidying runs.
-	// The write path is deliberately near-silent, so a scope changes slowly and
-	// a pass on every turn would spend a model call to find nothing.
-	consolidateEvery = 5
+	// consolidateEvery is how far the session's count of prompts and answer
+	// ends moves between tidying runs: five prompts and their answers. The
+	// write path is deliberately near-silent, so a scope changes slowly and a
+	// pass on every answer would spend a model call to find nothing.
+	consolidateEvery = 10
 
 	// consolidateFloor is the size below which a scope is left alone. A handful
 	// of facts cannot be cluttered, and a model asked to tidy them will invent

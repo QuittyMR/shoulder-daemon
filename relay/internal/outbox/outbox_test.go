@@ -10,7 +10,7 @@ import (
 func note(id string, level session.AdviceLevel, turn uint64) session.Advice {
 	return session.Advice{
 		ID: id, SessionID: "s1", Kind: session.AdviceNote, Level: level,
-		Text: id, CreatedTurn: turn, TTLTurns: 2, CreatedAt: time.Now().UTC(),
+		Text: id, CreatedTurn: turn, TTLTurns: 4, CreatedAt: time.Now().UTC(),
 	}
 }
 
@@ -91,7 +91,7 @@ func TestTheQueueIsBoundedAndDropsTheOldest(t *testing.T) {
 func TestForgetEmptiesOneSession(t *testing.T) {
 	b := New()
 	b.Push(note("x", session.LevelPlan, 0))
-	b.Push(session.Advice{ID: "y", SessionID: "s2", Level: session.LevelPlan, TTLTurns: 2})
+	b.Push(session.Advice{ID: "y", SessionID: "s2", Level: session.LevelPlan, TTLTurns: 4})
 
 	b.Forget("s1")
 	if _, ok := b.Take("s1", 0, session.KindUserPrompt, "", ""); ok {
@@ -115,8 +115,8 @@ func TestTakeOnAnUnknownSessionIsQuiet(t *testing.T) {
 func TestAdviceAddressedToAnAgentWaitsForThatAgent(t *testing.T) {
 	b := New()
 	for _, a := range []session.Advice{
-		{ID: "for-agent-a", SessionID: "s1", Level: session.LevelAction, TTLTurns: 2, AgentID: "agent-a"},
-		{ID: "for-anyone", SessionID: "s1", Level: session.LevelAction, TTLTurns: 2},
+		{ID: "for-agent-a", SessionID: "s1", Level: session.LevelAction, TTLTurns: 4, AgentID: "agent-a"},
+		{ID: "for-anyone", SessionID: "s1", Level: session.LevelAction, TTLTurns: 4},
 	} {
 		b.Push(a)
 	}
@@ -153,7 +153,7 @@ func TestAnUnaddressedNoteGoesToASubagentToo(t *testing.T) {
 // bound to an id, only that agent may take it.
 func TestANoteForAnUnnamedSubagentWaitsForOneOfItsType(t *testing.T) {
 	b := New()
-	b.Push(session.Advice{ID: "spawned", SessionID: "s1", Level: session.LevelAction, TTLTurns: 2, SpawnID: "toolu_1", AgentType: "explore"})
+	b.Push(session.Advice{ID: "spawned", SessionID: "s1", Level: session.LevelAction, TTLTurns: 4, SpawnID: "toolu_1", AgentType: "explore"})
 
 	if _, ok := b.Take("s1", 0, session.KindToolCall, "", ""); ok {
 		t.Fatal("the main thread took a note written for a subagent")
@@ -175,7 +175,7 @@ func TestANoteForAnUnnamedSubagentWaitsForOneOfItsType(t *testing.T) {
 // asks, and the main thread never sees it.
 func TestANoteTypedByAgentGoesToTheFirstAgentOfThatType(t *testing.T) {
 	b := New()
-	b.Push(session.Advice{ID: "typed", SessionID: "s1", Level: session.LevelAction, TTLTurns: 2, AgentType: "explore"})
+	b.Push(session.Advice{ID: "typed", SessionID: "s1", Level: session.LevelAction, TTLTurns: 4, AgentType: "explore"})
 	if _, ok := b.Take("s1", 0, session.KindToolCall, "", ""); ok {
 		t.Fatal("the main thread took a note written for subagents")
 	}

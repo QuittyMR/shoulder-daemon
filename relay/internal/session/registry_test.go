@@ -110,21 +110,24 @@ func TestAnEvictionPairsTheProjectWithTheDirectoryItWasResolvedFrom(t *testing.T
 	}
 }
 
-// A turn is the user's. A subagent finishing inside it is not the turn
-// ending: advice is aged and budgeted in turns, and a turn that spawns ten
-// agents would otherwise expire its notes ten times over before the user is
-// back.
-func TestASubagentFinishingDoesNotAdvanceTheTurn(t *testing.T) {
+// The count is the main thread's. A subagent's prompt and its stop are not
+// counted: advice is aged and budgeted in the count, and an answer that
+// spawns ten agents would otherwise expire its notes ten times over before
+// the user is back.
+func TestASubagentsPromptAndStopDoNotAdvanceTheTurn(t *testing.T) {
 	r := NewRegistry(10)
 	r.Observe(Event{SessionID: "s1", Kind: KindUserPrompt, TS: time.Now()})
 	r.Observe(Event{SessionID: "s1", Kind: KindUserPrompt, Origin: OriginAgent, AgentType: "explore", TS: time.Now()})
+	if got := r.Turn("s1"); got != 1 {
+		t.Fatalf("turn = %d after a subagent's prompt, want the 1 the user's prompt left", got)
+	}
 	r.Observe(Event{SessionID: "s1", Kind: KindTurnEnd, Origin: OriginAgent, AgentID: "a1", Assistant: "found it", TS: time.Now()})
-	if got := r.Turn("s1"); got != 0 {
+	if got := r.Turn("s1"); got != 1 {
 		t.Fatalf("turn advanced to %d on a subagent's stop", got)
 	}
 	r.Observe(Event{SessionID: "s1", Kind: KindTurnEnd, TS: time.Now()})
-	if got := r.Turn("s1"); got != 1 {
-		t.Fatalf("turn = %d after the user's turn ended, want 1", got)
+	if got := r.Turn("s1"); got != 2 {
+		t.Fatalf("turn = %d after the user's prompt and its answer, want 2", got)
 	}
 	events, _, _ := r.Snapshot("s1")
 	if len(events) != 4 || events[2].Origin != OriginAgent || events[2].AgentID != "a1" {

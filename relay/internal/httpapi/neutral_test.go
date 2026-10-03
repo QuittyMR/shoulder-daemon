@@ -178,7 +178,7 @@ func TestHealthAndMetricsNeedNoToken(t *testing.T) {
 }
 
 func TestSuppressLabelKeepsTheReasonNotTheNumber(t *testing.T) {
-	for in, want := range map[string]string{"turn_gap:3": "turn_gap", "session_cap:4000": "session_cap", "expired": "expired"} {
+	for in, want := range map[string]string{"turn_gap:6": "turn_gap", "session_cap:4000": "session_cap", "expired": "expired"} {
 		if got := suppressLabel(in); got != want {
 			t.Errorf("suppressLabel(%q) = %q, want %q", in, got, want)
 		}
@@ -231,5 +231,75 @@ func TestATokenGivenToTheDaemonIsEnforcedImmediately(t *testing.T) {
 	postNeutral(h, `{"session_id":"b1","event":"user_prompt"}`)
 	if s.Metrics.Get("shoulder_unauthorised_total") != 1 {
 		t.Error("a hook with no token was accepted against a token the operator set")
+	}
+}
+
+// exchange posts a prompt and the end of its answer, and returns what the
+// prompt was answered with.
+func exchange(h http.Handler, sid string) string {
+	body := postNeutral(h, `{"session_id":"`+sid+`","event":"user_prompt","prompt":"go on"}`).Body.String()
+	postNeutral(h, `{"session_id":"`+sid+`","event":"turn_end","assistant":"done"}`)
+	return body
+}
+
+// The gate counts prompts and answer ends alike, and its default gap is
+// sized so that a note is followed by two prompts without one.
+func TestTheDefaultGapKeepsTwoPromptsFreeOfNotesAfterOne(t *testing.T) {
+	s, box := newTestServer(t)
+	h := s.Handler()
+	queue := func(id string) {
+		box.Push(session.Advice{
+			ID: id, SessionID: "g1", Kind: session.AdviceNote, Level: session.LevelPlan,
+			Text: id, CreatedTurn: s.Registry.Turn("g1"), TTLTurns: 4,
+		})
+	}
+
+	exchange(h, "g1")
+	queue("first")
+	if got := exchange(h, "g1"); !strings.Contains(got, "first") {
+		t.Fatalf("the note was not delivered at the prompt after it was written: %s", got)
+	}
+	for _, id := range []string{"second", "third"} {
+		queue(id)
+		if got := exchange(h, "g1"); got != string(noAdviceJSON) {
+			t.Fatalf("%q was delivered inside the gap: %s", id, got)
+		}
+	}
+	if n := s.Metrics.Get("shoulder_advice_suppressed_turn_gap_total"); n != 2 {
+		t.Fatalf("%d notes counted as suppressed by the gap, want 2", n)
+	}
+	queue("fourth")
+	if got := exchange(h, "g1"); !strings.Contains(got, "fourth") {
+		t.Fatalf("the note at the third prompt after the last one was not delivered: %s", got)
+	}
+}
+
+// A note written at a prompt, with the lifetime the pipeline gives it, is
+// still current at the second prompt after that one and stale at the third.
+func TestANoteOutlivesTwoFurtherPromptsAndNoMore(t *testing.T) {
+	for _, tc := range []struct {
+		sid       string
+		exchanges int
+		delivered bool
+	}{
+		{"t1", 2, true},
+		{"t2", 3, false},
+	} {
+		s, box := newTestServer(t)
+		h := s.Handler()
+		postNeutral(h, `{"session_id":"`+tc.sid+`","event":"user_prompt","prompt":"start"}`)
+		box.Push(session.Advice{
+			ID: "a", SessionID: tc.sid, Kind: session.AdviceNote, Level: session.LevelAction,
+			Text: "mind the lock", CreatedTurn: s.Registry.Turn(tc.sid), TTLTurns: 4,
+		})
+		postNeutral(h, `{"session_id":"`+tc.sid+`","event":"turn_end","assistant":"done"}`)
+		for i := 1; i < tc.exchanges; i++ {
+			exchange(h, tc.sid)
+		}
+		postNeutral(h, `{"session_id":"`+tc.sid+`","event":"user_prompt","prompt":"go on"}`)
+		got := postNeutral(h, `{"session_id":"`+tc.sid+`","event":"tool_call","tool_name":"Bash"}`).Body.String()
+		if strings.Contains(got, "mind the lock") != tc.delivered {
+			t.Fatalf("%d prompts after the note was written, delivered = %v: %s", tc.exchanges, !tc.delivered, got)
+		}
 	}
 }

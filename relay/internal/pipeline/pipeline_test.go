@@ -2259,8 +2259,9 @@ func TestAdviceForASubagentIsAddressedToIt(t *testing.T) {
 	}
 }
 
-// A subagent's stop ends its own run, not a turn of the session: the user's
-// turn count stands, and its result is still read for facts.
+// A subagent's stop ends its own run and is not counted by the session: the
+// count stands where the user's prompt left it, and the result is still read
+// for facts.
 func TestASubagentsStopIsConsultedWithoutAdvancingTheTurn(t *testing.T) {
 	ts := advisorServer(t, 0, decisionBody(t, "",
 		map[string]any{"content": "the pool is closed in main.go", "category": "finding", "scope": "global"}))
@@ -2273,8 +2274,8 @@ func TestASubagentsStopIsConsultedWithoutAdvancingTheTurn(t *testing.T) {
 	s.post(t, "SubagentStop", agentStop("s1", "agent-7", "The pool is closed in main.go."))
 	awaitConsult(t, s)
 
-	if turn := s.pipe.Registry.Turn("s1"); turn != 0 {
-		t.Fatalf("a subagent's stop advanced the session's turn to %d", turn)
+	if turn := s.pipe.Registry.Turn("s1"); turn != 1 {
+		t.Fatalf("the session's turn is %d after the user's prompt and a subagent's stop, want 1", turn)
 	}
 	stored, _, _ := mem.snapshot()
 	if len(stored) != 2 {
@@ -2351,23 +2352,28 @@ func TestTheUsersTurnStoresARule(t *testing.T) {
 	}
 }
 
-// A subagent's stop sits on the user's turn count. Keyed on that alone the
-// periodic tidy would run again for every agent that stops while the count is
-// on a multiple; it runs only at the user's own turn end.
+// A subagent's stop leaves the session's count where it is. The periodic tidy
+// runs at the user's own answer end, once, and not again for every agent that
+// stops while the count stands there.
 func TestASubagentsStopDoesNotTidy(t *testing.T) {
 	ts := advisorServer(t, 0, decisionBody(t, ""))
 	s := newStack(t, ts.URL, 2*time.Second)
 	mem := &fakeMemory{}
 	s.pipe.Memory = mem
 
-	for i := 0; i < consolidateEvery; i++ {
+	for i := 0; i < consolidateEvery/2; i++ {
+		if n := tidies(mem); n != 0 {
+			t.Fatalf("tidied %d times before the fifth answer", n)
+		}
+		s.post(t, "UserPromptSubmit", prompt("s1", "go on"))
+		awaitConsult(t, s)
 		s.post(t, "Stop", stop("s1", "done"))
 		awaitConsult(t, s)
 	}
 	if turn := s.pipe.Registry.Turn("s1"); turn != consolidateEvery {
 		t.Fatalf("turn = %d", turn)
 	}
-	// The user's own fifth turn end tidies; that pass lists the store once.
+	// The fifth answer end tidies; that pass lists the store once.
 	deadline := time.Now().Add(3 * time.Second)
 	for tidies(mem) == 0 {
 		if time.Now().After(deadline) {

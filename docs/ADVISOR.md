@@ -402,9 +402,11 @@ Text that survives is:
    same addressee, counted in `shoulder_advice_duplicate_total`: consults of
    one session run concurrently over overlapping windows and can say the same
    thing;
-5. put through the budget gate, which by default permits one note every three
-   turns and 4000 characters per session, and holds it for at most two turns
-   before it expires.
+5. put through the budget gate, which counts the main thread's prompts and
+   answer ends. By default it permits one note in six of them
+   (`BUDGET_MIN_TURN_GAP`), which is a note and then two prompts without one,
+   and 4000 characters per session, and it drops a note once the count has
+   moved four past the one it was written at.
 
 A model cannot make itself heard more often by talking more. Write the prompt to
 stay quiet.

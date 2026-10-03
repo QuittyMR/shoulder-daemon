@@ -3,7 +3,7 @@ package budget
 import "testing"
 
 func note(n int, turn uint64) Candidate {
-	return Candidate{Kind: "note", Len: n, CreatedTurn: turn, TTLTurns: 2}
+	return Candidate{Kind: "note", Len: n, CreatedTurn: turn, TTLTurns: 4}
 }
 
 func TestGate(t *testing.T) {
@@ -17,17 +17,21 @@ func TestGate(t *testing.T) {
 
 	t.Run("second note inside the gap is suppressed", func(t *testing.T) {
 		st := State{LastInjectTurn: 5, CharsUsed: 100}
-		if d := g.Allow(st, 6, note(100, 6)); d.Allow {
-			t.Fatal("note only two turns later should be suppressed")
+		// Injected at a prompt: the count is odd there and moves by two from
+		// one prompt to the next.
+		for _, turn := range []uint64{6, 7, 9, 10} {
+			if d := g.Allow(st, turn, note(100, turn)); d.Allow || d.Reason != "turn_gap:6" {
+				t.Fatalf("note at %d, inside the two prompts after the injection, got %v", turn, d)
+			}
 		}
-		if d := g.Allow(st, 8, note(100, 8)); !d.Allow {
-			t.Fatalf("note three turns later should pass, got %v", d)
+		if d := g.Allow(st, 11, note(100, 11)); !d.Allow {
+			t.Fatalf("note at the third prompt after the injection should pass, got %v", d)
 		}
 	})
 
 	t.Run("warning bypasses the gap but not the session cap", func(t *testing.T) {
 		st := State{LastInjectTurn: 5, CharsUsed: 100}
-		w := Candidate{Kind: KindWarning, Len: 100, CreatedTurn: 6, TTLTurns: 2}
+		w := Candidate{Kind: KindWarning, Len: 100, CreatedTurn: 6, TTLTurns: 4}
 		if d := g.Allow(st, 6, w); !d.Allow {
 			t.Fatalf("warning should bypass the turn gap, got %v", d)
 		}
@@ -38,6 +42,9 @@ func TestGate(t *testing.T) {
 	})
 
 	t.Run("expired advice is dropped", func(t *testing.T) {
+		if d := g.Allow(State{}, 9, note(100, 5)); !d.Allow {
+			t.Fatalf("a note is current through the second prompt after the one it was written at, got %v", d)
+		}
 		if d := g.Allow(State{}, 10, note(100, 5)); d.Allow || d.Reason != "expired" {
 			t.Fatalf("expected expired, got %v", d)
 		}

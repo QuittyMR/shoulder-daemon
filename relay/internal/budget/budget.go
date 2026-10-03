@@ -11,14 +11,14 @@ import "fmt"
 const KindWarning = "warning"
 
 type Gate struct {
-	MinTurnGap      int  // minimum turns between note-kind injections
+	MinTurnGap      int  // minimum count of prompts and answer ends between note-kind injections
 	MaxChars        int  // per-injection cap
 	SessionMaxChars int  // whole-session cap
 	DryRun          bool // evaluate and record, inject nothing
 }
 
 func Default() Gate {
-	return Gate{MinTurnGap: 3, MaxChars: 800, SessionMaxChars: 4000}
+	return Gate{MinTurnGap: 6, MaxChars: 800, SessionMaxChars: 4000}
 }
 
 // Candidate is the shape the gate reasons about.
