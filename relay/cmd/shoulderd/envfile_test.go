@@ -53,6 +53,8 @@ func TestASettingMissingFromTheShellComesFromTheDaemonsFile(t *testing.T) {
 func TestAMissingFileIsSimplyNoSettings(t *testing.T) {
 	t.Setenv("SHOULDER_ENV_FILE", filepath.Join(t.TempDir(), "absent"))
 	t.Setenv("SHOULDER_TOKEN", "")
+	// The token the daemon generated on this machine is a setting too.
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	config.ResetEnvFile()
 	t.Cleanup(config.ResetEnvFile)
 	if got := setting("SHOULDER_TOKEN"); got != "" {
