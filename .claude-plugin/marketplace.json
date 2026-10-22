@@ -9,7 +9,7 @@
     {
       "name": "shoulder-daemon",
       "source": "./adapters/claude-code",
-      "description": "Context advisor for coding agents. Watches the session over HTTP hooks, keeps a store of facts, and injects the relevant ones back in when they matter."
+      "description": "Context advisor for coding agents. Watches the session over its hooks, keeps a store of facts, and injects the relevant ones back in when they matter."
     }
   ]
 }

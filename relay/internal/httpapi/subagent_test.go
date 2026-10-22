@@ -241,7 +241,7 @@ func TestSubagentEventsNeverBlock(t *testing.T) {
 	}
 }
 
-func TestEveryHttpHookInThePluginIsOneTheRelayAccepts(t *testing.T) {
+func TestEveryHookInThePluginIsOneTheRelayAccepts(t *testing.T) {
 	raw, err := readPluginHooks()
 	if err != nil {
 		t.Fatal(err)
@@ -249,23 +249,25 @@ func TestEveryHttpHookInThePluginIsOneTheRelayAccepts(t *testing.T) {
 	var cfg struct {
 		Hooks map[string][]struct {
 			Hooks []struct {
-				Type string `json:"type"`
-				URL  string `json:"url"`
+				Type    string `json:"type"`
+				Command string `json:"command"`
 			} `json:"hooks"`
 		} `json:"hooks"`
 	}
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		t.Fatal(err)
 	}
+	// Every event is posted by scripts/post-event.sh, which is given the event
+	// name as its one argument and posts to /v1/hooks/claude-code/<name>.
 	registered := map[string]bool{}
 	for name, groups := range cfg.Hooks {
 		for _, g := range groups {
 			for _, hk := range g.Hooks {
-				if hk.Type != "http" {
+				if hk.Type != "command" || !strings.Contains(hk.Command, "post-event.sh") {
 					continue
 				}
-				if !strings.HasSuffix(hk.URL, "/v1/hooks/claude-code/"+name) {
-					t.Errorf("%s posts to %s", name, hk.URL)
+				if !strings.HasSuffix(hk.Command, "/scripts/post-event.sh "+name) {
+					t.Errorf("%s posts as %q", name, hk.Command)
 				}
 				registered[name] = true
 				if _, ok := claudeEvents[name]; !ok {

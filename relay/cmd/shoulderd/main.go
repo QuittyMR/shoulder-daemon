@@ -578,8 +578,8 @@ func (c *cli) doctor(args []string) int {
 			fmt.Println("hooks:   all expected events have fired at least once")
 		} else {
 			fmt.Printf("hooks:   NEVER FIRED: %v\n", missing)
-			fmt.Println("         Check that the plugin is installed, and that allowedHttpHookUrls")
-			fmt.Println("         either is unset or includes http://127.0.0.1:8787/*")
+			fmt.Println("         Check that the plugin is installed and that its hooks run:")
+			fmt.Println("         claude -p 'say hello' --debug hooks")
 		}
 	}
 	return code

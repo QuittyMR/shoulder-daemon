@@ -6,6 +6,24 @@ Notable changes to shoulder-daemon. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Every per-event hook of the Claude Code plugin is now a command,
+  `scripts/post-event.sh <event>`, in place of the HTTP hooks. The script
+  posts the event to the relay with the token and prints the relay's answer
+  for the harness; when the post cannot connect it runs
+  `scripts/ensure-daemon.sh`, so a relay that has stopped under a working
+  session is started again by the first event that misses it, whatever that
+  event is. An HTTP hook that cannot connect only prints
+  `connect ECONNREFUSED 127.0.0.1:8787` and nothing acts on it, and the one
+  restart point, the boot script before each typed prompt, never ran for a
+  session that was busy with tool calls and subagents. That per-prompt run is
+  removed; `SessionStart` still runs the boot script, which is also where the
+  binary is fetched. The `allowedHttpHookUrls` allowlist no longer applies to
+  the plugin, and `shoulderd doctor` no longer points at it. Only a 200 answer
+  is printed; a refused or unknown post prints nothing, and the script always
+  exits 0.
+
 ## [0.5.0] - 2026-10-03
 
 ### Added

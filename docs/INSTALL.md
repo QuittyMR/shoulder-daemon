@@ -4,10 +4,10 @@ Two things have to be true before shoulder-daemon does anything useful: the rela
 Claude Code is calling it.
 
 The Claude Code adapter (`adapters/claude-code/`) is almost entirely static. Installing it means
-installing the plugin (a `hooks/hooks.json` whose per-event entries are `type: "http"` callbacks to
-a relay on `127.0.0.1:8787`, plus one `SessionStart` script that starts that relay when nothing is
-answering) and doing two things on the host: setting a token, and - only if you have to - adjusting
-one settings key. Nothing here needs Node, Python, Go, or any other runtime; the one script wants
+installing the plugin (a `hooks/hooks.json` whose per-event entries run one script that posts to
+a relay on `127.0.0.1:8787` and restarts it when the post cannot connect, plus one `SessionStart`
+script that starts that relay when nothing is answering) and doing one thing on the host: setting a
+token. Nothing here needs Node, Python, Go, or any other runtime; the one script wants
 `bash` and `curl`.
 
 Sections 1 to 4 cover the adapter. Sections 5 to 7 cover the relay it talks to, the command
@@ -46,39 +46,11 @@ that if you run several machines against one relay, or if you would rather the v
 own secret store. The relay authenticates the caller, not the project, so every project on one
 machine uses one token.
 
-## 2. Check `allowedHttpHookUrls` - the silent-block trap
+## 2. No settings key to check
 
-If you (or an enterprise policy) have set `allowedHttpHookUrls` in any Claude Code settings file
-(`~/.claude/settings.json`, project `.claude/settings.json`, or a managed policy file), **every**
-shoulder-daemon hook is silently blocked unless `http://127.0.0.1:8787/*` matches one of its patterns.
-There is no error, no crash, and no user-visible warning - Claude Code fails open and the session
-continues exactly as if the plugin weren't installed. The only trace is one line in a debug log
-(see step 3 for how to capture it):
-
-```
-[WARN] HTTP hook blocked: http://127.0.0.1:8787/v1/hooks/claude-code/UserPromptSubmit does not match any pattern in allowedHttpHookUrls
-```
-
-If `allowedHttpHookUrls` is **undefined**, all URLs are permitted and **most users need to do
-nothing for this step** - Phase 0 (S1/S3) ran with no allowlist at all and every hook fired. Check
-whether the key exists first:
-
-```bash
-grep -r allowedHttpHookUrls ~/.claude/settings.json .claude/settings.json 2>/dev/null
-```
-
-If it exists, add the loopback pattern to it rather than replacing the list:
-
-```json
-{
-  "allowedHttpHookUrls": [
-    "http://127.0.0.1:8787/*"
-  ]
-}
-```
-
-(Merge `"http://127.0.0.1:8787/*"` into whatever array is already there - don't drop existing
-entries.)
+Every hook is a command, so Claude Code's `allowedHttpHookUrls` allowlist does not apply to this
+plugin. Earlier releases posted over HTTP hooks and were silently blocked when that key was set
+without the relay's address in it; that trap is gone.
 
 ## 3. Verify the install actually works
 
@@ -91,37 +63,33 @@ claude -p 'say hello' --debug hooks --debug-file /tmp/shoulderd-hooks.log
 Then inspect the log:
 
 ```bash
-grep -E 'HTTP hook|allowedHttpHookUrls|hook error' /tmp/shoulderd-hooks.log
+grep -E 'post-event.sh|hook error' /tmp/shoulderd-hooks.log
 ```
 
 What to look for:
 
-- `Hooks: HTTP hook POST to http://127.0.0.1:8787/v1/hooks/claude-code/UserPromptSubmit` (and the
-  other `type: "http"` events) - confirms each hook actually fired.
-- `Hooks: HTTP hook response status 200` - confirms the relay answered.
-- **Absence** of `HTTP hook blocked: ... does not match any pattern in allowedHttpHookUrls` -
-  confirms step 2 isn't silently discarding every hook.
-- **Absence** of `Hooks: HTTP hook error: connect ECONNREFUSED 127.0.0.1:8787` - confirms the relay
-  is actually running and reachable; if you see this, the plugin is installed correctly but the
-  relay container isn't up (Claude Code fails open, so your prompt still completes normally - you
-  just get no advisory injection).
+- `Executing hooks for UserPromptSubmit` (and the other events) followed by the
+  `scripts/post-event.sh UserPromptSubmit` command - confirms each hook actually fired.
+- `shoulderd monitor` showing the events arrive - confirms the relay answered. The hooks are
+  commands, so there is no `HTTP hook POST` line and no `ECONNREFUSED` line: a post that cannot
+  connect runs `scripts/ensure-daemon.sh` and the relay is back for the next event.
 - `Hooks: env var $SHOULDER_TOKEN not in allowedEnvVars, skipping interpolation` - should
   **not** appear; if it does, the `hooks.json` you have installed is stale (missing the per-hook
   `allowedEnvVars` field) or has been hand-edited incorrectly.
 
-A clean run shows six `HTTP hook POST to ...` lines (`UserPromptSubmit`, `PreToolUse`,
-`PostToolUse`, `PostToolUseFailure`, `Stop`, `SessionEnd` - `PreCompact` only fires around context
-compaction, so a short prompt won't trigger it) each followed by a `200` response status, and no
-`blocked` or `ECONNREFUSED` lines. `SessionStart` is a command hook rather than an HTTP one, so it
-never appears as an `HTTP hook POST` line at all; what proves it worked is that the relay is up.
+A clean run shows a `post-event.sh` command for each of `UserPromptSubmit`, `PreToolUse`,
+`PostToolUse`, `PostToolUseFailure`, `Stop` and `SessionEnd` (`PreCompact` only fires around context
+compaction, so a short prompt won't trigger it). What proves the relay answered is `shoulderd
+monitor`, or `shoulderd doctor` no longer listing those hooks as never fired.
 
-## 4. One script, and nothing else executable
+## 4. Two scripts, and nothing else executable
 
 The plugin directory is a manifest (`.claude-plugin/plugin.json`,
-`.claude-plugin/marketplace.json`), a hooks file (`hooks/hooks.json`) whose per-event entries are
-all `type: "http"`, and one script, `scripts/ensure-daemon.sh`. That script is the only thing under
-`CLAUDE_PLUGIN_ROOT` Claude Code ever executes, it runs on `SessionStart` and again before each
-prompt, and all it does is start the relay when nothing is answering on `SHOULDER_ADDR`:
+`.claude-plugin/marketplace.json`), a hooks file (`hooks/hooks.json`) whose entries are all
+`type: "command"`, and two scripts. `scripts/post-event.sh <event>` posts the event on its stdin to
+the relay and prints the relay's answer; when the post cannot connect it runs the other script.
+`scripts/ensure-daemon.sh` runs on `SessionStart` and after every failed post, and all it does is
+start the relay when nothing is answering on `SHOULDER_ADDR`:
 
 - It needs `bash` and `curl` and nothing else. **No Node, Python, or Go on the host.**
 - It runs `shoulderd` off `PATH`, or the copy it fetched itself. On a machine with neither, the
@@ -134,7 +102,7 @@ prompt, and all it does is start the relay when nothing is answering on `SHOULDE
 - Several editors launching together start exactly one daemon. It takes an atomic `mkdir` lock under
   `$XDG_RUNTIME_DIR` (or `/tmp`), and whoever loses waits for the winner rather than racing to bind.
 - It always exits 0 and never blocks. `hooks.json` allows the `SessionStart` run 60 seconds, which
-  is only ever spent on the one first download; the per-prompt run gets 5 and never downloads. A
+  is only ever spent on the one first download; the per-event post gets 5 and never downloads. A
   session that can't reach the relay simply has no advisory context.
 
 Nothing in the plugin ever stops the relay. Section 5 covers how it stops itself.

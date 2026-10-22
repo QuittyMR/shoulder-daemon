@@ -1,10 +1,10 @@
 # shoulder-daemon - Claude Code adapter
 
-Quiet advisory context injection for Claude Code. Every per-event hook is a `type: "http"` callback
-to a relay running on `127.0.0.1:8787`: no subprocess, no bundled code, and no Node, Python or Go
-runtime on the host. The single exception is `SessionStart`, which runs one short shell script whose
-only job is to start that relay when nothing is answering. See `docs/INSTALL.md` for the one-time
-setup this does require (a token in the environment, and possibly one settings-file check).
+Quiet advisory context injection for Claude Code. Every per-event hook runs one short shell script
+that posts the event to a relay on `127.0.0.1:8787` and restarts that relay when the post cannot
+connect: no bundled code, and no Node, Python or Go runtime on the host, only `bash` and `curl`.
+`SessionStart` runs a second script whose only job is to start that relay when nothing is answering.
+See `docs/INSTALL.md` for the one-time setup this does require (a token in the environment).
 
 ## What it does
 
@@ -30,14 +30,19 @@ characters. The model is free to ignore it, and the user's own prompt is never t
 
 ## Starting the relay
 
-`SessionStart` is the one hook here that runs a command rather than posting HTTP, because Claude
-Code refuses HTTP hooks for `SessionStart` and `Setup`. The command is `scripts/ensure-daemon.sh`,
-and it does one thing: if `http://$SHOULDER_ADDR/readyz` does not answer within a second, or answers
+Every hook here runs a command. `SessionStart` runs `scripts/ensure-daemon.sh`; every other event
+runs `scripts/post-event.sh <event>`, which posts the event to `http://$SHOULDER_ADDR/v1/hooks/claude-code/<event>`
+with the token and prints the relay's answer for the harness. When that post cannot connect, it runs
+`ensure-daemon.sh`: the failed post is what restarts the relay, so a relay that dies under a working
+session is back on the next event, not the next typed prompt. An HTTP hook could not do this - one
+that cannot connect prints an error and nothing acts on it.
+
+`ensure-daemon.sh` does one thing: if `http://$SHOULDER_ADDR/readyz` does not answer within a second, or answers
 that the relay cannot reach its memory store, it starts the daemon in the background. A relay too old
 to serve `/readyz` answers 404, which is left alone: its readiness is unknown, not bad. A store that
-never comes back would otherwise mean a start command before every prompt, so a recovery of something
+never comes back would otherwise mean a start command on every event, so a recovery of something
 that is answering happens at most once every 30 seconds; nothing answering at all is exempt, and comes
-back on the next prompt. The one 503 it will not act on is `"memory":"none"`, a relay with no memory
+back on the next event. The one 503 it will not act on is `"memory":"none"`, a relay with no memory
 backend configured: no start command can supply a setting, so it says so on stderr once every five
 minutes and leaves the relay alone. Two editors launching together would both see nothing listening,
 so it takes an atomic `mkdir` lock under `$XDG_RUNTIME_DIR` (or `/tmp`) and whoever loses waits for
@@ -54,7 +59,7 @@ no reason to hold up somebody's work.
 
 Nothing here stops the relay. It exits on its own once no session has used it for
 `SHOULDER_IDLE_EXIT_MINUTES` (default 15), which is the only answer that stays correct with several
-editors open at once, and the next `SessionStart` starts it again. The session itself still opens
+editors open at once, and the next event from any session starts it again. The session itself still opens
 lazily on the relay side, on the first event that arrives.
 
 ## The setup skill
@@ -79,6 +84,7 @@ transcript, and shoulder-daemon reads transcripts.
 | Hook event | Matcher | What it submits | May inject `additionalContext`? |
 |---|---|---|---|
 | `SessionStart` | - | nothing; it runs `scripts/ensure-daemon.sh` instead of posting | no |
+| every other event | | posted by `scripts/post-event.sh`, which restarts the relay when the post cannot connect | |
 | `UserPromptSubmit` | - | the user's prompt | yes - the "user replied and context rode along" path |
 | `PreToolUse` | `*` | tool name and input, before it runs | yes - the "model continued on its own" path |
 | `PostToolUse` | `*` | tool name, input, and result | yes, rate-limited |
@@ -106,7 +112,7 @@ continues normally with nothing injected.
 
 ## Installation
 
-See `docs/INSTALL.md` for the token, the `allowedHttpHookUrls` check, and how to verify the install
+See `docs/INSTALL.md` for the token and how to verify the install
 actually works end to end. The relay itself, its configuration, and the `shoulderd` command line
 are covered in the repository README.
 

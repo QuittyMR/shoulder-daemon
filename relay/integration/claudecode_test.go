@@ -47,27 +47,22 @@ func hookSettings(t *testing.T, addr, token string) string {
 	if err = json.Unmarshal(body, &plugin); err != nil {
 		t.Fatal(err)
 	}
-	// The boot script is a plugin path the editor cannot resolve here, and this
-	// test is not about starting daemons; the ones that are drive the script
-	// directly.
-	for event, groups := range plugin.Hooks {
-		kept := []any{}
+	// The commands name a plugin root the editor cannot resolve here, so it is
+	// written out as this checkout's adapter directory. SessionStart is dropped:
+	// this test is not about starting daemons, and the ones that are drive the
+	// boot script directly.
+	root, err := filepath.Abs(filepath.Join("..", "..", "adapters", "claude-code"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	delete(plugin.Hooks, "SessionStart")
+	for _, groups := range plugin.Hooks {
 		for _, g := range groups.([]any) {
-			hooks := []any{}
 			for _, h := range g.(map[string]any)["hooks"].([]any) {
-				if h.(map[string]any)["type"] == "http" {
-					hooks = append(hooks, h)
-				}
-			}
-			if len(hooks) > 0 {
-				kept = append(kept, map[string]any{"hooks": hooks})
+				hook := h.(map[string]any)
+				hook["command"] = strings.ReplaceAll(hook["command"].(string), `"$CLAUDE_PLUGIN_ROOT"`, root)
 			}
 		}
-		if len(kept) == 0 {
-			delete(plugin.Hooks, event)
-			continue
-		}
-		plugin.Hooks[event] = kept
 	}
 
 	out, err := json.MarshalIndent(map[string]any{
@@ -181,8 +176,9 @@ func TestClaudeCodeHooksCarryTheToken(t *testing.T) {
 }
 
 // The daemon stops when the last session it knows about ends, which it can do
-// under an editor that is still open. The boot script runs before every prompt
-// for exactly that reason, so a dead daemon is back by the next prompt.
+// under an editor that is still open. The post script runs the boot script
+// after every post that cannot connect, so a dead daemon is back by the next
+// event; this drives the boot script the way that failed post does.
 func TestClaudeCodeRevivesADeadDaemon(t *testing.T) {
 	claudeOrSkip(t)
 	d := startDaemon(t)
@@ -275,9 +271,9 @@ func appears(path string, within time.Duration) bool {
 	}
 }
 
-// The hook configuration is what the editor reads; a URL or a header lost in an
-// edit is invisible until a session quietly stops being observed.
-func TestEveryHookPostsToTheRelayWithTheToken(t *testing.T) {
+// The hook configuration is what the editor reads; an event or a script lost in
+// an edit is invisible until a session quietly stops being observed.
+func TestEveryHookRunsThePostScriptForItsOwnEvent(t *testing.T) {
 	body, err := os.ReadFile(filepath.Join("..", "..", "adapters", "claude-code", "hooks", "hooks.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -285,11 +281,9 @@ func TestEveryHookPostsToTheRelayWithTheToken(t *testing.T) {
 	var cfg struct {
 		Hooks map[string][]struct {
 			Hooks []struct {
-				Type           string            `json:"type"`
-				URL            string            `json:"url"`
-				Command        string            `json:"command"`
-				Headers        map[string]string `json:"headers"`
-				AllowedEnvVars []string          `json:"allowedEnvVars"`
+				Type    string `json:"type"`
+				URL     string `json:"url"`
+				Command string `json:"command"`
 			} `json:"hooks"`
 		} `json:"hooks"`
 	}
@@ -300,39 +294,38 @@ func TestEveryHookPostsToTheRelayWithTheToken(t *testing.T) {
 		t.Fatal("no hooks configured")
 	}
 	for event, groups := range cfg.Hooks {
-		http := 0
+		posts, boots := 0, 0
 		for _, g := range groups {
 			for _, h := range g.Hooks {
-				if h.Type != "http" {
+				// An HTTP hook that cannot connect prints an error nothing acts
+				// on; that is the failure this layout exists to remove.
+				if h.Type != "command" {
+					t.Errorf("%s has a %q hook; every hook is a command", event, h.Type)
 					continue
 				}
-				http++
-				if !strings.Contains(h.URL, "/v1/hooks/claude-code/"+event) {
-					t.Errorf("%s posts to %q", event, h.URL)
-				}
-				if h.Headers["X-Shoulder-Token"] != "${SHOULDER_TOKEN}" {
-					t.Errorf("%s does not send the token: %v", event, h.Headers)
-				}
-				// Without this the editor leaves the placeholder uninterpolated
-				// and the daemon rejects every event from the session.
-				if len(h.AllowedEnvVars) == 0 || h.AllowedEnvVars[0] != "SHOULDER_TOKEN" {
-					t.Errorf("%s does not allow SHOULDER_TOKEN to be interpolated: %v", event, h.AllowedEnvVars)
+				switch {
+				case strings.Contains(h.Command, "ensure-daemon.sh"):
+					boots++
+				case strings.HasSuffix(h.Command, "/scripts/post-event.sh "+event):
+					posts++
+				default:
+					t.Errorf("%s runs %q", event, h.Command)
 				}
 			}
 		}
-		if event != "SessionStart" && http == 0 {
-			t.Errorf("%s posts nothing to the relay", event)
+		if event == "SessionStart" {
+			if boots == 0 {
+				t.Error("SessionStart does not run the boot script, so a machine with no daemon never gets one")
+			}
+			continue
+		}
+		if posts != 1 {
+			t.Errorf("%s posts to the relay %d times, want once", event, posts)
 		}
 	}
-	for _, event := range []string{"SessionStart", "UserPromptSubmit"} {
-		found := false
-		for _, g := range cfg.Hooks[event] {
-			for _, h := range g.Hooks {
-				found = found || (h.Type == "command" && strings.Contains(h.Command, "ensure-daemon.sh"))
-			}
-		}
-		if !found {
-			t.Errorf("%s does not run the boot script, so a stopped daemon stays stopped", event)
+	for _, event := range []string{"UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "SubagentStart", "SubagentStop", "Stop", "PreCompact", "SessionEnd"} {
+		if _, ok := cfg.Hooks[event]; !ok {
+			t.Errorf("%s is not hooked at all", event)
 		}
 	}
 }

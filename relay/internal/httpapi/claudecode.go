@@ -28,8 +28,9 @@ type claudeEvent struct {
 // names to check the plugin is wired up — a new event is added here and nowhere
 // else, except in the plugin's hooks.json which must register the same set.
 //
-// SessionStart is absent on purpose: Claude Code refuses HTTP hooks for it, so
-// the session opens lazily on whichever event arrives first.
+// SessionStart is absent on purpose: the plugin's SessionStart hook starts the
+// relay and posts nothing, so the session opens lazily on whichever event
+// arrives first.
 var claudeEvents = map[string]claudeEvent{
 	"UserPromptSubmit":   {kind: session.KindUserPrompt, routine: true},
 	"PreToolUse":         {kind: session.KindToolCall, routine: true},

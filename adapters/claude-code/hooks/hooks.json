@@ -1,5 +1,5 @@
 {
-  "description": "shoulder-daemon advisory hooks. Every per-event hook is a pure HTTP callback to the local relay (127.0.0.1:8787) with no executable component and no subprocess. The single exception is SessionStart, which runs one script whose only job is to start that relay if it is not already running: Claude Code refuses HTTP hooks for SessionStart, so there is no way to do it over HTTP. Nothing stops the relay; it exits by itself once no session has used it for a while, which is the only correct answer when several editors are open at once.",
+  "description": "shoulder-daemon advisory hooks. SessionStart runs scripts/ensure-daemon.sh, which starts the relay (127.0.0.1:8787) when nothing answers there and fetches the binary when there is none. Every other event runs scripts/post-event.sh, which posts the event to the relay and prints the relay's answer; when the relay does not answer, it runs ensure-daemon.sh, so every failed post restarts the relay. Nothing stops the relay; it exits by itself once no session has used it for a while, which is the only correct answer when several editors are open at once.",
   "hooks": {
     "SessionStart": [
       {
@@ -17,23 +17,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PLUGIN_ROOT\"/scripts/ensure-daemon.sh",
+            "command": "\"$CLAUDE_PLUGIN_ROOT\"/scripts/post-event.sh UserPromptSubmit",
             "timeout": 5
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "http",
-            "url": "http://127.0.0.1:8787/v1/hooks/claude-code/UserPromptSubmit",
-            "timeout": 2,
-            "headers": {
-              "X-Shoulder-Token": "${SHOULDER_TOKEN}"
-            },
-            "allowedEnvVars": [
-              "SHOULDER_TOKEN"
-            ]
           }
         ]
       }
@@ -43,15 +28,9 @@
         "matcher": "*",
         "hooks": [
           {
-            "type": "http",
-            "url": "http://127.0.0.1:8787/v1/hooks/claude-code/PreToolUse",
-            "timeout": 2,
-            "headers": {
-              "X-Shoulder-Token": "${SHOULDER_TOKEN}"
-            },
-            "allowedEnvVars": [
-              "SHOULDER_TOKEN"
-            ]
+            "type": "command",
+            "command": "\"$CLAUDE_PLUGIN_ROOT\"/scripts/post-event.sh PreToolUse",
+            "timeout": 5
           }
         ]
       }
@@ -61,15 +40,9 @@
         "matcher": "*",
         "hooks": [
           {
-            "type": "http",
-            "url": "http://127.0.0.1:8787/v1/hooks/claude-code/PostToolUse",
-            "timeout": 2,
-            "headers": {
-              "X-Shoulder-Token": "${SHOULDER_TOKEN}"
-            },
-            "allowedEnvVars": [
-              "SHOULDER_TOKEN"
-            ]
+            "type": "command",
+            "command": "\"$CLAUDE_PLUGIN_ROOT\"/scripts/post-event.sh PostToolUse",
+            "timeout": 5
           }
         ]
       }
@@ -79,15 +52,9 @@
         "matcher": "*",
         "hooks": [
           {
-            "type": "http",
-            "url": "http://127.0.0.1:8787/v1/hooks/claude-code/PostToolUseFailure",
-            "timeout": 2,
-            "headers": {
-              "X-Shoulder-Token": "${SHOULDER_TOKEN}"
-            },
-            "allowedEnvVars": [
-              "SHOULDER_TOKEN"
-            ]
+            "type": "command",
+            "command": "\"$CLAUDE_PLUGIN_ROOT\"/scripts/post-event.sh PostToolUseFailure",
+            "timeout": 5
           }
         ]
       }
@@ -96,15 +63,9 @@
       {
         "hooks": [
           {
-            "type": "http",
-            "url": "http://127.0.0.1:8787/v1/hooks/claude-code/SubagentStart",
-            "timeout": 2,
-            "headers": {
-              "X-Shoulder-Token": "${SHOULDER_TOKEN}"
-            },
-            "allowedEnvVars": [
-              "SHOULDER_TOKEN"
-            ]
+            "type": "command",
+            "command": "\"$CLAUDE_PLUGIN_ROOT\"/scripts/post-event.sh SubagentStart",
+            "timeout": 5
           }
         ]
       }
@@ -113,15 +74,9 @@
       {
         "hooks": [
           {
-            "type": "http",
-            "url": "http://127.0.0.1:8787/v1/hooks/claude-code/SubagentStop",
-            "timeout": 2,
-            "headers": {
-              "X-Shoulder-Token": "${SHOULDER_TOKEN}"
-            },
-            "allowedEnvVars": [
-              "SHOULDER_TOKEN"
-            ]
+            "type": "command",
+            "command": "\"$CLAUDE_PLUGIN_ROOT\"/scripts/post-event.sh SubagentStop",
+            "timeout": 5
           }
         ]
       }
@@ -130,15 +85,9 @@
       {
         "hooks": [
           {
-            "type": "http",
-            "url": "http://127.0.0.1:8787/v1/hooks/claude-code/Stop",
-            "timeout": 2,
-            "headers": {
-              "X-Shoulder-Token": "${SHOULDER_TOKEN}"
-            },
-            "allowedEnvVars": [
-              "SHOULDER_TOKEN"
-            ]
+            "type": "command",
+            "command": "\"$CLAUDE_PLUGIN_ROOT\"/scripts/post-event.sh Stop",
+            "timeout": 5
           }
         ]
       }
@@ -147,15 +96,9 @@
       {
         "hooks": [
           {
-            "type": "http",
-            "url": "http://127.0.0.1:8787/v1/hooks/claude-code/PreCompact",
-            "timeout": 2,
-            "headers": {
-              "X-Shoulder-Token": "${SHOULDER_TOKEN}"
-            },
-            "allowedEnvVars": [
-              "SHOULDER_TOKEN"
-            ]
+            "type": "command",
+            "command": "\"$CLAUDE_PLUGIN_ROOT\"/scripts/post-event.sh PreCompact",
+            "timeout": 5
           }
         ]
       }
@@ -164,15 +107,9 @@
       {
         "hooks": [
           {
-            "type": "http",
-            "url": "http://127.0.0.1:8787/v1/hooks/claude-code/SessionEnd",
-            "timeout": 2,
-            "headers": {
-              "X-Shoulder-Token": "${SHOULDER_TOKEN}"
-            },
-            "allowedEnvVars": [
-              "SHOULDER_TOKEN"
-            ]
+            "type": "command",
+            "command": "\"$CLAUDE_PLUGIN_ROOT\"/scripts/post-event.sh SessionEnd",
+            "timeout": 5
           }
         ]
       }
