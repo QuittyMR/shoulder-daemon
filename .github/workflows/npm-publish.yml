@@ -1,0 +1,53 @@
+name: npm publish
+
+# Publishes the OpenCode package for one release tag, by hand. The release
+# workflow publishes on every tag push, but npm refuses to make a version
+# "latest" by default when a higher one is already published, which is the
+# case after a release has been withdrawn and re-cut under a lower number.
+# This publishes under a temporary dist-tag, then moves "latest" explicitly,
+# then removes the temporary tag.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: release tag to publish, vX.Y.Z
+        required: true
+      deprecate:
+        description: version to mark deprecated, with the reason after a space; empty for none
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  npm:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.ref }}
+      - run: scripts/check-version.sh "${{ inputs.ref }}"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+      - working-directory: adapters/opencode
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          REF: ${{ inputs.ref }}
+          DEPRECATE: ${{ inputs.deprecate }}
+        run: |
+          test -n "$NODE_AUTH_TOKEN" || { echo "NPM_TOKEN is not set" >&2; exit 1; }
+          ver="${REF#v}"
+          name="$(node -p "require('./package.json').name")"
+          npm publish --access public --provenance --tag "publish-$ver"
+          npm dist-tag add "$name@$ver" latest
+          npm dist-tag rm "$name" "publish-$ver"
+          if [ -n "$DEPRECATE" ]; then
+            npm deprecate "$name@${DEPRECATE%% *}" "${DEPRECATE#* }"
+          fi
+          npm view "$name" dist-tags
