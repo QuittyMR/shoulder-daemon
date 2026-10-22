@@ -6,6 +6,8 @@ Notable changes to shoulder-daemon. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-22
+
 ### Changed
 
 - Every per-event hook of the Claude Code plugin is now a command,
@@ -553,7 +555,8 @@ The first tagged release.
   results are unwrapped properly.
 - Session notes are remembered as the store accepted them, not as they were offered.
 
-[Unreleased]: https://github.com/QuittyMR/shoulder-daemon/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/QuittyMR/shoulder-daemon/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/QuittyMR/shoulder-daemon/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/QuittyMR/shoulder-daemon/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/QuittyMR/shoulder-daemon/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/QuittyMR/shoulder-daemon/compare/v0.3.0...v0.4.0
