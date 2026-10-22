@@ -28,12 +28,16 @@ jobs:
           base="/users/$OWNER/packages/container/shoulder-daemon/versions"
           versions="$(gh api --paginate "$base" --jq '.[] | "\(.id) \(.metadata.container.tags | join(","))"')"
           echo "before:"; echo "$versions" | grep -v ' $' || true
+          # One version usually carries several tags, so the ids are
+          # collected across every tag and each is deleted once.
+          ids=""
           for tag in $TAGS; do
-            ids="$(echo "$versions" | awk -v t="$tag" '{ n = split($2, a, ","); for (i = 1; i <= n; i++) if (a[i] == t) print $1 }')"
-            [ -n "$ids" ] || { echo "no image version carries tag $tag" >&2; exit 1; }
-            for id in $ids; do
-              gh api -X DELETE "$base/$id"
-              echo "deleted version $id (tag $tag)"
-            done
+            found="$(echo "$versions" | awk -v t="$tag" '{ n = split($2, a, ","); for (i = 1; i <= n; i++) if (a[i] == t) print $1 }')"
+            [ -n "$found" ] || { echo "no image version carries tag $tag" >&2; exit 1; }
+            ids="$ids $found"
+          done
+          for id in $(echo "$ids" | tr ' ' '\n' | sort -u | grep .); do
+            gh api -X DELETE "$base/$id"
+            echo "deleted version $id"
           done
           echo "after:"; gh api --paginate "$base" --jq '.[] | "\(.id) \(.metadata.container.tags | join(","))"' | grep -v ' $' || true
