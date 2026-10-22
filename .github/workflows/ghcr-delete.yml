@@ -1,0 +1,39 @@
+name: ghcr delete
+
+# Removes the container image versions that carry the given tags, by hand.
+# The release workflow pushes an image for every tag; a release that has been
+# withdrawn leaves its image behind, and nothing else deletes one.
+on:
+  workflow_dispatch:
+    inputs:
+      tags:
+        description: image tags to delete, separated by spaces, such as "0.6.0 0.6"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  delete:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAGS: ${{ inputs.tags }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -eu
+          base="/users/$OWNER/packages/container/shoulder-daemon/versions"
+          versions="$(gh api --paginate "$base" --jq '.[] | "\(.id) \(.metadata.container.tags | join(","))"')"
+          echo "before:"; echo "$versions" | grep -v ' $' || true
+          for tag in $TAGS; do
+            ids="$(echo "$versions" | awk -v t="$tag" '{ n = split($2, a, ","); for (i = 1; i <= n; i++) if (a[i] == t) print $1 }')"
+            [ -n "$ids" ] || { echo "no image version carries tag $tag" >&2; exit 1; }
+            for id in $ids; do
+              gh api -X DELETE "$base/$id"
+              echo "deleted version $id (tag $tag)"
+            done
+          done
+          echo "after:"; gh api --paginate "$base" --jq '.[] | "\(.id) \(.metadata.container.tags | join(","))"' | grep -v ' $' || true
