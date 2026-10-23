@@ -137,6 +137,28 @@ that never reached npm can also be published by hand from `adapters/opencode` wi
 `npm publish --access public --//registry.npmjs.org/:_authToken=<token>`, which keeps the
 token out of `~/.npmrc`.
 
+### Withdrawing a release
+
+A release tagged under the wrong number is withdrawn and re-cut, in this order: delete the
+GitHub release (`gh release delete vX.Y.Z --yes`), delete the three tags on every remote and
+locally, commit the corrected number in the four places, push `main`, and run `make release`
+with the new tag. Deleting the tag removes the GitLab release with it. Two things the release
+workflow cannot undo have hand-run workflows under `.github/workflows/`, started with
+`gh workflow run <file> --ref main -f ...`:
+
+- `ghcr-delete.yml` with `tags="X.Y.Z X.Y"` deletes the image versions carrying those tags from
+  the container registry. The local `gh` login cannot do this unless its token carries the
+  packages scope; the workflow uses the job's own token.
+- `npm-publish.yml` with `ref=vX.Y.Z` publishes a version lower than the one already on npm,
+  which the release workflow cannot: npm refuses to make a lower version `latest` implicitly.
+  It publishes under a temporary dist-tag, moves `latest`, and with
+  `deprecate="X.Y.Z <reason>"` marks the withdrawn version deprecated. Removing the temporary
+  dist-tag needs a one-time code, so it is left behind and is harmless.
+
+npm never reuses a version number, so a withdrawn version is gone from the tag space for good:
+**0.6.0 was withdrawn on 2026-10-22 and cannot be released again.** Because the version check
+wants one number everywhere, the release after 0.5.x is 0.6.1 or 0.7.0.
+
 The release scripts are bash. A shell that exports `SHELLOPTS` with `onecmd` set - some agent
 harnesses do - makes every bash script run its first command and exit 0, so
 `make release-check` reports nothing and passes. Run them from a normal terminal, or prefix
