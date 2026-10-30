@@ -6,6 +6,11 @@ Notable changes to shoulder-daemon. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- `shoulderd monitor` prints the date with the time. A log spans days, and a
+  clock time alone could not say which day a movement belonged to.
+
 ## [0.5.1] - 2026-10-22
 
 ### Changed

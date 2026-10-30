@@ -236,11 +236,11 @@ shows the whole file, `--no-follow` prints and exits, `--json` passes the raw
 records through.
 
 ```
-14:02:11  stored      local shoulder-daemon     (fact) "main branch is master"  id=mem_12
-14:09:40  queued      session 3f9a1c07 event 6  "the branch is master, not main"  id=adv_4
-14:09:41  injected    session 3f9a1c07 UserPromptSubmit  "the branch is master, not main"  id=adv_4
-14:31:05  superseded  global                   [cli]  (preference) "terse answers, no preamble"  supersedes=mem_2
-14:40:00  merged      local shoulder-daemon     "integration tests need a live Postgres"  kept=mem_5  replaced=mem_7,mem_9
+2026-09-05 14:02:11  stored      local shoulder-daemon     (fact) "main branch is master"  id=mem_12
+2026-09-05 14:09:40  queued      session 3f9a1c07 event 6  "the branch is master, not main"  id=adv_4
+2026-09-05 14:09:41  injected    session 3f9a1c07 UserPromptSubmit  "the branch is master, not main"  id=adv_4
+2026-09-05 14:31:05  superseded  global                   [cli]  (preference) "terse answers, no preamble"  supersedes=mem_2
+2026-09-05 14:40:00  merged      local shoulder-daemon     "integration tests need a live Postgres"  kept=mem_5  replaced=mem_7,mem_9
 ```
 
 The log itself is `~/.local/share/shoulder-daemon/shoulderd.log`, JSON, one

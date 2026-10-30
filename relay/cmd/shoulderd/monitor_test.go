@@ -41,6 +41,12 @@ func TestMonitorFiltersToMovements(t *testing.T) {
 			t.Errorf("%q leaked through the filter:\n%s", unwanted, out.String())
 		}
 	}
+	// The day is part of the time: a log spans days, and a bare clock time
+	// cannot say which one a movement belongs to.
+	wantDay := time.Date(2026, 9, 5, 10, 0, 2, 0, time.UTC).Local().Format("2006-01-02 15:04:05")
+	if !strings.HasPrefix(lines[0], wantDay+"  ") {
+		t.Errorf("line 0 %q does not start with %q", lines[0], wantDay)
+	}
 	for i, want := range []string{
 		`stored      local repo                (structure) "main branch is master"  id=mem_1`,
 		`queued      session 01234567 event 4  "the branch is master"  id=adv_1`,

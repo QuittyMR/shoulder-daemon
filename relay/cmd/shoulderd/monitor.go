@@ -243,7 +243,7 @@ func renderMovement(line []byte) string {
 	delete(attrs, "msg")
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s  %-11s", rec.Time.Local().Format("15:04:05"), movements[rec.Msg])
+	fmt.Fprintf(&b, "%s  %-11s", rec.Time.Local().Format("2006-01-02 15:04:05"), movements[rec.Msg])
 
 	// Where: a scope with its project for a fact, a session for advice.
 	if sc, ok := attrs["scope"]; ok {
