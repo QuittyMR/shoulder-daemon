@@ -139,3 +139,17 @@ func TestMemoryBackendIsReadByNameAndForgiven(t *testing.T) {
 		t.Fatalf("overrides: global %q, dir %q", c.GlobalDocs, c.DocsDir)
 	}
 }
+
+// Notices are on unless switched off: a daemon that fails in silence is a
+// daemon nobody fixes.
+func TestNotifyIsOnUnlessSwitchedOff(t *testing.T) {
+	t.Setenv("SHOULDER_ENV_FILE", filepath.Join(t.TempDir(), "absent"))
+	t.Setenv("SHOULDER_NOTIFY", "")
+	if got := Load().Notify; got != "on" {
+		t.Fatalf("Notify = %q, want on", got)
+	}
+	t.Setenv("SHOULDER_NOTIFY", "off")
+	if got := Load().Notify; got != "off" {
+		t.Fatalf("Notify = %q, want off", got)
+	}
+}

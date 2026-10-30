@@ -29,6 +29,7 @@ import (
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/memory"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/memory/minilm"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/memory/vectors"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/notify"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/outbox"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/pipeline"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/scope"
@@ -179,10 +180,20 @@ func serve() error {
 
 	live := settings.New(level, cfg.Pickiness, llm.EnvSpec(), os.Getenv("SHOULDER_LLM_MODEL"), provider)
 
+	// A typo here must not stop the daemon, and must not switch notices
+	// off in silence either: it is said, and the defaults apply.
+	policy, perr := notify.Parse(cfg.Notify)
+	if perr != nil {
+		log.Warn("notifications set to on: the setting could not be read", "SHOULDER_NOTIFY", cfg.Notify, "err", perr)
+		policy = notify.Defaults()
+	}
+	notices := notify.New(policy)
+	srv.Notices = notices
+
 	pipe := &pipeline.Pipeline{
 		Cfg: cfg, Log: log, Metrics: srv.Metrics, Registry: reg,
 		IdleExit: cfg.IdleExit, OnIdle: stop,
-		Outbox: box, Settings: live, Memory: mem, Queue: queue,
+		Outbox: box, Settings: live, Memory: mem, Queue: queue, Notify: notices,
 	}
 	// Assigned only when there is one: a nil *Jev in the interface is a
 	// triage that is set and panics on first use.
@@ -219,7 +230,7 @@ func serve() error {
 	go pipe.ProbeModel(ctx)
 
 	log.Info("shoulderd listening",
-		"addr", cfg.Addr, "llm", providerName(provider), "triage", triageName(jev), "memory", mem.Name(),
+		"addr", cfg.Addr, "llm", providerName(provider), "triage", triageName(jev), "memory", mem.Name(), "notify", policy.String(),
 		"pickiness", cfg.Pickiness, "dry_run", cfg.Budget.DryRun, "auth", token != "",
 		"log", cfg.LogPath)
 
@@ -436,6 +447,9 @@ func (c *cli) doctor(args []string) int {
 			out["llm_model"] = running.Model
 			out["llm_model_source"] = running.ModelSource
 		}
+		if running.Notify != "" {
+			out["notify"] = running.Notify
+		}
 		// A triage with no decision model is a supported way to run: stored
 		// facts are still repeated, only none is deduced from the session.
 		switch {
@@ -600,6 +614,13 @@ func (c *cli) doctor(args []string) int {
 		fmt.Printf("         answering since %v\n", out["llm_answering_since"])
 	case pipeline.ModelUnknown:
 		fmt.Println("         not yet asked; the daemon probes it at start and reports here")
+	}
+	if n, ok := out["notify"].(string); ok {
+		if n == "off" {
+			fmt.Println("notify:  off; set SHOULDER_NOTIFY=on to see what is stored and injected in the editor again")
+		} else {
+			fmt.Printf("notify:  %s\n", n)
+		}
 	}
 	if missing, ok := out["events_never_seen"].([]string); ok {
 		if len(missing) == 0 {

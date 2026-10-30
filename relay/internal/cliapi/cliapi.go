@@ -637,6 +637,10 @@ type ConfigResponse struct {
 	// whose key is dead is configured, named, and useless; this is the field
 	// that says so.
 	ModelHealth pipeline.ModelHealth `json:"model_health"`
+
+	// Notify is which notices reach the person in the editor, as the
+	// setting reads back: "off" or a list of kinds.
+	Notify string `json:"notify,omitempty"`
 }
 
 // SourceConfigSet is the source of a provider or model set at the terminal.
@@ -647,6 +651,7 @@ func (s *Server) configResponse(snap settings.Snapshot) ConfigResponse {
 		Snapshot: snap, Triage: "none", EnvFile: config.LoadedFile(),
 		ProviderSource: config.Source("SHOULDER_LLM"), ModelSource: config.Source("SHOULDER_LLM_MODEL"),
 		ModelHealth: s.Pipe.ModelHealth(),
+		Notify:      s.Pipe.Notify.Policy().String(),
 	}
 	prov, model := s.Pipe.Settings.SetAtRuntime()
 	if prov {

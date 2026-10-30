@@ -159,6 +159,8 @@ the binary. Mention, and set only if asked:
   recall.
 - `SHOULDER_PICKINESS` is `eager, open, balanced, careful, strict`: how
   reluctant the daemon is to keep a new fact.
+- `SHOULDER_NOTIFY` is what the daemon reports in the editor as it
+  happens; `on` by default, `off` for silence.
 
 A memory service instead of the file, a container, and every other setting are
 in [INSTALL.md](INSTALL.md).

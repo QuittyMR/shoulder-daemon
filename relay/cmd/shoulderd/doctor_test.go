@@ -448,6 +448,7 @@ type daemonRuns struct {
 	store, storeSource, openError, envFile       string
 	triage                                       string
 	health                                       pipeline.ModelHealth
+	notify                                       string
 }
 
 // doctorAgainst runs doctor with args against a daemon that runs d, with the
@@ -468,7 +469,7 @@ func doctorAgainst(t *testing.T, d daemonRuns, args []string, lines ...string) (
 		&cliapi.ConfigResponse{
 			Snapshot:       settings.Snapshot{Provider: d.provider, Model: d.model},
 			ProviderSource: d.providerSource, ModelSource: d.modelSource, EnvFile: d.envFile,
-			Triage: d.triage, ModelHealth: d.health,
+			Triage: d.triage, ModelHealth: d.health, Notify: d.notify,
 		})
 	c := &cli{out: io.Discard, err: io.Discard}
 	var code int
@@ -530,6 +531,20 @@ func TestDoctorFailsWhenTheModelRefusesEveryCall(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("the report must say %q on one line:\n%s", want, out)
 		}
+	}
+}
+
+func TestDoctorPrintsTheNotifySetting(t *testing.T) {
+	d := fromFile
+	d.notify = "errors,injections,stored,superseded"
+	_, out := doctorAgainst(t, d, nil, fileAsks...)
+	if !strings.Contains(out, "notify:  errors,injections,stored,superseded") {
+		t.Fatalf("the setting in use must be printed:\n%s", out)
+	}
+	d.notify = "off"
+	_, out = doctorAgainst(t, d, nil, fileAsks...)
+	if !strings.Contains(out, "notify:  off; set SHOULDER_NOTIFY=on") {
+		t.Fatalf("off must say how to switch it back on:\n%s", out)
 	}
 }
 

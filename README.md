@@ -293,6 +293,23 @@ file, and `SHOULDER_LOG=stderr` switches it off for a daemon whose output someth
 else collects, which is also the one case `monitor` cannot watch. Counters for
 the same events are at `/metrics` on the daemon's address.
 
+### Notifications
+
+What the daemon does shows up in the editor as it happens: Claude Code shows
+it as a notice beside the conversation, and OpenCode as a toast. The model
+never sees any of it. By default that is errors, injections with the text
+injected, facts stored with the text stored, and facts superseded. Two more
+kinds are off until named: `warnings` (a fact the model wanted that could not
+be kept, and why) and `maintenance` (the store's tidying passes, with counts).
+
+```bash
+shoulderd env set SHOULDER_NOTIFY on,warnings
+```
+
+Name what you want, in any mix: `on` is the default four, `errors,stored`,
+`all`, or `off` for silence; the daemon reads it at start. `shoulderd doctor`
+prints the setting in use.
+
 ### Storage backend
 
 Facts are kept by the daemon itself, in

@@ -85,6 +85,11 @@ type Config struct {
 	// runs, and from that point on the live value is the one that counts.
 	Pickiness prompts.Pickiness
 
+	// Notify is which kinds of notice reach the person in the editor, as
+	// SHOULDER_NOTIFY spells them; the notify package reads it. On by
+	// default: a daemon that fails in silence is a daemon nobody fixes.
+	Notify string
+
 	// Renamed lists the settings that were read under an old name.
 	Renamed []Renamed
 }
@@ -127,6 +132,7 @@ func Load() Config {
 		IdleExit:       time.Duration(envInt("SHOULDER_IDLE_EXIT_MINUTES", 60)) * time.Minute,
 		LogPath:        logPath(Setting("SHOULDER_LOG")),
 		LogLevel:       logLevel(Env("LOG_LEVEL", "info")),
+		Notify:         Env("SHOULDER_NOTIFY", "on"),
 		Pickiness:      pickiness(Setting("SHOULDER_PICKINESS")),
 	}
 	g := budget.Default()

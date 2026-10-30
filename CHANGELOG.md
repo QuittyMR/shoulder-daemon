@@ -18,6 +18,15 @@ Notable changes to shoulder-daemon. The format follows
   would is a stub in `scripts/ensure-daemon.sh`, empty on purpose.
 - The install guide has an update section: the binary, the adapter and the
   process, and what moves each.
+- Notices in the editor, on by default. The daemon tells the person what
+  it does, as it does it: errors, advice injected with its text, facts
+  stored with their text, and facts superseded. `warnings` (a fact that
+  could not be kept, and why) and `maintenance` (tidying passes, with
+  counts) are named to switch on with `SHOULDER_NOTIFY`; `all` is
+  everything, `off` is silence. Claude Code shows them as `systemMessage`, the one hook field
+  addressed to the person and never the model; OpenCode shows them as
+  toasts. A notice is queued for the session it concerns and rides on that
+  session's next hook. `shoulderd doctor` prints the setting in use.
 
 ### Fixed
 

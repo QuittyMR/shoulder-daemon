@@ -682,7 +682,9 @@ Everything is environment driven. The only two you need:
 | `SHOULDER_EMBEDDING` | How the built-in store ranks by meaning: `glove` (default; compiled in, no download) or `minilm` (a 91 MB transformer fetched once into `SHOULDER_MODEL_DIR`, default `~/.cache/shoulder-daemon/models`; the store uses `glove` until it has arrived). |
 
 Then `SHOULDER_TOKEN` (generated for you; set it only to override),
-`SHOULDER_ADDR`, `SHOULDER_MEMORY_KEY`, `SHOULDER_PICKINESS`, `SHOULDER_LOG` (the log file;
+`SHOULDER_ADDR`, `SHOULDER_MEMORY_KEY`, `SHOULDER_PICKINESS`, `SHOULDER_NOTIFY` (what the
+daemon tells you in the editor: `on`, the default, for errors, injections, stored and
+superseded facts; plus `warnings` and `maintenance` by name, `all`, or `off`), `SHOULDER_LOG` (the log file;
 `~/.local/share/shoulder-daemon/shoulderd.log`, or `stderr` for none), `LOG_LEVEL`,
 `SHOULDER_DRY_RUN`, `SHOULDER_IDLE_EXIT_MINUTES` (60; zero switches it off), `SHOULDER_TRIAGE`
 with `TYPESAFE_API_KEY`, `TYPESAFE_BASE_URL`, `SHOULDER_JEV_MODEL` and
