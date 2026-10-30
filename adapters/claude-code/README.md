@@ -38,7 +38,11 @@ session is back on the next event, not the next typed prompt. An HTTP hook could
 that cannot connect prints an error and nothing acts on it.
 
 `ensure-daemon.sh` does one thing: if `http://$SHOULDER_ADDR/readyz` does not answer within a second, or answers
-that the relay cannot reach its memory store, it starts the daemon in the background. A relay too old
+that the relay cannot reach its memory store, it starts the daemon in the background. A relay that is
+ready but whose decision model refuses every call is not restarted - no restart mends a dead key - and
+at `SessionStart` the script says so to you, as the `systemMessage` of the one JSON object it prints,
+which is the only output of a `SessionStart` hook the harness shows a person; stderr from a hook that
+exits 0 reaches nobody. Everything else the script has to say at session start goes out the same way. A relay too old
 to serve `/readyz` answers 404, which is left alone: its readiness is unknown, not bad. A store that
 never comes back would otherwise mean a start command on every event, so a recovery of something
 that is answering happens at most once every 30 seconds; nothing answering at all is exempt, and comes

@@ -24,6 +24,12 @@ Notable changes to shoulder-daemon. The format follows
   the model going down and coming back as `model down` and `model up`. The
   view filtered these out before, which is how thirteen days of refusals
   went unseen.
+- The Claude Code plugin's `SessionStart` hook tells you when the decision
+  model refuses, as the `systemMessage` of the one JSON object it prints.
+  Everything the start script said on stderr before went nowhere: the
+  harness shows a person nothing from a hook that exits 0 except that
+  field, so every warning the script has is now said that way at session
+  start.
 
 ### Changed
 

@@ -40,7 +40,30 @@ TMP=""
 # opposite things, and asking a second time to tell them apart would put another
 # second in front of every prompt somebody types.
 probe() { curl -s -w '\n%{http_code}' --max-time 1 "http://${ADDR}/readyz" 2>/dev/null; }
-say() { echo "shoulder-daemon: $*" >&2; }
+
+# Nothing said on stderr by a hook that exits 0 reaches anybody: the harness
+# keeps it for its debug log. What a person sees is the systemMessage field of
+# a JSON object on stdout, and at session start that is the one moment in a
+# session the daemon can say anything to them at all. So everything said here
+# is kept and printed as one such object when the script ends, and only at
+# session start: from every other caller stdout goes nowhere, and two objects
+# on one stdout would be read as none.
+NOTES=""
+say() {
+  echo "shoulder-daemon: $*" >&2
+  NOTES="${NOTES}${NOTES:+ }shoulder-daemon: $*"
+}
+json_string() { printf '"%s"' "$(printf '%s' "$1" | tr '\n\t' '  ' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"; }
+HOLDING=""
+finish() {
+  [ -n "$TMP" ] && rm -rf "$TMP"
+  [ -n "$HOLDING" ] && rmdir "${LOCK}" 2>/dev/null
+  if [ "$FETCH" = 1 ] && [ -n "$NOTES" ]; then
+    printf '{"systemMessage":%s}\n' "$(json_string "$NOTES")"
+  fi
+  return 0
+}
+trap finish EXIT
 
 # recently answers whether a stamp names a moment inside the last n seconds. The
 # moment is the file's contents and not its mtime, because reading an mtime
@@ -69,8 +92,21 @@ STATE="$(printf '%s' "$ANSWER" | tail -n 1)"
 # has not upgraded yet a start command before every prompt they type. An unknown
 # readiness is left alone exactly as a known-good one is, which is what this
 # hook did back when all it ever asked about was /healthz.
+# A relay that is ready can still be a relay whose decision model refuses every
+# call: the store is fine, the hooks fire, and nothing is learned from any
+# session. No restart mends a dead key, so the 200 stands; the person is told.
 case "$STATE" in
-  200|404) exit 0 ;;
+  200)
+    case "$ANSWER" in
+      *'"model":"failing"'*)
+        provider="$(printf '%s' "$ANSWER" | sed -n 's/.*"model_provider":"\([^"]*\)".*/\1/p')"
+        since="$(printf '%s' "$ANSWER" | sed -n 's/.*"model_since":"\([^"]*\)".*/\1/p')"
+        say "the decision model (${provider:-unknown}) has refused every call since ${since:-the daemon started}, so nothing is learned from this session; 'shoulderd doctor' shows the refusal"
+        ;;
+    esac
+    exit 0
+    ;;
+  404) exit 0 ;;
 esac
 
 # 503 is two faults wearing one status code. A store that is unreachable is
@@ -143,7 +179,7 @@ if ! take; then
   done
   exit 0
 fi
-trap '[ -n "$TMP" ] && rm -rf "$TMP"; rmdir "${LOCK}" 2>/dev/null || true' EXIT
+HOLDING=1
 
 # Which binary. Something the user put on PATH wins over what the plugin
 # fetched, so `go install` or a package manager is never second-guessed.

@@ -40,6 +40,7 @@ const (
 	storeUnreachable  = `{"ok":false,"memory":"unreachable","error":"the store did not answer within 2s"}`
 	storeUnconfigured = `{"ok":false,"memory":"none","error":"no memory backend is configured; nothing observed in a session will be kept"}`
 	storeReady        = `{"ok":true,"memory":"ok"}`
+	modelRefusing     = `{"ok":true,"memory":"ok","model":"failing","model_provider":"gemini","model_since":"2026-10-17 18:17"}`
 )
 
 // nothingListening returns an address that was a server and is not one now, so
@@ -113,6 +114,50 @@ func boot(t *testing.T, addr, runtime, started string) string {
 		t.Fatalf("the boot script must never fail a hook: %v\n%s", err, out)
 	}
 	return string(out)
+}
+
+// sessionStart runs the hook as the editor's SessionStart does, with --fetch.
+// Only a relay answering 200 may be used here: anything else sends the script
+// looking for a binary to download.
+func sessionStart(t *testing.T, addr string) string {
+	t.Helper()
+	if real(addr) {
+		t.Fatalf("this would drive the machine's real relay at %q, not a stub", addr)
+	}
+	script := filepath.Join("..", "..", "adapters", "claude-code", "scripts", "ensure-daemon.sh")
+	cmd := exec.Command(script, "--fetch") //nolint:gosec // G204: script is a literal path in this repository
+	cmd.Env = append(clean(os.Environ()), "SHOULDER_ADDR="+addr, "XDG_RUNTIME_DIR="+t.TempDir())
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("the boot script must never fail a hook: %v", err)
+	}
+	return string(out)
+}
+
+// The incident: the decision model refused every call for thirteen days and
+// no session said so. At session start the harness shows the person a
+// systemMessage and nothing else, so that is what a refusing model becomes.
+func TestSessionStartTellsThePersonWhenTheModelRefuses(t *testing.T) {
+	said := sessionStart(t, relayAnswering(t, http.StatusOK, modelRefusing))
+	want := `{"systemMessage":"shoulder-daemon: the decision model (gemini) has refused every call since 2026-10-17 18:17, so nothing is learned from this session; 'shoulderd doctor' shows the refusal"}`
+	if strings.TrimSpace(said) != want {
+		t.Fatalf("stdout must be exactly the one object the harness shows:\n got %s\nwant %s", said, want)
+	}
+}
+
+func TestSessionStartPrintsNothingWhenTheModelAnswers(t *testing.T) {
+	if said := sessionStart(t, relayAnswering(t, http.StatusOK, storeReady)); said != "" {
+		t.Fatalf("a working relay has nothing to say at session start, got %q", said)
+	}
+}
+
+// Before every prompt stdout goes nowhere, and a hook that printed the object
+// there would be printing it into the void on every prompt of the session.
+func TestTheRefusingModelIsNotRepeatedBeforeEveryPrompt(t *testing.T) {
+	said := boot(t, relayAnswering(t, http.StatusOK, modelRefusing), t.TempDir(), filepath.Join(t.TempDir(), "started"))
+	if strings.Contains(said, "systemMessage") {
+		t.Fatalf("the session-start object was printed from the per-prompt hook:\n%s", said)
+	}
 }
 
 // The bug this guards: a relay that cannot reach its store still answers
