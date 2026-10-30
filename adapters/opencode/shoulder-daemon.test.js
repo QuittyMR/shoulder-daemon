@@ -65,15 +65,17 @@ async function waitFor(want, within = 3000) {
  * reused it would be answered by a relay the test believes it has killed.
  */
 async function stub(t, status, body = { ok: false, memory: "unreachable" }) {
-  const s = { probes: 0, events: 0, status, body, raw: null, dropEvents: false };
+  const s = { probes: 0, events: 0, status, body, raw: null, dropEvents: false, answer: null };
   const server = createServer((req, res) => {
     // Everything but the readiness route answers 404, which for /v1/events is
     // a reply rather than a failure: the adapter reads a refused event as no
     // advice and does not reach for a start, so a start seen in a test that
     // posts an event is one the readiness check asked for and nothing else.
+    // A test that sets answer gets it back on every event instead.
     if (req.url !== "/readyz") {
       s.events++;
       if (s.dropEvents) req.socket.destroy();
+      else if (s.answer !== null) res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(s.answer));
       else res.writeHead(404).end();
       return;
     }
@@ -156,7 +158,7 @@ async function plugin(t, addr) {
     // Loading the plugin is the moment the adapter probes and decides, and it
     // deliberately does not wait for that decision, so every assertion below
     // is made after polling rather than after an await.
-    load: () => mod.ShoulderDaemon({ directory: dir, worktree: dir }),
+    load: (client) => mod.ShoulderDaemon({ directory: dir, worktree: dir, client }),
     starts: () => readFileSync(starts, "utf8").length,
   };
 }
@@ -301,6 +303,46 @@ test("a store that dies under a live session is noticed at the next prompt", asy
   await hooks["chat.message"]({ sessionID: "session" }, { parts: [{ type: "text", text: "hello" }] });
 
   assert.ok(await waitFor(() => p.starts() === 1), "the session went on talking to a relay that could not answer");
+});
+
+// The relay's notices are the person's window on the daemon, and the editor's
+// toast is where they go: every notice on an answer, whether the hook waited
+// for that answer or not, and nothing when the editor has no toast to show.
+test("the relay's notices are shown as toasts", async (t) => {
+  const relay = await stub(t, 200);
+  relay.answer = {
+    advice: null,
+    notices: [
+      { kind: "stored", text: 'global (preference): "terse answers"' },
+      { kind: "errors", text: "decision failed: gemini status 400" },
+    ],
+  };
+  const shown = [];
+  const client = { tui: { showToast: async (input) => void shown.push(input.body) } };
+  const p = await plugin(t, relay.addr);
+  const hooks = await p.load(client);
+
+  await hooks["tool.execute.before"]({ tool: "bash", sessionID: "session", callID: "c1" }, { args: {} });
+  assert.ok(await waitFor(() => shown.length === 2), `the notices never reached the editor: ${JSON.stringify(shown)}`);
+  assert.deepEqual(shown[0], {
+    title: "shoulder-daemon",
+    message: 'stored: global (preference): "terse answers"',
+    variant: "success",
+  });
+  assert.deepEqual(shown[1], { title: "shoulder-daemon", message: "error: decision failed: gemini status 400", variant: "error" });
+
+  // The prompt hook waits for its answer; its notices are shown the same way.
+  await hooks["chat.message"]({ sessionID: "session" }, { parts: [{ type: "text", text: "hello" }] });
+  assert.equal(shown.length, 4, "the prompt's answer carried two more notices");
+
+  // An editor without a toast, and an answer without notices, show nothing
+  // and break nothing.
+  const bare = await (await plugin(t, relay.addr)).load({});
+  await bare["tool.execute.before"]({ tool: "bash", sessionID: "session", callID: "c2" }, { args: {} });
+  relay.answer = { advice: null };
+  await hooks["tool.execute.before"]({ tool: "bash", sessionID: "session", callID: "c3" }, { args: {} });
+  await sleep(50);
+  assert.equal(shown.length, 4, "a quiet answer must show nothing");
 });
 
 // The floor must not reach the case it was never meant for. A relay that is

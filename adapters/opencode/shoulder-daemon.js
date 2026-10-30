@@ -182,7 +182,11 @@ const headers = () => {
   return h;
 };
 
-/** post sends one neutral event. Resolves to the advice, or null for anything at all. */
+/**
+ * post sends one neutral event. Resolves to the relay's answer - the advice,
+ * if any, and the notices for the person, if any - or null for anything at
+ * all, which every caller reads as "nothing".
+ */
 async function post(event) {
   const body = JSON.stringify({ protocol: 1, harness: "opencode", ...event });
   const once = async () => {
@@ -194,7 +198,8 @@ async function post(event) {
     });
     if (!res.ok) return null;
     const out = await res.json();
-    return out && out.advice ? out.advice : null;
+    if (!out) return null;
+    return { advice: out.advice || null, notices: Array.isArray(out.notices) ? out.notices : [] };
   };
   try {
     return await once();
@@ -247,10 +252,47 @@ function watchReadiness() {
     .catch(() => {});
 }
 
-/** send fires an event we do not need an answer to, without making the session wait. */
-function send(event) {
-  post(event).catch(() => {});
+/**
+ * send fires an event we do not need an answer to, without making the session
+ * wait. The answer still carries the notices for the person, so it is read for
+ * those and nothing else.
+ */
+function send(client, event) {
+  post(event)
+    .then((out) => show(client, out))
+    .catch(() => {});
 }
+
+/**
+ * show puts the relay's notices in front of the person as toasts: a fact
+ * stored, advice injected, a model that refused. The relay queues them per
+ * session and hands them over on the next event, so they arrive a moment
+ * after the thing they describe. Which kinds come at all is the daemon's
+ * SHOULDER_NOTIFY setting; the editor shows whatever it is sent. A client
+ * without a toast - an older OpenCode, or a test - gets nothing, and nothing
+ * here can throw into the hook that called it.
+ */
+function show(client, out) {
+  const notices = out && out.notices;
+  if (!notices || !notices.length) return;
+  if (!(client && client.tui && typeof client.tui.showToast === "function")) return;
+  for (const n of notices) {
+    try {
+      const p = client.tui.showToast({
+        body: { title: "shoulder-daemon", message: `${label(n.kind)}: ${n.text}`, variant: variant(n.kind) },
+      });
+      if (p && typeof p.catch === "function") p.catch(() => {});
+    } catch {
+      /* never rethrow */
+    }
+  }
+}
+
+const labels = { errors: "error", injections: "injected", stored: "stored", superseded: "superseded", warnings: "warning", maintenance: "tidied" };
+const label = (kind) => labels[kind] || kind;
+
+const variants = { errors: "error", warnings: "warning", stored: "success", superseded: "success" };
+const variant = (kind) => variants[kind] || "info";
 
 /**
  * answering reports what is at the other end, as one of five verdicts: "ready",
@@ -468,7 +510,7 @@ function closeOnExit(live, cwd) {
   });
 }
 
-export const ShoulderDaemon = async ({ directory, worktree }) => {
+export const ShoulderDaemon = async ({ directory, worktree, client }) => {
   const cwd = worktree || directory || process.cwd();
 
   // Not awaited: plugin load is on OpenCode's startup path, and a daemon that is
@@ -496,12 +538,14 @@ export const ShoulderDaemon = async ({ directory, worktree }) => {
           .filter((p) => p && p.type === "text" && typeof p.text === "string")
           .map((p) => p.text)
           .join("\n");
-        const advice = await post({
+        const out = await post({
           session_id: sessionID,
           event: "user_prompt",
           cwd,
           prompt,
         });
+        show(client, out);
+        const advice = out && out.advice;
         if (advice && advice.text) pending.set(sessionID, advice.text);
       } catch {
         /* never rethrow: this hook runs inside the user's prompt */
@@ -523,7 +567,7 @@ export const ShoulderDaemon = async ({ directory, worktree }) => {
 
     "tool.execute.before": async ({ tool, sessionID, callID }, output) => {
       try {
-        send({
+        send(client, {
           session_id: sessionID,
           event: "tool_call",
           cwd,
@@ -538,7 +582,7 @@ export const ShoulderDaemon = async ({ directory, worktree }) => {
 
     "tool.execute.after": async ({ tool, sessionID, callID }, output) => {
       try {
-        send({
+        send(client, {
           session_id: sessionID,
           event: "tool_result",
           cwd,
@@ -572,7 +616,7 @@ export const ShoulderDaemon = async ({ directory, worktree }) => {
           live.add(p.sessionID);
           const t = answer(p.sessionID);
           assistant.delete(p.sessionID);
-          send({
+          send(client, {
             session_id: p.sessionID,
             event: "answer_end",
             cwd,
@@ -584,12 +628,12 @@ export const ShoulderDaemon = async ({ directory, worktree }) => {
 
         if (event.type === "session.created" && p.info && p.info.id) {
           live.add(p.info.id);
-          send({ session_id: p.info.id, event: "session_start", cwd });
+          send(client, { session_id: p.info.id, event: "session_start", cwd });
           return;
         }
 
         if (event.type === "session.compacted" && p.sessionID) {
-          send({ session_id: p.sessionID, event: "compact", cwd });
+          send(client, { session_id: p.sessionID, event: "compact", cwd });
           return;
         }
 
@@ -597,7 +641,7 @@ export const ShoulderDaemon = async ({ directory, worktree }) => {
           pending.delete(p.info.id);
           assistant.delete(p.info.id);
           live.delete(p.info.id);
-          send({ session_id: p.info.id, event: "session_end", cwd });
+          send(client, { session_id: p.info.id, event: "session_end", cwd });
         }
       } catch {
         /* never rethrow */

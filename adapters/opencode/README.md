@@ -71,3 +71,8 @@ provider - OpenCode inserts empty placeholders for models that emit none.
 | `SHOULDER_TOKEN` | unset | must match the daemon's |
 | `SHOULDER_TIMEOUT_MS` | `250` | deadline on every call to the daemon |
 | `SHOULDER_START_CMD` | unset | how to start the daemon; plain `shoulderd` when unset |
+
+Notices - a fact stored, advice injected, a model that refused - are shown as toasts unless the
+daemon's `SHOULDER_NOTIFY` is `off`; the daemon decides what is sent and the plugin shows what it
+gets. They ride on the answer to the next event the plugin posts, so each lands a moment after the
+thing it describes.
