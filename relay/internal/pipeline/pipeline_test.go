@@ -24,6 +24,7 @@ import (
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/httpapi"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/llm"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/memory"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/notify"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/outbox"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/scope"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/session"
@@ -745,6 +746,36 @@ func TestUnscopedFactIsDroppedAndCounted(t *testing.T) {
 	}
 	if s.srv.Metrics.Get("shoulder_facts_missing_scope_total") == 0 {
 		t.Error("the drop must be counted, not silent")
+	}
+}
+
+// What the daemon stores is told to the session it learned it from, with the
+// text, where it went and what kind it is; a dead model is told as an error.
+func TestAStoredFactIsNoticedWithItsText(t *testing.T) {
+	ts := atAnswerEnd(t, decisionBody(t, "",
+		map[string]any{"content": "terse answers", "category": "preference", "scope": "global"}))
+	s := newStack(t, ts.URL, 2*time.Second)
+	s.pipe.Memory = &fakeMemory{}
+	s.pipe.Notify = notify.New(notify.Defaults())
+
+	s.promptAndAnswer(t, prompt("s1", "keep it short"), stop("s1", "ok"))
+
+	got := notify.Lines(s.pipe.Notify.Drain("s1"))
+	if len(got) != 1 || got[0] != `stored: global (preference): "terse answers"` {
+		t.Fatalf("notices = %v", got)
+	}
+}
+
+func TestARefusedDecisionIsNoticedAsAnError(t *testing.T) {
+	s := newStack(t, "http://127.0.0.1:1", 200*time.Millisecond)
+	s.pipe.Notify = notify.New(notify.Defaults())
+
+	s.post(t, "UserPromptSubmit", prompt("s1", "hi"))
+	awaitConsult(t, s)
+
+	got := notify.Lines(s.pipe.Notify.Drain("s1"))
+	if len(got) < 1 || !strings.HasPrefix(got[0], "error: decision failed: ") || !strings.Contains(got[0], "connect") {
+		t.Fatalf("notices = %v", got)
 	}
 }
 

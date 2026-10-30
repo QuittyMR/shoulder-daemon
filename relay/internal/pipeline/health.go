@@ -2,11 +2,13 @@ package pipeline
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
 
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/llm"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/notify"
 )
 
 // Model states, as ModelHealth reports them.
@@ -62,7 +64,21 @@ func (p *Pipeline) modelAnswered() {
 	p.health.last = ModelHealth{State: ModelOK, Since: time.Now()}
 	if was.State == ModelFailing {
 		p.Log.Info("decision model answers again", "after", was.Failures)
+		p.Notify.PushAll(p.liveSessions(), notify.Error, fmt.Sprintf("the decision model answers again, after %d refused calls", was.Failures))
 	}
+}
+
+// liveSessions is every session that could be told something now.
+func (p *Pipeline) liveSessions() []string {
+	if p.Registry == nil {
+		return nil
+	}
+	states := p.Registry.Sessions()
+	ids := make([]string, 0, len(states))
+	for _, s := range states {
+		ids = append(ids, s.ID)
+	}
+	return ids
 }
 
 // modelFailed records a decision call that did not come back with a decision.
@@ -77,6 +93,7 @@ func (p *Pipeline) modelFailed(err error) {
 	if was.State != ModelFailing {
 		now.Since, now.Failures = time.Now(), 1
 		p.Log.Warn("decision model stopped answering; nothing is learned until it does", "err", err)
+		p.Notify.PushAll(p.liveSessions(), notify.Error, "the decision model stopped answering; nothing is learned until it does: "+notify.OneLine(err.Error()))
 	}
 	p.health.last = now
 }

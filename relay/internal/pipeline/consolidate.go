@@ -10,6 +10,7 @@ import (
 
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/llm"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/memory"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/notify"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/prompts"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/scope"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/textutil"
@@ -193,7 +194,10 @@ func (p *Pipeline) forget(ctx context.Context, id string, where memory.Query) bo
 // consolidateBoth tidies the project and the global scope together, off the
 // hook path. Errors are logged rather than returned: nothing the session is
 // waiting on depends on this.
-func (p *Pipeline) consolidateBoth(ctx context.Context, at site) {
+//
+// sessionID is the session whose answer end asked for the pass, told what it
+// changed; empty for a pass at a session's end, which has nobody left to tell.
+func (p *Pipeline) consolidateBoth(ctx context.Context, at site, sessionID string) {
 	cctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	for _, req := range []ConsolidateRequest{
@@ -202,8 +206,14 @@ func (p *Pipeline) consolidateBoth(ctx context.Context, at site) {
 		if req.Scope == scope.Local && at.project == "" {
 			continue
 		}
-		if _, _, err := p.Consolidate(cctx, req); err != nil {
+		dropped, merged, err := p.Consolidate(cctx, req)
+		if err != nil {
 			p.Log.Warn("tidying pass failed; the store is unchanged", "scope", req.Scope, "err", err)
+			p.Notify.Push(sessionID, notify.Error, "tidying "+string(req.Scope)+" failed: "+notify.OneLine(err.Error()))
+			continue
+		}
+		if dropped+merged > 0 {
+			p.Notify.Push(sessionID, notify.Maintenance, fmt.Sprintf("%s: %d merged, %d dropped as no longer a rule", req.Scope, merged, dropped))
 		}
 	}
 }

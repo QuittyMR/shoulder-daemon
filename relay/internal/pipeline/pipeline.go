@@ -22,6 +22,7 @@ import (
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/llm"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/memory"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/metrics"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/notify"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/outbox"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/prompts"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/render"
@@ -45,6 +46,10 @@ type Pipeline struct {
 	// and settles the event itself when it is sure the event needs nothing or needs
 	// a stored fact repeated. Everything else still goes to the decision model.
 	Triage Triager
+
+	// Notify is where what this pipeline does is told to the person in the
+	// editor, per session. Nil tells nobody.
+	Notify *notify.Box
 
 	// Settings is the half of the configuration that may change while this is
 	// running: the model, and how picky it is told to be. It is read once per
@@ -122,7 +127,7 @@ func (p *Pipeline) Run(ctx context.Context) {
 	tidied := make(chan struct{})
 	loopEnded := make(chan struct{})
 	defer close(loopEnded)
-	tidy := func(at site) {
+	tidy := func(at site, sessionID string) {
 		tidying++
 		p.spawn(&p.chores, func(bg context.Context) {
 			defer func() {
@@ -131,7 +136,7 @@ func (p *Pipeline) Run(ctx context.Context) {
 				case <-loopEnded:
 				}
 			}()
-			p.consolidateBoth(bg, at)
+			p.consolidateBoth(bg, at, sessionID)
 		})
 	}
 	stopWhenTidy := func() bool {
@@ -166,6 +171,7 @@ func (p *Pipeline) Run(ctx context.Context) {
 			evicted := p.Registry.Evict(IdleEviction, now)
 			for _, ev := range evicted {
 				p.Outbox.Forget(ev.ID)
+				p.Notify.Forget(ev.ID)
 				p.Metrics.Inc("shoulder_sessions_evicted_total")
 			}
 			// Off the loop: this is one network write per dead session, and
@@ -198,7 +204,7 @@ func (p *Pipeline) Run(ctx context.Context) {
 				p.spawn(&p.chores, func(bg context.Context) { p.forgetNotes(bg, []session.Evicted{gone}) })
 				// The end of a session is the one moment the whole scope can be
 				// judged at once, and nothing is waiting on the answer.
-				tidy(site{project: gone.Project, dir: gone.Dir})
+				tidy(site{project: gone.Project, dir: gone.Dir}, "")
 
 				// A goodbye is the one moment worth asking whether anything is
 				// left, and the count alone does not answer it. A session that
@@ -212,6 +218,7 @@ func (p *Pipeline) Run(ctx context.Context) {
 				stale := p.Registry.Evict(activeWithin, ev.TS)
 				for _, s := range stale {
 					p.Outbox.Forget(s.ID)
+					p.Notify.Forget(s.ID)
 					p.Metrics.Inc("shoulder_sessions_evicted_total")
 				}
 				if len(stale) > 0 {
@@ -250,7 +257,7 @@ func (p *Pipeline) Run(ctx context.Context) {
 			// until it closes. It starts at the main thread's answer end, when
 			// what the answer established has been said.
 			if ev.Kind == session.KindAnswerEnd && !ask.agent() && p.Registry.ConsolidationDue(ev.SessionID, consolidateEvery) {
-				tidy(p.sessionSite([]session.Event{ev}))
+				tidy(p.sessionSite([]session.Event{ev}), ev.SessionID)
 			}
 			// Every prompt and every answer end is consulted, and consults
 			// of one session run side by side: a slow one delays nobody.
@@ -470,17 +477,20 @@ func (p *Pipeline) consult(ctx context.Context, sessionID string, ask asker) {
 	if err != nil {
 		p.Metrics.Inc("shoulder_advisor_error_total")
 		p.Log.Warn("decision failed; session unaffected", "session", sessionID, "err", err)
+		p.Notify.Push(sessionID, notify.Error, "decision failed: "+notify.OneLine(err.Error()))
 		p.modelFailed(err)
 		return
 	}
 	if counted.exhausted(decisionSteps) {
 		p.Metrics.Inc("shoulder_decision_steps_exhausted_total")
 		p.Log.Warn("decision stopped at the step cap still asking for tools", "session", sessionID)
+		p.Notify.Push(sessionID, notify.Warning, "the decision stopped at the step cap, still asking for tools")
 	}
 	decision, err := llm.ParseDecision(raw)
 	if err != nil {
 		p.Metrics.Inc("shoulder_advisor_error_total")
 		p.Log.Warn("decision failed; session unaffected", "session", sessionID, "err", err)
+		p.Notify.Push(sessionID, notify.Error, "decision failed: "+notify.OneLine(err.Error()))
 		p.modelFailed(err)
 		return
 	}
@@ -1229,6 +1239,7 @@ func (p *Pipeline) dropUserOnly(sessionID string, merged []facts.Fact) []facts.F
 		p.Metrics.Inc("shoulder_facts_agent_rule_dropped_total")
 		p.Log.Info("fact dropped: only the user states a rule or a preference, and this event was a subagent's",
 			"session", sessionID, "category", category, "content", f.Content)
+		p.Notify.Push(sessionID, notify.Warning, fmt.Sprintf("dropped, a subagent stated it and only the user states a %s: %q", category, f.Content))
 	}
 	return kept
 }
@@ -1307,9 +1318,11 @@ func (p *Pipeline) store(ctx context.Context, origin string, at site, merged []f
 		case !f.Scope.Valid():
 			p.Metrics.Inc("shoulder_facts_missing_scope_total")
 			p.Log.Warn("fact dropped: no scope was decided", "origin", origin, "content", f.Content)
+			p.Notify.Push(origin, notify.Warning, fmt.Sprintf("dropped, no scope was decided: %q", f.Content))
 		case f.Scope == scope.Local && at.project == "":
 			p.Metrics.Inc("shoulder_facts_no_project_total")
 			p.Log.Warn("local fact dropped: no project to file it under", "origin", origin, "content", f.Content)
+			p.Notify.Push(origin, notify.Warning, fmt.Sprintf("dropped, no project to file a local fact under: %q", f.Content))
 		default:
 			kept = append(kept, f)
 		}
@@ -1321,6 +1334,7 @@ func (p *Pipeline) store(ctx context.Context, origin string, at site, merged []f
 		for _, f := range kept {
 			p.Log.Info("dry run: would store fact", "origin", origin, "content", f.Content,
 				"category", f.Category, "scope", f.Scope, "supersedes", f.Supersedes)
+			p.Notify.Push(origin, notify.Stored, "dry run, would store "+factLine(f.Scope, at.project, f.Category, f.Content))
 		}
 		p.Metrics.Inc("shoulder_facts_dry_run_total")
 		return kept, factCounts{}
@@ -1375,12 +1389,14 @@ func (p *Pipeline) writeFact(ctx context.Context, origin string, at site, f fact
 			p.Log.Info("fact superseded", "origin", origin, "scope", f.Scope,
 				"project", scope.Label(at.project), "supersedes", f.Supersedes,
 				"category", category, "content", f.Content)
+			p.Notify.Push(origin, notify.Superseded, f.Supersedes+" with "+factLine(f.Scope, at.project, category, f.Content))
 			return factStored
 		case errors.As(err, &cross):
 			p.Metrics.Inc("shoulder_facts_refused_cross_scope_total")
 			p.Log.Warn("supersede refused: the named fact is in another scope; the write is dropped rather than moving it here",
 				"origin", origin, "supersedes", f.Supersedes, "scope", f.Scope,
 				"project", scope.Label(at.project), "content", f.Content)
+			p.Notify.Push(origin, notify.Warning, fmt.Sprintf("supersede of %s refused, it is in another scope; dropped: %q", f.Supersedes, f.Content))
 			return factFailed
 		case errors.Is(err, memory.ErrDuplicateExact):
 			p.Metrics.Inc("shoulder_facts_duplicate_total")
@@ -1391,6 +1407,7 @@ func (p *Pipeline) writeFact(ctx context.Context, origin string, at site, f fact
 		default:
 			p.Metrics.Inc("shoulder_memory_write_error_total")
 			p.Log.Warn("supersede failed", "origin", origin, "supersedes", f.Supersedes, "err", err)
+			p.Notify.Push(origin, notify.Error, "supersede of "+f.Supersedes+" failed: "+notify.OneLine(err.Error()))
 			return factFailed
 		}
 	}
@@ -1400,6 +1417,7 @@ func (p *Pipeline) writeFact(ctx context.Context, origin string, at site, f fact
 		p.Metrics.Inc("shoulder_facts_stored_total")
 		p.Log.Info("fact stored", "id", id, "origin", origin, "scope", f.Scope,
 			"project", scope.Label(at.project), "category", category, "content", f.Content)
+		p.Notify.Push(origin, notify.Stored, factLine(f.Scope, at.project, category, f.Content))
 		return factStored
 	}
 
@@ -1423,6 +1441,7 @@ func (p *Pipeline) writeFact(ctx context.Context, origin string, at site, f fact
 			p.Metrics.Inc("shoulder_facts_refused_unattributed_total")
 			p.Log.Warn("fact refused as a near-duplicate but the collision was not named; the write is lost",
 				"origin", origin, "content", f.Content)
+			p.Notify.Push(origin, notify.Warning, fmt.Sprintf("refused as a near-duplicate of an unnamed record; lost: %q", f.Content))
 			return factFailed
 		}
 		// The supersede is attempted whether or not this event happened to recall
@@ -1442,6 +1461,7 @@ func (p *Pipeline) writeFact(ctx context.Context, origin string, at site, f fact
 			p.Log.Warn("fact refused by a memory outside this scope; the write is dropped rather than moving that memory here",
 				"origin", origin, "scope", f.Scope, "project", scope.Label(at.project),
 				"collided", semantic.Collided, "content", f.Content)
+			p.Notify.Push(origin, notify.Warning, fmt.Sprintf("refused, a near-duplicate %s sits in another scope; dropped: %q", semantic.Collided, f.Content))
 			return factFailed
 		case errors.Is(serr, memory.ErrDuplicateExact):
 			p.Metrics.Inc("shoulder_facts_duplicate_total")
@@ -1450,6 +1470,7 @@ func (p *Pipeline) writeFact(ctx context.Context, origin string, at site, f fact
 			p.Metrics.Inc("shoulder_memory_write_error_total")
 			p.Log.Warn("fact refused as a near-duplicate and superseding the collision also failed",
 				"origin", origin, "collided", semantic.Collided, "err", serr)
+			p.Notify.Push(origin, notify.Error, "refused as a near-duplicate of "+semantic.Collided+", and replacing it failed: "+notify.OneLine(serr.Error()))
 			return factFailed
 		}
 		p.Metrics.Inc("shoulder_facts_auto_superseded_total")
@@ -1457,12 +1478,27 @@ func (p *Pipeline) writeFact(ctx context.Context, origin string, at site, f fact
 			"project", scope.Label(at.project), "supersedes", semantic.Collided,
 			"category", category, "content", f.Content,
 			"why", "the backend refused it as a near-duplicate of that record")
+		p.Notify.Push(origin, notify.Superseded, semantic.Collided+" with "+factLine(f.Scope, at.project, category, f.Content))
 		return factStored
 	default:
 		p.Metrics.Inc("shoulder_memory_write_error_total")
 		p.Log.Warn("fact write failed", "origin", origin, "err", err)
+		p.Notify.Push(origin, notify.Error, "fact write failed: "+notify.OneLine(err.Error()))
 		return factFailed
 	}
+}
+
+// factLine is a fact as a notice shows it: where it went, what kind, what it
+// says.
+func factLine(sc scope.Scope, project, category, content string) string {
+	where := string(sc)
+	if sc == scope.Local && project != "" {
+		where += " " + scope.Label(project)
+	}
+	if category != "" {
+		return fmt.Sprintf("%s (%s): %q", where, category, content)
+	}
+	return fmt.Sprintf("%s: %q", where, content)
 }
 
 // UpdateMode says what a message the user typed may write back.
