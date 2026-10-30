@@ -249,7 +249,9 @@ func TestAdviceIsDeliveredOnTheNextHook(t *testing.T) {
 
 	got := s.post(t, "UserPromptSubmit", prompt("s1", "next prompt"))
 	if !strings.Contains(got, "the marker advice") {
-		t.Fatalf("advice should ride along on the next prompt, got %s", got)
+		t.Fatalf("advice should ride along on the next prompt, got %s (advisor errors: %d, queued: %d, suppressed: %d)",
+			got, s.srv.Metrics.Get("shoulder_advisor_error_total"), s.srv.Metrics.Get("shoulder_advice_queued_total"),
+			s.srv.Metrics.Get("shoulder_advice_suppressed_total"))
 	}
 	if !strings.Contains(got, "shoulder-daemon") {
 		t.Fatal("advice was not framed in the advisory envelope")
