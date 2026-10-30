@@ -19,7 +19,9 @@ const sampleLog = `{"time":"2026-09-05T10:00:00.000Z","level":"INFO","msg":"shou
 {"time":"2026-09-05T10:00:06.000Z","level":"INFO","msg":"facts merged","scope":"local","project":"repo","kept":"mem_5","replaced":"mem_7,mem_9","content":"one rule"}
 {"time":"2026-09-05T10:00:07.000Z","level":"INFO","msg":"fact dropped as no longer a rule","scope":"local","project":"repo","id":"mem_8","content":"old rule"}
 {"time":"2026-09-05T10:00:08.000Z","level":"WARN","msg":"fact dropped: no scope was decided","origin":"s1","content":"unplaced"}
-{"time":"2026-09-05T10:00:09.000Z","level":"WARN","msg":"decision failed; session unaffected","session":"s1","err":"timeout"}
+{"time":"2026-09-05T10:00:09.000Z","level":"WARN","msg":"decision failed; session unaffected","session":"s1","err":"gemini status 400: [{\n  \"error\": {\n    \"message\": \"Please pass a valid API key\"\n  }\n}]"}
+{"time":"2026-09-05T10:00:10.000Z","level":"WARN","msg":"decision model stopped answering; nothing is learned until it does","err":"timeout"}
+{"time":"2026-09-05T10:00:11.000Z","level":"INFO","msg":"decision model answers again","after":3}
 `
 
 func TestMonitorFiltersToMovements(t *testing.T) {
@@ -33,10 +35,10 @@ func TestMonitorFiltersToMovements(t *testing.T) {
 		t.Fatalf("exit %d, stderr %q", code, errOut.String())
 	}
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
-	if len(lines) != 7 {
-		t.Fatalf("want 7 movements, got %d:\n%s", len(lines), out.String())
+	if len(lines) != 10 {
+		t.Fatalf("want 10 movements, got %d:\n%s", len(lines), out.String())
 	}
-	for _, unwanted := range []string{"listening", "hook received", "decision failed"} {
+	for _, unwanted := range []string{"listening", "hook received"} {
 		if strings.Contains(out.String(), unwanted) {
 			t.Errorf("%q leaked through the filter:\n%s", unwanted, out.String())
 		}
@@ -55,6 +57,11 @@ func TestMonitorFiltersToMovements(t *testing.T) {
 		`merged      local repo                "one rule"  kept=mem_5  replaced=mem_7,mem_9`,
 		`dropped     local repo                "old rule"  id=mem_8`,
 		`refused      "unplaced"  (fact dropped: no scope was decided)`,
+		// The refusal is pretty-printed JSON in the log and one line here: a
+		// model that refuses is the one failure that stops every other line.
+		`failed      session s1                err=gemini status 400: [{ "error": { "message": "Please pass a valid API key" } }]  (decision failed; session unaffected)`,
+		`model down   err=timeout  (decision model stopped answering; nothing is learned until it does)`,
+		`model up     after=3`,
 	} {
 		if !strings.Contains(lines[i], want) {
 			t.Errorf("line %d\n got %q\nwant it to contain %q", i, lines[i], want)

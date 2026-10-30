@@ -236,7 +236,8 @@ shoulderd monitor
 
 This follows the daemon's log and shows only the facts moving: stored,
 superseded, merged, dropped, refused, and advice queued and injected, one line
-each with the text. It opens on the last twenty and waits for more; `--all`
+each with the text, and every decision the model refused, since that is what
+stops the rest. It opens on the last twenty and waits for more; `--all`
 shows the whole file, `--no-follow` prints and exits, `--json` passes the raw
 records through.
 
@@ -246,6 +247,7 @@ records through.
 2026-09-05 14:09:41  injected    session 3f9a1c07 UserPromptSubmit  "the branch is master, not main"  id=adv_4
 2026-09-05 14:31:05  superseded  global                   [cli]  (preference) "terse answers, no preamble"  supersedes=mem_2
 2026-09-05 14:40:00  merged      local shoulder-daemon     "integration tests need a live Postgres"  kept=mem_5  replaced=mem_7,mem_9
+2026-09-05 15:02:17  failed      session 3f9a1c07          err=gemini status 400: [{ "error": { "message": "Please pass a valid API key" } }]  (decision failed; session unaffected)
 ```
 
 The log itself is `~/.local/share/shoulder-daemon/shoulderd.log`, JSON, one

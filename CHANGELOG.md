@@ -19,6 +19,11 @@ Notable changes to shoulder-daemon. The format follows
   since when. The report used to say only which model was configured.
 - `/readyz` carries `model`, `model_provider` and `model_since`. The status
   code is unchanged: no restart mends a dead key.
+- `shoulderd monitor` shows every decision the model refused and every
+  tidying pass that failed, as `failed`, with the refusal on one line, and
+  the model going down and coming back as `model down` and `model up`. The
+  view filtered these out before, which is how thirteen days of refusals
+  went unseen.
 
 ### Changed
 

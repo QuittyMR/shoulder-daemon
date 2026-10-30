@@ -62,6 +62,14 @@ var movements = map[string]string{
 	"supersede failed":  "failed",
 	"fact write failed": "failed",
 	"a fact the tidying pass wanted gone is still there": "failed",
+
+	// A model that refuses is the one failure that stops every movement
+	// above, so it is a movement too: thirteen days of it once went unseen
+	// because this view filtered it out.
+	"decision failed; session unaffected":                                "failed",
+	"tidying pass failed; the store is unchanged":                        "failed",
+	"decision model stopped answering; nothing is learned until it does": "model down",
+	"decision model answers again":                                       "model up",
 }
 
 // movementKeys is the order the record's fields are rendered in after the
@@ -317,6 +325,9 @@ func writeAttr(b *strings.Builder, k string, attrs map[string]any) {
 	switch k {
 	case "content", "text":
 		fmt.Fprintf(b, "  %q", s)
+	case "err":
+		// A provider's refusal is pretty-printed JSON; one movement is one line.
+		fmt.Fprintf(b, "  %s=%s", k, strings.Join(strings.Fields(s), " "))
 	default:
 		fmt.Fprintf(b, "  %s=%s", k, s)
 	}
