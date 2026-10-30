@@ -12,7 +12,7 @@
 [![Go](https://img.shields.io/github/go-mod/go-version/QuittyMR/shoulder-daemon?filename=relay%2Fgo.mod&logo=go&logoColor=white)](relay/go.mod)
 [![golangci-lint](https://img.shields.io/badge/linted%20with-golangci--lint-00ADD8?logo=go&logoColor=white)](.golangci.yml)
 [![Go Reference](https://pkg.go.dev/badge/gitlab.com/quittymr/shoulder-daemon/relay.svg)](https://pkg.go.dev/gitlab.com/quittymr/shoulder-daemon/relay)
-[![licence: MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
+[![licence: GPL-3.0](https://img.shields.io/badge/licence-GPL--3.0-blue.svg)](LICENSE)
 
 Context advisor for coding agents.
 Injects relevant information when needed. Records facts and keeps them up to date as they change.
@@ -382,4 +382,5 @@ The Go module path is `gitlab.com/quittymr/shoulder-daemon/relay` on either remo
 
 ## Licence
 
-MIT. See [LICENSE](LICENSE).
+Copyright (C) 2026 Thomas Raz. GNU General Public License, version 3. See
+[LICENSE](LICENSE).

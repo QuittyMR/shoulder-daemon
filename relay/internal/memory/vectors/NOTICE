@@ -19,4 +19,5 @@ row scaled to a signed byte. mkvectors.go in this directory is what produced it
 and documents the format; it takes minutes to reproduce from the source file.
 
 Nothing else in shoulder-daemon is derived from third-party work, and the rest
-of the repository is MIT-licensed as stated in LICENSE.
+of the repository is licensed under the GNU General Public License, version 3,
+as stated in LICENSE.

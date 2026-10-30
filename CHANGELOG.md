@@ -6,6 +6,12 @@ Notable changes to shoulder-daemon. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The licence is the GNU General Public License, version 3, where it was
+  MIT: the repository, the Claude Code plugin, the OpenCode plugin and the
+  container image say so.
+
 ## [0.6.1] - 2026-10-30
 
 ### Added

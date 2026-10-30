@@ -21,7 +21,7 @@
     "directory": "adapters/opencode"
   },
   "bugs": "https://gitlab.com/quittymr/shoulder-daemon/-/issues",
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "keywords": [
     "opencode",
     "opencode-plugin",

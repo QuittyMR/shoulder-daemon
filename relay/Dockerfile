@@ -19,7 +19,7 @@ LABEL org.opencontainers.image.title="shoulder-daemon" \
       org.opencontainers.image.description="Context advisor for coding agents" \
       org.opencontainers.image.source="https://github.com/QuittyMR/shoulder-daemon" \
       org.opencontainers.image.url="https://gitlab.com/quittymr/shoulder-daemon" \
-      org.opencontainers.image.licenses="MIT"
+      org.opencontainers.image.licenses="GPL-3.0-only"
 COPY --from=build /out/shoulderd /shoulderd
 USER nonroot:nonroot
 EXPOSE 8787
