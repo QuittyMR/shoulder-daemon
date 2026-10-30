@@ -72,6 +72,8 @@ func (c *cli) dispatch(name string, args []string) int {
 		return c.env(args)
 	case "monitor":
 		return c.monitor(args)
+	case "update":
+		return c.update(args)
 	case "version", "-v", "-version", "--version":
 		return c.version(args)
 	case "help", "-h", "-help", "--help":
@@ -106,6 +108,7 @@ const usage = `usage:
   shoulderd monitor [--log=PATH] [--all] [--no-follow] [--json]   watch facts move
   shoulderd env path|get NAME|set NAME [VALUE]|unset NAME      read and write the env file
   shoulderd version [--json]                                   which build this is
+  shoulderd update [--check] [--json]                          bring this binary to the newest release
 
 --local is this project alone; --global follows you into every other one.
 ` + projectIs + `

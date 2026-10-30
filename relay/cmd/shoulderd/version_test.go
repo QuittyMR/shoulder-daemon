@@ -113,10 +113,10 @@ func TestVersionCommand(t *testing.T) {
 
 func TestUpdateHintFollowsOrigin(t *testing.T) {
 	for origin, want := range map[string]string{
-		"go install": "go install",
+		"go install": "shoulderd update",
 		"container":  "image",
-		"plugin":     "plugin",
-		"release":    "release",
+		"plugin":     "shoulderd update",
+		"release":    "shoulderd update",
 		"checkout":   "make update",
 	} {
 		if got := updateHint(origin); !strings.Contains(got, want) {

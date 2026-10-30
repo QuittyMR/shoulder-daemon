@@ -120,8 +120,8 @@ recognises a nested module's tag when it carries the directory as a prefix. With
 `go install ...@latest` keeps resolving to a pseudo-version of `main`.
 
 Both pipelines then build the binaries, push the images, and create the release with the
-changelog section as its notes. The plugin picks the new binary up on the next editor start
-once the old daemon has exited.
+changelog section as its notes. An install learns of it from `shoulderd doctor`, or from the
+Claude Code session-start hook once a day, and `shoulderd update` brings the binary forward.
 
 The OpenCode adapter's npm package is published by the `npm` job in
 `.github/workflows/release.yml`, from GitHub only: npm checks the package's provenance against

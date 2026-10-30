@@ -703,16 +703,52 @@ five-method `Connector` interface that names nothing specific to any product;
 `memory.TestConnector` is an exported conformance suite a new one can run
 against itself. More coming - ask for the one you want.
 
-## After an update
+## Updating
+
+Three things move independently: the daemon binary, the adapter the harness
+runs, and the daemon process. `shoulderd doctor` says when a newer release is
+out, and a Claude Code session says so at start, once a day.
+
+**The binary** - `shoulderd update`, whatever the install:
+
+| `shoulderd version` says | what `shoulderd update` does |
+|---|---|
+| `plugin`, `release` | downloads the release binary for this platform, checks it against the published `SHA256SUMS`, renames it over the running one |
+| `go install` | runs `go install ...@<tag>` |
+| `container` | nothing; says to pull the newer image and recreate the container (`make up` from a checkout) |
+| `checkout` | nothing; says `git pull && make update` |
+
+`shoulderd update --check` only asks, and exits 3 when a newer release is
+out, which is what the session-start hook reads. `SHOULDER_RELEASE_BASE`
+points the download at a mirror, as it does the plugin's first fetch.
+
+**The adapter** - the harness runs the copy it took when the plugin was
+installed, so a new release's adapter needs the harness to take it again:
+`claude plugin update shoulder-daemon@shoulder-daemon` in Claude Code, and the
+`curl` line from the README for OpenCode. From a checkout, `make
+install-plugins`. Then restart the editor so it loads the new copy; `shoulderd
+doctor` reports an old one as `plugin: STALE`.
+
+**The process** - the running daemon keeps the old code until it is restarted.
+It exits by itself once no session has used it for a while and the next
+session starts the new one; to switch now, `pkill -x shoulderd`, and the next
+hook event starts it again. A container is recreated by `make up`.
+
+The session-start hook only reports; it does not run the update itself yet.
+The place where it would is a stub in `scripts/ensure-daemon.sh`, left empty on
+purpose until replacing a binary under a session that uses it, and restarting
+a daemon that other editors share, have been decided.
+
+From a checkout, `make update` is still the whole thing in one:
 
 ```bash
 git pull
 make update
 ```
 
-`make update` rebuilds the binary and the container image, replaces each
-harness's installed copy of the adapter, and restarts the daemon. Then restart
-your editor so it reloads the plugin, and run `shoulderd doctor`.
+It rebuilds the binary and the container image, replaces each harness's
+installed copy of the adapter, and restarts the daemon. Then restart your
+editor so it reloads the plugin, and run `shoulderd doctor`.
 
 Updating a container install from before the transcript mount, run the
 volume re-owning command from section 5 once, or the daemon comes up unable

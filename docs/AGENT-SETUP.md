@@ -213,6 +213,8 @@ Tell the person, in this order:
    - the facts: `~/.local/share/shoulder-daemon/facts.json`
    - the log: `~/.local/share/shoulder-daemon/shoulderd.log`, and
      `shoulderd monitor` to watch facts move and the model fail or recover
+   - later releases: a session start says when one is out; `shoulderd update`
+     installs it, then `pkill -x shoulderd` and the next event starts it
 3. The one thing left to them: restart the editor so the hooks load; or the
    key, if it is still missing, with the command from step 4.
 4. What you did not set and why.

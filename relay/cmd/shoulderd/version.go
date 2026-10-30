@@ -195,14 +195,10 @@ func newer(candidate, current string) bool {
 // on how it got here.
 func updateHint(origin string) string {
 	switch origin {
-	case "plugin":
-		return "the plugin fetches it on the next editor start once the daemon has exited"
+	case "plugin", "release", "go install":
+		return "run: shoulderd update"
 	case "container":
 		return "pull the newer image and recreate the container"
-	case "go install":
-		return "go install gitlab.com/quittymr/shoulder-daemon/relay/cmd/shoulderd@latest"
-	case "release":
-		return "download the newer release binary"
 	}
 	return "git pull && make update"
 }

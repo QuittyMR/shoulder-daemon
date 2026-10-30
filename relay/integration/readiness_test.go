@@ -134,6 +134,45 @@ func sessionStart(t *testing.T, addr string) string {
 	return string(out)
 }
 
+// sessionStartWith runs the SessionStart hook with a shoulderd of the test's
+// own first on PATH, so what the hook asks the binary is answered by the test.
+func sessionStartWith(t *testing.T, addr, fakeShoulderd string) string {
+	t.Helper()
+	if real(addr) {
+		t.Fatalf("this would drive the machine's real relay at %q, not a stub", addr)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "shoulderd"), []byte(fakeShoulderd), 0o755); err != nil { //nolint:gosec // G306: a program
+		t.Fatal(err)
+	}
+	script := filepath.Join("..", "..", "adapters", "claude-code", "scripts", "ensure-daemon.sh")
+	cmd := exec.Command(script, "--fetch") //nolint:gosec // G204: script is a literal path in this repository
+	cmd.Env = append(clean(os.Environ()), "SHOULDER_ADDR="+addr, "XDG_RUNTIME_DIR="+t.TempDir(),
+		"PATH="+dir+":"+os.Getenv("PATH"))
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("the boot script must never fail a hook: %v", err)
+	}
+	return string(out)
+}
+
+// A newer release is said at session start, once, and nothing is installed:
+// the hook reports and the person runs 'shoulderd update'.
+func TestSessionStartSaysWhenANewerReleaseIsOut(t *testing.T) {
+	fake := "#!/bin/sh\ncase \"$1 $2\" in 'update --check') echo 'shoulderd v9.9.9 is out; this is v0.5.2'; exit 3;; esac\nexit 0\n"
+	said := sessionStartWith(t, relayAnswering(t, http.StatusOK, storeReady), fake)
+	if !strings.Contains(said, `"systemMessage":"shoulder-daemon: shoulderd v9.9.9 is out; this is v0.5.2; run 'shoulderd update'`) {
+		t.Fatalf("the newer release was not said:\n%s", said)
+	}
+}
+
+func TestSessionStartIsQuietWhenTheReleaseIsCurrent(t *testing.T) {
+	fake := "#!/bin/sh\ncase \"$1 $2\" in 'update --check') echo 'shoulderd v0.5.2 is the newest release'; exit 0;; esac\nexit 0\n"
+	if said := sessionStartWith(t, relayAnswering(t, http.StatusOK, storeReady), fake); said != "" {
+		t.Fatalf("a current release has nothing to say, got %q", said)
+	}
+}
+
 // The incident: the decision model refused every call for thirteen days and
 // no session said so. At session start the harness shows the person a
 // systemMessage and nothing else, so that is what a refusing model becomes.

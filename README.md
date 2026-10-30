@@ -176,11 +176,23 @@ Running from a checkout, a container or a service manager is covered in
 ### Updating
 
 ```bash
-git pull
-make update
+shoulderd update
 ```
 
-Then restart your editor and run `shoulderd doctor`.
+That brings the daemon to the newest release: a plugin or release install has
+its binary replaced after a checksum check, a `go install` build is installed
+again, and a checkout or a container is told the command for it (`git pull &&
+make update`; pull the image and recreate). The daemon that is running keeps
+the old code until it is restarted; it exits by itself once no session has
+used it for a while, or `pkill -x shoulderd` now and the next hook event
+starts the new one. `shoulderd update --check` only asks.
+
+A Claude Code session says at start, once a day, when a newer release is out.
+It does not install it yet; you run the command. The plugin itself updates by
+the harness: `claude plugin update shoulder-daemon@shoulder-daemon` for Claude
+Code, and for OpenCode copy the plugin file again as under Install. Then
+restart your editor and run `shoulderd doctor`. The whole flow per install is
+in [docs/INSTALL.md](docs/INSTALL.md#updating).
 
 ## Use it
 

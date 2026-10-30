@@ -84,6 +84,46 @@ recently() {
 
 mark() { date +%s >"$1" 2>/dev/null || true; }
 
+# Which binary. Something the user put on PATH wins over what the plugin
+# fetched, so `go install` or a package manager is never second-guessed.
+daemon() {
+  if command -v shoulderd >/dev/null 2>&1; then
+    command -v shoulderd
+  elif [ -x "$BIN" ]; then
+    echo "$BIN"
+  fi
+}
+
+# check_update asks, at session start and at most once a day, whether a newer
+# release is out, and says so. The daemon answers it: 'shoulderd update
+# --check' exits 3 for a newer release, 0 for none, anything else for a proxy
+# it could not ask or a binary too old to have the verb, and only the 3 is
+# worth a word. Once a day because the answer rarely changes and every check
+# is a network round trip in front of a session start.
+check_update() {
+  local exe stamp out
+  exe="$(daemon)"
+  [ -n "$exe" ] || return 0
+  stamp="${XDG_RUNTIME_DIR:-/tmp}/shoulder-daemon.update-check.stamp"
+  recently "$stamp" 86400 && return 0
+  mark "$stamp"
+  out="$("$exe" update --check 2>/dev/null)"
+  if [ $? -eq 3 ]; then
+    say "${out}; run 'shoulderd update', then 'pkill -x shoulderd' so the next event starts the new one"
+    apply_update "$exe"
+  fi
+  return 0
+}
+
+# apply_update is where the harness would bring the daemon forward by itself.
+# It does nothing yet, on purpose: replacing a binary under a session that is
+# using it, and restarting the daemon while other editors share it, each want
+# a decision that has not been made. Until then the person is told, and
+# 'shoulderd update' is the way.
+apply_update() {
+  :
+}
+
 ANSWER="$(probe)"
 STATE="$(printf '%s' "$ANSWER" | tail -n 1)"
 
@@ -104,6 +144,7 @@ case "$STATE" in
         say "the decision model (${provider:-unknown}) has refused every call since ${since:-the daemon started}, so nothing is learned from this session; 'shoulderd doctor' shows the refusal"
         ;;
     esac
+    [ "$FETCH" = 1 ] && check_update
     exit 0
     ;;
   404) exit 0 ;;
@@ -180,16 +221,6 @@ if ! take; then
   exit 0
 fi
 HOLDING=1
-
-# Which binary. Something the user put on PATH wins over what the plugin
-# fetched, so `go install` or a package manager is never second-guessed.
-daemon() {
-  if command -v shoulderd >/dev/null 2>&1; then
-    command -v shoulderd
-  elif [ -x "$BIN" ]; then
-    echo "$BIN"
-  fi
-}
 
 # fetch downloads the newest release for this platform and verifies it against
 # the checksum file published beside it. Anything short of a verified binary

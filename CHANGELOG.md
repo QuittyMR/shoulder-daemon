@@ -6,6 +6,25 @@ Notable changes to shoulder-daemon. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `shoulderd update` brings the binary to the newest release. A plugin or
+  release install has its binary replaced after a check against the
+  published `SHA256SUMS`, a `go install` build is installed again, and a
+  checkout or a container is told what to run. `--check` only asks and
+  exits 3 when a newer release is out.
+- The Claude Code plugin's `SessionStart` hook says, once a day, when a
+  newer release is out. It does not install it: the place where the harness
+  would is a stub in `scripts/ensure-daemon.sh`, empty on purpose.
+- The install guide has an update section: the binary, the adapter and the
+  process, and what moves each.
+
+### Fixed
+
+- `shoulderd doctor` told a plugin install that the plugin fetches a newer
+  release on the next editor start. It never did: the start script fetches
+  only when there is no binary at all. The hint now says `shoulderd update`.
+
 ## [0.5.2] - 2026-10-30
 
 ### Added
