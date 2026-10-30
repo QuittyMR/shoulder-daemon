@@ -44,6 +44,29 @@ having to ask for it.
 
 ## Install
 
+**Let your agent do it.** Paste one line into the agent you use and it installs
+the hooks, fetches the daemon, asks which model should decide, writes the
+settings file, starts the daemon and proves the result with `shoulderd doctor`.
+It never takes an API key through the chat: it hands you the one command to
+type, and reports which files hold what when it is done.
+
+Claude Code:
+
+```
+Fetch https://gitlab.com/quittymr/shoulder-daemon/-/raw/main/docs/AGENT-SETUP.md and follow it for Claude Code.
+```
+
+OpenCode:
+
+```
+Fetch https://gitlab.com/quittymr/shoulder-daemon/-/raw/main/docs/AGENT-SETUP.md and follow it for OpenCode.
+```
+
+The same file is on GitHub at
+`https://raw.githubusercontent.com/QuittyMR/shoulder-daemon/main/docs/AGENT-SETUP.md`,
+and it is readable by a person too: [docs/AGENT-SETUP.md](docs/AGENT-SETUP.md).
+The rest of this section is the same install by hand.
+
 **Claude Code** - the plugin is the whole install. On first start it fetches the
 daemon for your platform from the latest release, verifies the checksum, links
 it into `~/.local/bin` so `shoulderd` works in a terminal, and starts it; after
@@ -304,6 +327,7 @@ you use on
 ## Docs
 
 - [How it works](docs/ARCHITECTURE.md) - the hot path, the injection budget, why a hook can't block
+- [Setup by an agent](docs/AGENT-SETUP.md) - the procedure a coding agent follows to install and configure it for you, in Claude Code or OpenCode
 - [Install and configure](docs/INSTALL.md) - the whole install, every setting, and how the built-in store measures up against a memory service
 - [Performance](docs/PERFORMANCE.md) - what each ranker recalls, what it costs in latency and memory, and how to measure it
 - [Advisor protocol](docs/ADVISOR.md) - bring your own decision model

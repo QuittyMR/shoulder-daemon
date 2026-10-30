@@ -30,6 +30,10 @@ Notable changes to shoulder-daemon. The format follows
   harness shows a person nothing from a hook that exits 0 except that
   field, so every warning the script has is now said that way at session
   start.
+- `docs/AGENT-SETUP.md` is the install and setup procedure written for the
+  coding agent to follow, in Claude Code or OpenCode: hooks, daemon, model,
+  key, start, and a doctor report. The README's install section opens with
+  the one line to paste into either agent.
 
 ### Changed
 
