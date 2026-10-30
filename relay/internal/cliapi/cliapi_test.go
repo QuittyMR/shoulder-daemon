@@ -118,6 +118,8 @@ type fakeLLM struct {
 	prose    string
 	decision string
 	learn    string
+	// chatErr, when set, is the refusal every Chat answers with.
+	chatErr error
 }
 
 func (f *fakeLLM) Name() string { return "fake" }
@@ -147,6 +149,9 @@ func (f *fakeLLM) Complete(_ context.Context, system, _ string) (string, error) 
 // question and want one answer, so they never reach it; a fake that pretended
 // to run a tool loop would be modelling something these tests do not exercise.
 func (f *fakeLLM) Chat(_ context.Context, msgs []llm.Message, _ []llm.Tool) (llm.Message, error) {
+	if f.chatErr != nil {
+		return llm.Message{}, f.chatErr
+	}
 	for _, m := range msgs {
 		if m.Role == "system" && m.Content == prompts.Decision(prompts.Default) {
 			return llm.Message{Role: "assistant", Content: f.decision}, nil

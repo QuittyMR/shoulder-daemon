@@ -12,10 +12,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/cliapi"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/config"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/httpapi"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/pipeline"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/settings"
 )
 
@@ -445,6 +447,7 @@ type daemonRuns struct {
 	provider, providerSource, model, modelSource string
 	store, storeSource, openError, envFile       string
 	triage                                       string
+	health                                       pipeline.ModelHealth
 }
 
 // doctorAgainst runs doctor with args against a daemon that runs d, with the
@@ -465,7 +468,7 @@ func doctorAgainst(t *testing.T, d daemonRuns, args []string, lines ...string) (
 		&cliapi.ConfigResponse{
 			Snapshot:       settings.Snapshot{Provider: d.provider, Model: d.model},
 			ProviderSource: d.providerSource, ModelSource: d.modelSource, EnvFile: d.envFile,
-			Triage: d.triage,
+			Triage: d.triage, ModelHealth: d.health,
 		})
 	c := &cli{out: io.Discard, err: io.Discard}
 	var code int
@@ -508,6 +511,34 @@ func TestDoctorFailsWithoutADecisionModel(t *testing.T) {
 	}
 	if !strings.Contains(out, "llm:     NONE") || !strings.Contains(out, "SHOULDER_LLM") || strings.Contains(out, "MISMATCH") {
 		t.Fatalf("output must name the missing model, and nothing it disagrees with:\n%s", out)
+	}
+}
+
+// The incident: the key died, the provider refused every call for thirteen
+// days, and this report said "llm: gemini" as if that were an answer.
+func TestDoctorFailsWhenTheModelRefusesEveryCall(t *testing.T) {
+	d := fromFile
+	d.health = pipeline.ModelHealth{
+		State: pipeline.ModelFailing, Since: time.Date(2026, 10, 17, 18, 17, 0, 0, time.Local),
+		Failures: 2522, Error: "gemini status 400: [{\n  \"error\": {\n    \"message\": \"Please pass a valid API key\"\n  }\n}]",
+	}
+	code, out := doctorAgainst(t, d, nil, fileAsks...)
+	if code != 1 {
+		t.Fatalf("exit %d, want 1:\n%s", code, out)
+	}
+	for _, want := range []string{"FAILING since 2026-10-17 18:17", "2522 call(s) in a row", `The model says: gemini status 400: [{ "error": { "message": "Please pass a valid API key" } }]`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the report must say %q on one line:\n%s", want, out)
+		}
+	}
+}
+
+func TestDoctorSaysSinceWhenTheModelAnswers(t *testing.T) {
+	d := fromFile
+	d.health = pipeline.ModelHealth{State: pipeline.ModelOK, Since: time.Date(2026, 10, 30, 9, 0, 0, 0, time.Local)}
+	code, out := doctorAgainst(t, d, nil, fileAsks...)
+	if code != 0 || !strings.Contains(out, "answering since 2026-10-30 09:00") {
+		t.Fatalf("exit %d; a model that answers is reported as such:\n%s", code, out)
 	}
 }
 

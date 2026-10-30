@@ -139,8 +139,13 @@ from being invisible to the process that needs it.
 
 Use `shoulderd doctor` to verify the validity of your installation and setup.
 It fails when the daemon has no decision model (a triage on its own passes),
-when its store failed to open, and when it runs another model or store than this file asks for because it
-started before the file was edited or from another file.
+when the model it has refuses to answer (a dead key, say), when its store
+failed to open, and when it runs another model or store than this file asks
+for because it started before the file was edited or from another file. The
+daemon asks its model one question when it starts and keeps the last word of
+every call after that, so doctor reports a refusal with its cause and since
+when, and a Claude Code session that starts under a refusing model says so
+before the first prompt.
 
 Running from a checkout, a container or a service manager is covered in
 [docs/INSTALL.md](docs/INSTALL.md), along with every setting.

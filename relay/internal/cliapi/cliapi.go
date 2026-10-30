@@ -632,6 +632,11 @@ type ConfigResponse struct {
 	ProviderSource string `json:"provider_source,omitempty"`
 	ModelSource    string `json:"model_source,omitempty"`
 	EnvFile        string `json:"env_file,omitempty"`
+
+	// ModelHealth is whether the model in use has been answering. A provider
+	// whose key is dead is configured, named, and useless; this is the field
+	// that says so.
+	ModelHealth pipeline.ModelHealth `json:"model_health"`
 }
 
 // SourceConfigSet is the source of a provider or model set at the terminal.
@@ -641,6 +646,7 @@ func (s *Server) configResponse(snap settings.Snapshot) ConfigResponse {
 	out := ConfigResponse{
 		Snapshot: snap, Triage: "none", EnvFile: config.LoadedFile(),
 		ProviderSource: config.Source("SHOULDER_LLM"), ModelSource: config.Source("SHOULDER_LLM_MODEL"),
+		ModelHealth: s.Pipe.ModelHealth(),
 	}
 	prov, model := s.Pipe.Settings.SetAtRuntime()
 	if prov {
@@ -687,6 +693,11 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		s.Pipe.Log.Info("settings changed at the terminal",
 			"log_level", now.LogLevel, "pickiness", now.Pickiness,
 			"provider", now.Provider, "model", now.Model)
+		// What was known about the old model says nothing about the new one,
+		// and the answer is wanted before the next session, not after it.
+		if req.Provider != nil || req.Model != nil {
+			go s.Pipe.ModelChanged(context.Background())
+		}
 		writeJSON(w, http.StatusOK, s.configResponse(now))
 	default:
 		s.fail(w, http.StatusMethodNotAllowed, errors.New("use GET to read the settings, PATCH to change them"))

@@ -116,6 +116,40 @@ func TestReadyReportsTheStore(t *testing.T) {
 	}
 }
 
+// The readiness body carries the decision model's health beside the store's,
+// because a model that refuses every call is the fault the session-start hook
+// has to tell the person about, and the body is the one thing it can read. It
+// does not move the status code: no restart mends a dead key.
+func TestReadyCarriesTheModelsHealthWithoutMovingTheCode(t *testing.T) {
+	s := newReadyServer(t, "", newFakeMemory())
+	if got := decode[ReadyStatus](t, getReady(t, s)); got.Model != "none" || got.ModelProvider != "none" {
+		t.Fatalf("with no model configured: %+v", got)
+	}
+
+	s.Pipe.Settings = settings.ForProvider(&fakeLLM{prose: "ok"})
+	got := decode[ReadyStatus](t, getReady(t, s))
+	if got.Model != pipeline.ModelUnknown || got.ModelProvider != "fake" || got.ModelSince != "" {
+		t.Fatalf("before the probe: %+v", got)
+	}
+
+	s.Pipe.ProbeModel(context.Background())
+	got = decode[ReadyStatus](t, getReady(t, s))
+	if got.Model != pipeline.ModelOK || got.ModelSince == "" {
+		t.Fatalf("after a probe the model answered: %+v", got)
+	}
+
+	s.Pipe.Settings = settings.ForProvider(&fakeLLM{chatErr: errors.New("status 400: Please pass a valid API key")})
+	s.Pipe.ModelChanged(context.Background())
+	rec := getReady(t, s)
+	got = decode[ReadyStatus](t, rec)
+	if rec.Code != http.StatusOK || !got.OK || got.Model != pipeline.ModelFailing {
+		t.Fatalf("a refusing model is reported and the relay stays ready: %d %+v", rec.Code, got)
+	}
+	if !strings.Contains(rec.Body.String(), `"model":"failing"`) || !strings.Contains(rec.Body.String(), `"model_provider":"fake"`) {
+		t.Fatalf("the hook reads these two as text:\n%s", rec.Body)
+	}
+}
+
 // The route exists so that an adapter can find out whether anything works
 // before it has established that it holds the right token. Requiring the header
 // would answer "not ready" to a perfectly good daemon.

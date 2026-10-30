@@ -73,9 +73,12 @@ type Pipeline struct {
 	mu       sync.Mutex
 	closing  bool
 	consults sync.WaitGroup
-	chores   sync.WaitGroup
-	bg       context.Context
-	stopBg   context.CancelFunc
+
+	// health is whether the decision model has been answering; see ModelHealth.
+	health modelHealth
+	chores sync.WaitGroup
+	bg     context.Context
+	stopBg context.CancelFunc
 }
 
 const (
@@ -467,6 +470,7 @@ func (p *Pipeline) consult(ctx context.Context, sessionID string, ask asker) {
 	if err != nil {
 		p.Metrics.Inc("shoulder_advisor_error_total")
 		p.Log.Warn("decision failed; session unaffected", "session", sessionID, "err", err)
+		p.modelFailed(err)
 		return
 	}
 	if counted.exhausted(decisionSteps) {
@@ -477,8 +481,10 @@ func (p *Pipeline) consult(ctx context.Context, sessionID string, ask asker) {
 	if err != nil {
 		p.Metrics.Inc("shoulder_advisor_error_total")
 		p.Log.Warn("decision failed; session unaffected", "session", sessionID, "err", err)
+		p.modelFailed(err)
 		return
 	}
+	p.modelAnswered()
 
 	// The model has answered. Shutting down cancels a question still being
 	// asked, not the writing down of an answer already given.

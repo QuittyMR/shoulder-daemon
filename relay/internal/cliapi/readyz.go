@@ -35,6 +35,18 @@ type ReadyStatus struct {
 	OK     bool   `json:"ok"`
 	Memory string `json:"memory"`
 	Error  string `json:"error,omitempty"`
+
+	// Model is how the decision model has been answering: ok, failing,
+	// unknown, or none. It does not move OK: a dead key is not mended by the
+	// restart a 503 brings, and the adapter would otherwise restart the relay
+	// before every prompt for as long as the key stayed dead. It is here so
+	// the adapter can tell the person at session start, which no restart does.
+	Model string `json:"model,omitempty"`
+	// ModelProvider names the provider, and ModelSince says when the current
+	// state began, both in the shape a shell script can pick out without a
+	// JSON parser. The refusal itself has quotes in it and is left to doctor.
+	ModelProvider string `json:"model_provider,omitempty"`
+	ModelSince    string `json:"model_since,omitempty"`
 }
 
 // readyCache is the last probe and when it was taken. The mutex is held across
@@ -59,6 +71,18 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 	code := http.StatusOK
 	if !st.OK {
 		code = http.StatusServiceUnavailable
+	}
+	// Read live, outside the cache: it is a field in memory, not a probe, and
+	// the cache exists only to spare the store.
+	st.ModelProvider = s.Pipe.Settings.Snapshot().Provider
+	if st.ModelProvider == "none" {
+		st.Model = "none"
+	} else {
+		h := s.Pipe.ModelHealth()
+		st.Model = h.State
+		if !h.Since.IsZero() {
+			st.ModelSince = h.Since.Local().Format("2006-01-02 15:04")
+		}
 	}
 	writeJSON(w, code, st)
 }

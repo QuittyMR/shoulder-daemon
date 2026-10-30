@@ -214,6 +214,9 @@ func serve() error {
 		defer close(ran)
 		pipe.Run(ctx)
 	}()
+	// Asked now rather than when a session first needs a decision, so that a
+	// key that died while nobody was looking is known before anyone asks.
+	go pipe.ProbeModel(ctx)
 
 	log.Info("shoulderd listening",
 		"addr", cfg.Addr, "llm", providerName(provider), "triage", triageName(jev), "memory", mem.Name(),
@@ -453,6 +456,22 @@ func (c *cli) doctor(args []string) int {
 		} else if msg != "" {
 			out["llm_note"] = msg
 		}
+		// A configured model is not a working one. The daemon keeps the last
+		// word the model gave, and a model that refuses is the one fault this
+		// report used to pass over: the relay up, the store fine, the key
+		// dead, and nothing learned for weeks.
+		if running.Provider != providerName(nil) {
+			out["llm_health"] = running.ModelHealth.State
+			switch running.ModelHealth.State {
+			case pipeline.ModelFailing:
+				out["llm_failing_since"] = running.ModelHealth.Since.Local().Format("2006-01-02 15:04")
+				out["llm_failures"] = running.ModelHealth.Failures
+				out["llm_error"] = running.ModelHealth.Error
+				code = 1
+			case pipeline.ModelOK:
+				out["llm_answering_since"] = running.ModelHealth.Since.Local().Format("2006-01-02 15:04")
+			}
+		}
 		// The model is compared only where the file names one: otherwise it is
 		// the preset's default, which this command has no business guessing.
 		if model := config.FileSetting("SHOULDER_LLM_MODEL"); model != "" && len(names) == 1 && running.Provider == want {
@@ -573,6 +592,15 @@ func (c *cli) doctor(args []string) int {
 	}
 	printFinding(out, "llm_mismatch", "llm_note")
 	printFinding(out, "llm_model_mismatch", "llm_model_note")
+	switch out["llm_health"] {
+	case pipeline.ModelFailing:
+		fmt.Printf("         FAILING since %v, %v call(s) in a row; nothing is learned from any session\n", out["llm_failing_since"], out["llm_failures"])
+		fmt.Printf("         The model says: %s\n", oneLine(fmt.Sprint(out["llm_error"])))
+	case pipeline.ModelOK:
+		fmt.Printf("         answering since %v\n", out["llm_answering_since"])
+	case pipeline.ModelUnknown:
+		fmt.Println("         not yet asked; the daemon probes it at start and reports here")
+	}
 	if missing, ok := out["events_never_seen"].([]string); ok {
 		if len(missing) == 0 {
 			fmt.Println("hooks:   all expected events have fired at least once")
@@ -583,6 +611,12 @@ func (c *cli) doctor(args []string) int {
 		}
 	}
 	return code
+}
+
+// oneLine folds a provider's refusal, which is usually pretty-printed JSON,
+// onto one line so the report stays readable.
+func oneLine(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // docsHere is where the docs store would keep this directory's facts and how

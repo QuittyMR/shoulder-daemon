@@ -6,6 +6,20 @@ Notable changes to shoulder-daemon. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- The daemon keeps the last word its decision model gave. It asks the model
+  one question when it starts and after every `config set` that changes the
+  model, and records every decision call after that. A model that refuses -
+  a dead key, say - used to leave a daemon that looked healthy from every
+  angle while nothing was learned from any session; one ran that way for
+  thirteen days.
+- `shoulderd doctor` reports a refusing model with the cause, since when and
+  how many calls in a row, and exits 1. A model that answers is reported with
+  since when. The report used to say only which model was configured.
+- `/readyz` carries `model`, `model_provider` and `model_since`. The status
+  code is unchanged: no restart mends a dead key.
+
 ### Changed
 
 - `shoulderd monitor` prints the date with the time. A log spans days, and a
