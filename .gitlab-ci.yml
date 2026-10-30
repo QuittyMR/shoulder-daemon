@@ -22,8 +22,12 @@ variables:
 
 default:
   image: golang:1.26
+  # The number in the key retires every cache saved under the old one. The
+  # cache main had accumulated made the pipeline test suite fail on a commit
+  # that passed with an empty cache, on a tag, and on GitHub; bump it again
+  # if that ever repeats.
   cache:
-    key: gocache-$CI_COMMIT_REF_SLUG
+    key: gocache-2-$CI_COMMIT_REF_SLUG
     paths:
       - .gocache/
 
