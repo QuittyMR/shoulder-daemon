@@ -100,9 +100,11 @@ transcript, and shoulder-daemon reads transcripts.
 ## What this plugin guarantees it will never do
 
 Every response the relay can send back over these hooks is checked to never contain `decision`,
-`continue`, `stopReason`, `permissionDecision`, `permissionDecisionReason`, `updatedInput` or
-`systemMessage`. The relay's response types have no field for any of them, so this is a property of
-the type system before it is a test. Concretely:
+`continue`, `stopReason`, `permissionDecision`, `permissionDecisionReason` or `updatedInput`. The
+relay's response types have no field for any of them, so this is a property of the type system
+before it is a test. The one field addressed to you, `systemMessage`, carries the notices
+`SHOULDER_NOTIFY` allows and nothing else: Claude Code shows it to you and never puts it
+in front of the model. Concretely:
 
 - It cannot block a tool call, deny a stop, or force the model to keep going.
 - It cannot speak as, or on behalf of, the user.

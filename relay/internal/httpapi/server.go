@@ -7,6 +7,7 @@ package httpapi
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/budget"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/metrics"
+	"gitlab.com/quittymr/shoulder-daemon/relay/internal/notify"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/outbox"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/session"
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/transcript"
@@ -48,6 +50,10 @@ type Server struct {
 
 	// Log is optional. It is used for one line, on the first rejected request.
 	Log *slog.Logger
+
+	// Notices is what the daemon tells the person, per session, handed to the
+	// next hook from that session. Nil tells nobody.
+	Notices *notify.Box
 
 	// AnswerText reads an answer's assistant text from a transcript path. Nil
 	// means the transcript package with its default tail; tests replace it.
@@ -174,12 +180,31 @@ func (s *Server) handleClaudeCode(w http.ResponseWriter, r *http.Request) {
 		s.ingest(extra)
 	}
 
+	var resp hookResponse
 	if a, ok := s.collect(ev.SessionID, ev.Kind, ev.AgentID, ev.AgentType); ok {
 		s.saidAdvice(ev.SessionID, event, a)
-		writeJSON(w, inject(event, a))
+		resp = inject(event, a)
+	}
+	// Claude Code discards systemMessage on these two events, so a notice
+	// drained here would be a notice lost; it waits for the next hook.
+	if event != "PreCompact" && event != "SessionEnd" {
+		resp.SystemMessage = s.systemMessage(ev.SessionID)
+	}
+	if resp.HookSpecificOutput == nil && resp.SystemMessage == "" {
+		writeRaw(w, silentJSON)
 		return
 	}
-	writeRaw(w, silentJSON)
+	writeJSON(w, resp)
+}
+
+// systemMessage is every notice waiting for the session, one per line, each
+// saying who is speaking, since the harness shows it beside its own output.
+func (s *Server) systemMessage(sessionID string) string {
+	lines := notify.Lines(s.Notices.Drain(sessionID))
+	for i, l := range lines {
+		lines[i] = "shoulder-daemon " + l
+	}
+	return strings.Join(lines, "\n")
 }
 
 // assistantText widens the Stop hook's last message to everything the
@@ -223,11 +248,17 @@ func (s *Server) assistantText(sessionID, path, last string) string {
 // side is logged by the pipeline; this is the half that says it was delivered
 // rather than suppressed, which is the distinction the counters alone lose.
 func (s *Server) saidAdvice(sessionID, event string, a session.Advice) {
+	s.noticeInjected(sessionID, a)
 	if s.Log == nil {
 		return
 	}
 	s.Log.Info("advice injected", "id", a.ID, "session", sessionID,
 		"event", event, "text", a.Text)
+}
+
+// noticeInjected tells the person what the model was just given.
+func (s *Server) noticeInjected(sessionID string, a session.Advice) {
+	s.Notices.Push(sessionID, notify.Injection, fmt.Sprintf("%q", a.Text))
 }
 
 // legacyAnswerEnd is the name adapters installed before the kind was renamed
@@ -272,12 +303,19 @@ func (s *Server) handleNeutral(w http.ResponseWriter, r *http.Request) {
 
 	s.ingest(ev)
 
+	out := map[string]any{"advice": nil}
 	if a, ok := s.collect(ev.SessionID, ev.Kind, ev.AgentID, ev.AgentType); ok {
 		s.saidAdvice(ev.SessionID, string(ev.Kind), a)
-		writeJSON(w, map[string]any{"advice": a})
+		out["advice"] = a
+	}
+	if notices := s.Notices.Drain(ev.SessionID); len(notices) > 0 {
+		out["notices"] = notices
+	}
+	if out["advice"] == nil && out["notices"] == nil {
+		writeRaw(w, noAdviceJSON)
 		return
 	}
-	writeRaw(w, noAdviceJSON)
+	writeJSON(w, out)
 }
 
 // ingest records the event and hands it to the background worker. The send is

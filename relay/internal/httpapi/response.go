@@ -19,11 +19,16 @@ type hookSpecificOutput struct {
 
 type hookResponse struct {
 	HookSpecificOutput *hookSpecificOutput `json:"hookSpecificOutput,omitempty"`
+	// SystemMessage is the one field addressed to the person and never to the
+	// model: the harness shows it and does not put it in the conversation.
+	// It carries the notices the person asked for with SHOULDER_NOTIFY, and
+	// nothing else; the model's advice goes in AdditionalContext.
+	SystemMessage string `json:"systemMessage,omitempty"`
 }
 
 // ForbiddenFields are the JSON keys whose presence would mean the relay had
 // gained the power to interfere with a prompt or its answer.
-var ForbiddenFields = []string{"decision", "continue", "stopReason", "permissionDecision", "permissionDecisionReason", "updatedInput", "systemMessage"}
+var ForbiddenFields = []string{"decision", "continue", "stopReason", "permissionDecision", "permissionDecisionReason", "updatedInput"}
 
 // Kept to one line: this rides along on every injection, and a paragraph of
 // framing costs more context than the advice it wraps.
