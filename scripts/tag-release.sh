@@ -6,8 +6,10 @@
 # Without those two, `go install ...@latest` keeps resolving to a pseudo-version
 # of whatever main happens to be, and `shoulderd doctor` never sees a release.
 #
-# Runs check-version first, creates whichever of the three tags does not exist
-# yet, and pushes all three to every remote. Safe to rerun.
+# Runs check-version first, then the lint and the tests CI runs, creates
+# whichever of the three tags does not exist yet, and pushes all three to every
+# remote. Safe to rerun: a rerun only adds the module tags at the commit already
+# tagged, so the checks run once, before the release tag exists.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -20,6 +22,14 @@ scripts/check-version.sh "$tag"
 if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
   base="$(git rev-parse "$tag^{commit}")"
 else
+  # A tag is cut only from a tree that passes what the pipeline runs. Five
+  # releases were tagged from commits the lint job then rejected, each one
+  # checked beforehand with something cheaper than the pipeline's own tools.
+  if [ -n "$(git status --porcelain)" ]; then
+    echo "the working tree is not clean; a tag is cut from a commit, not from what is on disk" >&2
+    exit 1
+  fi
+  make lint test
   base="$(git rev-parse HEAD)"
 fi
 
