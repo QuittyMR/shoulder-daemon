@@ -8,6 +8,13 @@ Notable changes to shoulder-daemon. The format follows
 
 ## [0.7.0-rc] - 2026-11-01
 
+### Added
+
+- Release candidates. A tag `vX.Y.Z-rc` builds and publishes like a release,
+  marked as a pre-release, with its container image tagged `latest-rc`; the
+  `latest` aliases do not move. `shoulderd update --rc` takes the newest
+  candidate; without the flag a candidate is never offered, and a candidate
+  build is told of the release that follows it.
 ### Changed
 
 - The prompt hook asks the model about the prompt before the assistant reads

@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-const updateUsage = `usage: shoulderd update [--check] [--json]
+const updateUsage = `usage: shoulderd update [--check] [--rc] [--json]
 
 Bring this binary forward to the newest release. What that takes depends on
 where this build came from, which 'shoulderd version' prints:
@@ -32,9 +32,13 @@ where this build came from, which 'shoulderd version' prints:
 
 The daemon that is running keeps the old code until it is restarted; the
 command says how. --check only asks: exit 0 when this is the newest release,
-3 when a newer one is out, 1 when the module proxy cannot be asked.
+3 when a newer one is out, 1 when the module proxy cannot be asked. --rc
+counts release candidates, tagged vX.Y.Z-rc, as releases; without it a
+candidate is never offered, and a candidate build is told of the next
+release.
 
   --check      report whether a newer release exists and change nothing
+  --rc         take the newest release candidate when it is newer
   --json       machine-readable output
 `
 
@@ -79,6 +83,7 @@ type updateReport struct {
 func (c *cli) update(args []string) int {
 	fs := c.flags("update", updateUsage)
 	check := fs.Bool("check", false, "report whether a newer release exists and change nothing")
+	rc := fs.Bool("rc", false, "take the newest release candidate when it is newer")
 	asJSON := fs.Bool("json", false, "machine-readable output")
 	if code := c.parse(fs, args); code >= 0 {
 		return code
@@ -89,7 +94,11 @@ func (c *cli) update(args []string) int {
 
 	b := currentBuild()
 	rep := updateReport{Current: b.Version, Origin: b.Origin, Action: "none"}
-	latest, err := latestRelease(context.Background())
+	newest := latestRelease
+	if *rc {
+		newest = latestCandidate
+	}
+	latest, err := newest(context.Background())
 	if err != nil {
 		rep.Error = "could not ask the module proxy which release is newest: " + err.Error()
 		return c.updateDone(rep, 1, *asJSON)

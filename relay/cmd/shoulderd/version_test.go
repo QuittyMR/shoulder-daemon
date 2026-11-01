@@ -21,6 +21,15 @@ func TestNewerComparesReleasesOnly(t *testing.T) {
 		{"v0.1.0", "v0.1.0", false},
 		{"v0.1.0", "v0.2.0", false},
 		{"v0.10.0", "v0.9.0", true},
+		// A candidate is later than the release before it and earlier than the
+		// release it is a candidate for; among candidates the number decides.
+		{"v0.7.0-rc", "v0.6.3", true},
+		{"v0.7.0", "v0.7.0-rc", true},
+		{"v0.7.0-rc", "v0.7.0", false},
+		{"v0.7.0-rc2", "v0.7.0-rc1", true},
+		{"v0.7.0-rc2", "v0.7.0-rc", true},
+		{"v0.7.0-rc", "v0.7.0-rc", false},
+		{"v0.7.1", "v0.7.0-rc", true},
 		// A pseudo-version, a devel build and garbage are never told to update:
 		// there is nothing to compare them against.
 		{"v0.2.0", "devel", false},
@@ -44,7 +53,11 @@ func TestIsTagged(t *testing.T) {
 		"(devel)":                            false,
 		"v0.0.0-20260903131609-7e184aaace8d": false,
 		"v0.1":                               false,
-		"v0.1.0-rc1":                         false,
+		"v0.1.0-rc1":                         true,
+		"v0.1.0-rc":                          true,
+		"v0.1.0-rc.1":                        false,
+		"v0.1.0-rc0":                         false,
+		"v0.1.0-beta":                        false,
 	} {
 		if got := isTagged(v); got != want {
 			t.Errorf("isTagged(%q) = %v, want %v", v, got, want)
@@ -81,6 +94,35 @@ func TestLatestReleaseRefusesAPseudoVersion(t *testing.T) {
 
 	if _, err := latestRelease(context.Background()); err == nil {
 		t.Fatal("a pseudo-version is not a release and must not be offered as one")
+	}
+}
+
+// proxyLists stands in for the module proxy's list of every tag.
+func proxyLists(t *testing.T, versions ...string) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(strings.Join(versions, "\n") + "\n"))
+	}))
+	t.Cleanup(srv.Close)
+	old := listURL
+	listURL = srv.URL
+	t.Cleanup(func() { listURL = old })
+}
+
+func TestLatestCandidateIsTheNewestTagOfAnyKind(t *testing.T) {
+	proxyLists(t, "v0.6.2", "v0.7.0-rc", "v0.6.3", "v0.0.0-20260903131609-7e184aaace8d")
+	if got, err := latestCandidate(context.Background()); err != nil || got != "v0.7.0-rc" {
+		t.Fatalf("latest candidate = %q, %v; want v0.7.0-rc", got, err)
+	}
+
+	proxyLists(t, "v0.7.0-rc", "v0.7.0")
+	if got, err := latestCandidate(context.Background()); err != nil || got != "v0.7.0" {
+		t.Fatalf("latest candidate = %q, %v; want the release over its candidate", got, err)
+	}
+
+	proxyLists(t, "v0.0.0-20260903131609-7e184aaace8d")
+	if _, err := latestCandidate(context.Background()); err == nil {
+		t.Fatal("a list with no tag must not name one")
 	}
 }
 

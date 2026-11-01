@@ -110,6 +110,48 @@ func TestUpdateCheckAnswersByExitCode(t *testing.T) {
 	}
 }
 
+// A candidate is offered only to someone who asked for one with --rc; the
+// daily check never names it, and a candidate build is told of the release.
+func TestUpdateOffersACandidateOnlyWithRc(t *testing.T) {
+	thisBuildIs(t, "v0.6.3", "release")
+	proxySays(t, "v0.6.3")
+	proxyLists(t, "v0.6.3", "v0.7.0-rc")
+
+	code, out, _ := runUpdate(t, "--check")
+	if code != 0 || !strings.Contains(out, "v0.6.3 is the newest release") {
+		t.Fatalf("without --rc: exit %d, %q", code, out)
+	}
+	code, out, _ = runUpdate(t, "--check", "--rc")
+	if code != exitNewer || !strings.Contains(out, "v0.7.0-rc is out; this is v0.6.3") {
+		t.Fatalf("with --rc: exit %d, %q", code, out)
+	}
+
+	thisBuildIs(t, "v0.7.0-rc", "release")
+	code, out, _ = runUpdate(t, "--check", "--rc")
+	if code != 0 || !strings.Contains(out, "v0.7.0-rc is the newest release") {
+		t.Fatalf("candidate current: exit %d, %q", code, out)
+	}
+	proxySays(t, "v0.7.0")
+	code, out, _ = runUpdate(t, "--check")
+	if code != exitNewer || !strings.Contains(out, "v0.7.0 is out; this is v0.7.0-rc") {
+		t.Fatalf("release after candidate: exit %d, %q", code, out)
+	}
+}
+
+func TestUpdateRcInstallsTheCandidate(t *testing.T) {
+	thisBuildIs(t, "v0.6.3", "go install")
+	proxyLists(t, "v0.6.3", "v0.7.0-rc")
+	var asked string
+	old := goInstall
+	goInstall = func(_ context.Context, tag string, _ io.Writer) error { asked = tag; return nil }
+	t.Cleanup(func() { goInstall = old })
+
+	code, out, _ := runUpdate(t, "--rc")
+	if code != 0 || asked != "v0.7.0-rc" || !strings.Contains(out, "v0.7.0-rc is installed") {
+		t.Fatalf("exit %d, installed %q, out %q", code, asked, out)
+	}
+}
+
 func TestUpdateReplacesAReleaseBinaryInPlace(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("a running Windows binary cannot be replaced")

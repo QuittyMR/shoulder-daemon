@@ -721,8 +721,11 @@ out, and a Claude Code session says so at start, once a day.
 | `checkout` | nothing; says `git pull && make update` |
 
 `shoulderd update --check` only asks, and exits 3 when a newer release is
-out, which is what the session-start hook reads. `SHOULDER_RELEASE_BASE`
-points the download at a mirror, as it does the plugin's first fetch.
+out, which is what the session-start hook reads. `shoulderd update --rc`
+counts release candidates, tagged `vX.Y.Z-rc` and published as pre-releases
+with a `latest-rc` image; without the flag a candidate is never offered.
+`SHOULDER_RELEASE_BASE` points the download at a mirror, as it does the
+plugin's first fetch.
 
 **The adapter** - the harness runs the copy it took when the plugin was
 installed, so a new release's adapter needs the harness to take it again:

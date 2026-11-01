@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -27,6 +29,9 @@ var (
 // the proxy rather than a forge means the answer is the same whichever remote
 // the user cloned, and needs no token.
 var latestURL = "https://proxy.golang.org/gitlab.com/quittymr/shoulder-daemon/relay/@latest"
+
+// listURL is the proxy's every tag, one per line, candidates included.
+var listURL = "https://proxy.golang.org/gitlab.com/quittymr/shoulder-daemon/relay/@v/list"
 
 // Under this directory the binary was put there by an editor plugin, not by
 // the user, which decides whether an update means `go install` or a restart.
@@ -151,44 +156,108 @@ func latestRelease(ctx context.Context) (string, error) {
 	return v.Version, nil
 }
 
-// isTagged is true for a real release, vX.Y.Z. A pseudo-version carries a
-// timestamp and a hash after the patch number and is not one.
+// latestCandidate asks the module proxy for every tag and returns the newest,
+// release candidates included. The proxy's own "latest" never names a
+// candidate while a release exists, which is right for everyone who did not
+// ask for one.
+func latestCandidate(ctx context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, listURL, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("proxy answered %s", resp.Status)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	if err != nil {
+		return "", err
+	}
+	best := ""
+	for _, v := range strings.Fields(string(body)) {
+		if isTagged(v) && (best == "" || newer(v, best)) {
+			best = v
+		}
+	}
+	if best == "" {
+		return "", errors.New("no tagged release yet")
+	}
+	return best, nil
+}
+
+// isTagged is true for a release, vX.Y.Z, or a release candidate, vX.Y.Z-rc
+// with an optional number. A pseudo-version carries a timestamp and a hash
+// after the patch number and is not one.
 func isTagged(v string) bool {
-	_, ok := semver(v)
+	_, ok := parseTag(v)
 	return ok
 }
 
-// semver returns the three numbers of vX.Y.Z, or nothing for anything else.
-func semver(v string) ([3]int, bool) {
-	var n [3]int
-	v = strings.TrimPrefix(v, "v")
+// tag is one release in comparable form. rc is 0 for a release and the
+// candidate's number otherwise; a bare -rc counts as the first.
+type tag struct {
+	n  [3]int
+	rc int
+}
+
+// parseTag reads vX.Y.Z or vX.Y.Z-rc[N], or nothing for anything else.
+func parseTag(v string) (tag, bool) {
+	var t tag
+	nums, rc, isRC := strings.Cut(strings.TrimPrefix(v, "v"), "-rc")
+	if isRC {
+		t.rc = 1
+		if rc != "" {
+			x, err := strconv.Atoi(rc)
+			if err != nil || x < 1 {
+				return t, false
+			}
+			t.rc = x
+		}
+	}
+	return t.numbers(nums)
+}
+
+func (t tag) numbers(v string) (tag, bool) {
 	fields := strings.Split(v, ".")
 	if len(fields) != 3 {
-		return n, false
+		return t, false
 	}
 	for i, f := range fields {
 		x, err := strconv.Atoi(f)
 		if err != nil || x < 0 {
-			return n, false
+			return t, false
 		}
-		n[i] = x
+		t.n[i] = x
 	}
-	return n, true
+	return t, true
 }
 
 // newer reports whether candidate is a release later than current. Anything
 // that is not a tagged release on either side is not comparable, and a build
-// that cannot be compared is not told to update.
+// that cannot be compared is not told to update. A release is later than
+// every candidate for the same numbers; among candidates the number decides.
 func newer(candidate, current string) bool {
-	a, ok := semver(candidate)
+	a, ok := parseTag(candidate)
 	if !ok {
 		return false
 	}
-	b, ok := semver(current)
+	b, ok := parseTag(current)
 	if !ok {
 		return false
 	}
-	return a != b && (a[0] > b[0] || a[0] == b[0] && (a[1] > b[1] || a[1] == b[1] && a[2] > b[2]))
+	if a.n != b.n {
+		return a.n[0] > b.n[0] || a.n[0] == b.n[0] && (a.n[1] > b.n[1] || a.n[1] == b.n[1] && a.n[2] > b.n[2])
+	}
+	if a.rc == 0 || b.rc == 0 {
+		return a.rc == 0 && b.rc != 0
+	}
+	return a.rc > b.rc
 }
 
 // updateHint is the one command that brings this build forward, which depends

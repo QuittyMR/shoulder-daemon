@@ -185,7 +185,9 @@ again, and a checkout or a container is told the command for it (`git pull &&
 make update`; pull the image and recreate). The daemon that is running keeps
 the old code until it is restarted; it exits by itself once no session has
 used it for a while, or `pkill -x shoulderd` now and the next hook event
-starts the new one. `shoulderd update --check` only asks.
+starts the new one. `shoulderd update --check` only asks. A release
+candidate, tagged `vX.Y.Z-rc`, is never offered on its own; `shoulderd
+update --rc` takes the newest one.
 
 A Claude Code session says at start, once a day, when a newer release is out.
 It does not install it yet; you run the command. The plugin itself updates by
