@@ -196,16 +196,16 @@ func TestAdviceAlreadyPendingForTheSameAskerIsRefused(t *testing.T) {
 		return a
 	}
 
-	if !b.Push(said("first", "", 0)) {
+	if b.Push(said("first", "", 0)) != Queued {
 		t.Fatal("the first note was refused")
 	}
-	if b.Push(said("again", "", 0)) {
+	if b.Push(said("again", "", 0)) == Queued {
 		t.Fatal("the same advice for the same asker was queued twice")
 	}
-	if !b.Push(said("for-agent", "agent-a", 0)) {
+	if b.Push(said("for-agent", "agent-a", 0)) != Queued {
 		t.Fatal("the same words for another asker were refused")
 	}
-	if b.Push(said("for-agent-again", "agent-a", 0)) {
+	if b.Push(said("for-agent-again", "agent-a", 0)) == Queued {
 		t.Fatal("the same advice for the same agent was queued twice")
 	}
 	if b.Depth() != 2 {
@@ -215,11 +215,47 @@ func TestAdviceAlreadyPendingForTheSameAskerIsRefused(t *testing.T) {
 	if got, ok := b.Take("s1", 0, time.Now(), session.KindToolCall, "", ""); !ok || got.ID != "first" {
 		t.Fatalf("took %+v", got)
 	}
-	if !b.Push(said("after-delivery", "", 0)) {
+	if b.Push(said("after-delivery", "", 0)) != Queued {
 		t.Fatal("advice was refused though nothing like it is pending any more")
 	}
-	if !b.Push(said("after-expiry", "", 9)) {
+	if b.Push(said("after-expiry", "", 9)) != Queued {
 		t.Fatal("advice was refused because of a note too stale to be delivered")
+	}
+}
+
+// A text the assistant has read is not queued again within the cooldown. The
+// decision model reads a stored rule on every event it bears on and says it
+// every time; once is what the assistant needs.
+func TestATextDeliveredRecentlyIsNotQueuedAgain(t *testing.T) {
+	b := New()
+	first := note("first", session.LevelPlan, 0)
+	first.Text = "Stored: answer the question first."
+	b.Push(first)
+	got, ok := b.Take("s1", 0, time.Now(), session.KindUserPrompt, "", "")
+	if !ok {
+		t.Fatal("the note was not taken")
+	}
+	b.Delivered(got, 0)
+
+	again := note("again", session.LevelPlan, Cooldown-1)
+	again.Text = "stored:  Answer the question first."
+	if r := b.Push(again); r != Cooling {
+		t.Fatalf("the same words, differently cased, were queued %d events after delivery: %v", Cooldown-1, r)
+	}
+	other := note("other", session.LevelPlan, Cooldown-1)
+	other.Text = "Stored: the main branch is master."
+	if r := b.Push(other); r != Queued {
+		t.Fatalf("different words were refused: %v", r)
+	}
+	forAgent := note("for-agent", session.LevelAction, Cooldown-1)
+	forAgent.Text, forAgent.AgentID = first.Text, "agent-a"
+	if r := b.Push(forAgent); r != Queued {
+		t.Fatalf("the same words for a reader who has not seen them were refused: %v", r)
+	}
+	later := note("later", session.LevelPlan, Cooldown)
+	later.Text = first.Text
+	if r := b.Push(later); r != Queued {
+		t.Fatalf("the same words after the cooldown were refused: %v", r)
 	}
 }
 

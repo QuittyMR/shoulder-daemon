@@ -26,6 +26,7 @@ import (
 
 const maxBodyBytes = 8 << 20
 
+
 type Server struct {
 	Registry *session.Registry
 	Outbox   *outbox.Box
@@ -344,6 +345,12 @@ func (s *Server) collect(sessionID string, kind session.Kind, agentID, agentType
 	if !ok {
 		return session.Advice{}, false
 	}
+	return s.emit(sessionID, count, agentID, a)
+}
+
+// emit passes one piece of advice through the budget gate and, when the gate
+// lets it through, records it as read.
+func (s *Server) emit(sessionID string, count uint64, agentID string, a session.Advice) (session.Advice, bool) {
 	d := s.Budget.Allow(s.Registry.BudgetState(sessionID, agentID), count, a.Candidate())
 	if !d.Allow {
 		s.Metrics.Inc("shoulder_advice_suppressed_total")
@@ -351,9 +358,11 @@ func (s *Server) collect(sessionID string, kind session.Kind, agentID, agentType
 		return session.Advice{}, false
 	}
 	s.Registry.RecordInjection(sessionID, count, agentID, a)
+	s.Outbox.Delivered(a, count)
 	s.Metrics.Inc("shoulder_advice_emitted_total")
 	return a, true
 }
+
 
 func suppressLabel(reason string) string {
 	if i := strings.IndexByte(reason, ':'); i >= 0 {

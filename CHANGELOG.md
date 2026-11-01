@@ -8,6 +8,9 @@ Notable changes to shoulder-daemon. The format follows
 
 ### Changed
 
+- A text that reached the assistant is not said again for ten main-thread
+  events, five prompts with their answers. The decision model read a stored
+  rule on every event it bore on and said it every time.
 - Context written for the next prompt is for that prompt alone: when the
   prompt arrives, the one note it takes is delivered and the rest are
   dropped, and a note older than two minutes is dropped unread.

@@ -1231,10 +1231,16 @@ func (p *Pipeline) queueInjection(sessionID string, count uint64, ask asker, raw
 	if a.AgentID == "" && a.SpawnID != "" {
 		a.AgentID = p.Registry.AgentOf(sessionID, a.SpawnID)
 	}
-	if !p.Outbox.Push(a) {
+	switch p.Outbox.Push(a) {
+	case outbox.Pending:
 		p.Metrics.Inc("shoulder_advice_duplicate_total")
 		p.Log.Info("advice already pending; not queued twice", "session", sessionID, "main_events", count,
 			"agent", a.AgentID, "text", text)
+		return
+	case outbox.Cooling:
+		p.Metrics.Inc("shoulder_advice_cooldown_total")
+		p.Log.Info("advice said recently; not queued again", "session", sessionID, "main_events", count,
+			"agent", a.AgentID, "cooldown_events", outbox.Cooldown, "text", text)
 		return
 	}
 	p.Metrics.Inc("shoulder_advice_queued_total")
