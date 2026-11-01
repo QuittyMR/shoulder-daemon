@@ -36,7 +36,7 @@ default:
   rules:
     - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]*)?$/
     - if: $CI_PIPELINE_SOURCE =~ /^(web|api)$/
 
 lint:
@@ -98,7 +98,7 @@ adapter-test:
   rules:
     - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]*)?$/
     - if: $CI_PIPELINE_SOURCE =~ /^(web|api)$/
   # The file is named rather than the directory: the directory form of --test
   # does not resolve it on node 22.
@@ -149,11 +149,14 @@ secret_detection:
 
 # --- Releases. A tag vX.Y.Z builds every binary, pushes the image, and creates
 # the release with the CHANGELOG section as its notes; the same tag does the
-# same on GitHub, so the two releases carry identical artefacts.
+# same on GitHub, so the two releases carry identical artefacts. A tag
+# vX.Y.Z-rc is a release candidate: the same build, but its image is tagged
+# latest-rc rather than latest, and the release does not move the stable
+# aliases. `shoulderd update --rc` is how a person takes one.
 
 .tagged:
   rules:
-    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]*)?$/
 
 # One number in three places has to agree before anything is built.
 verify-version:
@@ -212,13 +215,16 @@ container-image:
   script:
     - |
       ver="${CI_COMMIT_TAG#v}"
+      case "$ver" in
+        *-rc*) aliases="--tag $IMAGE:latest-rc" ;;
+        *)     aliases="--tag $IMAGE:${ver%.*} --tag $IMAGE:latest" ;;
+      esac
+      # shellcheck disable=SC2086
       docker buildx build relay \
         --provenance=false --sbom=false \
         --platform linux/amd64,linux/arm64 \
         --build-arg "VERSION=$CI_COMMIT_TAG" \
-        --tag "$IMAGE:$ver" \
-        --tag "$IMAGE:${ver%.*}" \
-        --tag "$IMAGE:latest" \
+        --tag "$IMAGE:$ver" $aliases \
         --push
 
 # When the GitHub release built and pushed an image but this pipeline's image
@@ -234,7 +240,12 @@ mirror-image:
     entrypoint: ['']
   script:
     - |
-      for t in "$MIRROR_TAG" "${MIRROR_TAG%.*}" latest; do
+      case "$MIRROR_TAG" in
+        *-rc*) aliases="latest-rc" ;;
+        *)     aliases="${MIRROR_TAG%.*} latest" ;;
+      esac
+      # shellcheck disable=SC2086
+      for t in "$MIRROR_TAG" $aliases; do
         skopeo copy --all --dest-creds "$CI_REGISTRY_USER:$CI_REGISTRY_PASSWORD" \
           "docker://ghcr.io/quittymr/shoulder-daemon:$t" "docker://$IMAGE:$t"
       done

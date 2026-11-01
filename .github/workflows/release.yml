@@ -2,7 +2,7 @@ name: Release
 
 on:
   push:
-    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+    tags: ['v[0-9]+.[0-9]+.[0-9]+', 'v[0-9]+.[0-9]+.[0-9]+-rc*']
 
 permissions:
   contents: read
@@ -83,6 +83,9 @@ jobs:
           body_path: notes.md
           files: dist/*
           fail_on_unmatched_files: true
+          # A candidate never becomes "latest": the plugin's first fetch and
+          # `shoulderd update` read that alias, and only --rc asks for one.
+          prerelease: ${{ contains(github.ref_name, '-rc') }}
 
   # Published from here rather than GitLab because npm checks the provenance
   # against package.json's repository, which is this one. NPM_TOKEN is a granular
@@ -129,8 +132,9 @@ jobs:
           images: ${{ env.IMAGE }}
           tags: |
             type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
+            type=semver,pattern={{major}}.{{minor}},enable=${{ !contains(github.ref_name, '-rc') }}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-rc') }}
+            type=raw,value=latest-rc,enable=${{ contains(github.ref_name, '-rc') }}
       - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         env:
           DOCKER_BUILD_RECORD_UPLOAD: 'false'
