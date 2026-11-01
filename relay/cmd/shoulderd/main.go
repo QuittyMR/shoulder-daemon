@@ -200,6 +200,9 @@ func serve() error {
 	if jev != nil {
 		pipe.Triage = jev
 	}
+	// The prompt hook is the one hook that waits for the model, within the
+	// pipeline's own bound.
+	srv.Prompter = pipe
 
 	// The CLI routes share the mux, the address and the token with the hooks,
 	// and live in another package only because this one may not import the

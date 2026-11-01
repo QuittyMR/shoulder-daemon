@@ -19,7 +19,15 @@ if [ -z "$TOKEN" ]; then
   TOKEN="$(cat "${XDG_DATA_HOME:-$HOME/.local/share}/shoulder-daemon/token" 2>/dev/null)"
 fi
 
-answer="$(curl -s --max-time 2 -w '\n%{http_code}' \
+# The prompt hook is the one the relay may hold while it asks the model about
+# the prompt; every other hook answers from memory. The hook's own timeout in
+# hooks.json is 5 seconds, and this stays under it.
+MAX_TIME=2
+if [ "$EVENT" = UserPromptSubmit ]; then
+  MAX_TIME=4
+fi
+
+answer="$(curl -s --max-time "$MAX_TIME" -w '\n%{http_code}' \
   -H "X-Shoulder-Token: ${TOKEN}" -H 'Content-Type: application/json' \
   --data-binary @- "http://${ADDR}/v1/hooks/claude-code/${EVENT}" 2>/dev/null)"
 rc=$?

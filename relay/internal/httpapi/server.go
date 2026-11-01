@@ -1,10 +1,13 @@
 // Package httpapi is the hook-facing surface. It is the hot path: a handler may
 // only touch in-memory structures, never the advisor, the store, or the disk.
 // That rule is what keeps a hook under a millisecond even when the advisor is
-// wedged, and it is enforced by TestHotPathHasNoSlowDependencies.
+// wedged, and it is enforced by TestHotPathHasNoSlowDependencies. The one
+// exception is the main thread's prompt, which may wait for the Prompter
+// within the bound the Prompter sets for itself.
 package httpapi
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -26,6 +29,11 @@ import (
 
 const maxBodyBytes = 8 << 20
 
+// PromptAdvisor is what the prompt hook may wait for. It bounds its own
+// time; the hook passes the request's context and nothing more.
+type PromptAdvisor interface {
+	PromptAdvice(ctx context.Context, sessionID, prompt string, count uint64) (session.Advice, bool)
+}
 
 type Server struct {
 	Registry *session.Registry
@@ -60,6 +68,9 @@ type Server struct {
 	// means the transcript package with its default tail; tests replace it.
 	AnswerText func(path string) (string, error)
 
+	// Prompter judges the main thread's prompt while its hook waits. Nil asks
+	// nothing, and the prompt hook answers from the outbox alone.
+	Prompter   PromptAdvisor
 	adopted    atomic.Bool
 	saidDenied sync.Once
 	saidAdopt  sync.Once
@@ -185,6 +196,11 @@ func (s *Server) handleClaudeCode(w http.ResponseWriter, r *http.Request) {
 	if a, ok := s.collect(ev.SessionID, ev.Kind, ev.AgentID, ev.AgentType); ok {
 		s.saidAdvice(ev.SessionID, event, a)
 		resp = inject(event, a)
+	} else if s.Prompter != nil && ev.Kind == session.KindUserPrompt && ev.Origin == session.OriginUser {
+		if a, ok := s.promptAdvice(r.Context(), ev); ok {
+			s.saidAdvice(ev.SessionID, event, a)
+			resp = inject(event, a)
+		}
 	}
 	// Claude Code discards systemMessage on these two events, so a notice
 	// drained here would be a notice lost; it waits for the next hook.
@@ -308,6 +324,11 @@ func (s *Server) handleNeutral(w http.ResponseWriter, r *http.Request) {
 	if a, ok := s.collect(ev.SessionID, ev.Kind, ev.AgentID, ev.AgentType); ok {
 		s.saidAdvice(ev.SessionID, string(ev.Kind), a)
 		out["advice"] = a
+	} else if s.Prompter != nil && ev.Kind == session.KindUserPrompt && ev.Origin == session.OriginUser {
+		if a, ok := s.promptAdvice(r.Context(), ev); ok {
+			s.saidAdvice(ev.SessionID, string(ev.Kind), a)
+			out["advice"] = a
+		}
 	}
 	if notices := s.Notices.Drain(ev.SessionID); len(notices) > 0 {
 		out["notices"] = notices
@@ -363,6 +384,24 @@ func (s *Server) emit(sessionID string, count uint64, agentID string, a session.
 	return a, true
 }
 
+// promptAdvice asks the Prompter about the prompt just submitted and gates its
+// answer like any other advice. The prompt is the one event where context
+// arrives before the assistant has chosen anything, and the background consult
+// of the same event answers only after this hook has returned. The cooldown
+// is checked here because the answer never passes through the outbox.
+func (s *Server) promptAdvice(ctx context.Context, ev session.Event) (session.Advice, bool) {
+	count := s.Registry.MainEvents(ev.SessionID)
+	a, ok := s.Prompter.PromptAdvice(ctx, ev.SessionID, ev.Prompt, count)
+	if !ok {
+		return session.Advice{}, false
+	}
+	if s.Outbox.Cooling(ev.SessionID, "", a.Text, count) {
+		s.Metrics.Inc("shoulder_advice_suppressed_total")
+		s.Metrics.Inc("shoulder_advice_suppressed_cooldown_total")
+		return session.Advice{}, false
+	}
+	return s.emit(ev.SessionID, count, "", a)
+}
 
 func suppressLabel(reason string) string {
 	if i := strings.IndexByte(reason, ':'); i >= 0 {

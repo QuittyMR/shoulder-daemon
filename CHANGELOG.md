@@ -8,6 +8,13 @@ Notable changes to shoulder-daemon. The format follows
 
 ### Changed
 
+- The prompt hook asks the model about the prompt before the assistant reads
+  it. One call, no tools, the prompt and the stored rules alone, three
+  seconds for the first ask and a retry together; on a timeout or a refusal
+  the hook answers as before and the background consult still runs. Context
+  the background consult wrote for "the next prompt" used to land on a
+  prompt minutes later, about something else. The hook script gives the
+  prompt post four seconds instead of two; every other post keeps two.
 - A text that reached the assistant is not said again for ten main-thread
   events, five prompts with their answers. The decision model read a stored
   rule on every event it bore on and said it every time.

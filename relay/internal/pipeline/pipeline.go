@@ -664,6 +664,150 @@ func (p *Pipeline) decide(ctx context.Context, prov llm.Provider, sessionID, sys
 	return d, raw, err
 }
 
+// promptAdviceTimeout bounds PromptAdvice end to end: the first ask and, when
+// the answer was not the object, the second. The prompt hook waits for it, so
+// it is the one wait a person feels.
+const promptAdviceTimeout = 3 * time.Second
+
+// promptRulesLimit caps the stored entries shown to the prompt-time judgement.
+const promptRulesLimit = 40
+
+// PromptAdvice is the judgement on one prompt, made while the hook that
+// carried it waits. The background consult reads the prompt too, but its
+// answer reaches the assistant only on the next prompt, by which time it is
+// about something else. This pass reads the prompt and the stored rules
+// alone, with no tools and one answer, and is best effort: on a timeout or a
+// refusal the hook answers as it would have without it, and the background
+// consult still runs. A failure here is not counted against the model.
+func (p *Pipeline) PromptAdvice(ctx context.Context, sessionID, prompt string, count uint64) (session.Advice, bool) {
+	prov := p.Settings.Provider()
+	if prov == nil || strings.TrimSpace(prompt) == "" {
+		return session.Advice{}, false
+	}
+	events, _, ok := p.Registry.Snapshot(sessionID)
+	if !ok {
+		return session.Advice{}, false
+	}
+	ctx, cancel := context.WithTimeout(ctx, promptAdviceTimeout)
+	defer cancel()
+	p.Metrics.Inc("shoulder_prompt_advice_total")
+
+	rules := p.promptRules(ctx, prompt, p.sessionSite(events))
+	if len(rules) == 0 {
+		return session.Advice{}, false
+	}
+	user := promptAdvicePrompt(prompt, rules)
+	start := time.Now()
+	text, raw, err := p.promptDecide(ctx, prov, user)
+	if perr := (*llm.ShapeError)(nil); errors.As(err, &perr) {
+		p.Metrics.Inc("shoulder_prompt_advice_retry_total")
+		text, raw, err = p.promptDecide(ctx, prov, user+retryTrailer(raw))
+	}
+	p.Metrics.ObserveHook("prompt_advice", time.Since(start))
+	if err != nil {
+		p.Metrics.Inc("shoulder_prompt_advice_error_total")
+		attrs := []any{"session", sessionID, "err", err}
+		if raw != "" {
+			attrs = append(attrs, "output", textutil.Clip(notify.OneLine(raw), rejectedOutputChars))
+		}
+		p.Log.Info("prompt advice skipped; the background consult still runs", attrs...)
+		return session.Advice{}, false
+	}
+	if sanitize.IsSilent(text) {
+		return session.Advice{}, false
+	}
+	text = sanitize.Advice(text, p.Cfg.Budget.MaxChars)
+	if text == "" {
+		return session.Advice{}, false
+	}
+	a := session.Advice{
+		ID:           "adv_" + randomID(),
+		SessionID:    sessionID,
+		Kind:         session.AdviceNote,
+		Level:        session.LevelPlan,
+		Text:         text,
+		CreatedEvent: count,
+		TTLEvents:    adviceTTL,
+		CreatedAt:    time.Now().UTC(),
+	}
+	p.Log.Info("advice written at the prompt", "id", a.ID, "session", sessionID, "main_events", count, "text", text)
+	return a, true
+}
+
+// promptDecide asks once, with no tools, and reads the one-key object.
+func (p *Pipeline) promptDecide(ctx context.Context, prov llm.Provider, user string) (string, string, error) {
+	raw, err := llm.Run(ctx, prov, prompts.PromptAdvice, user, nil, 1)
+	if err != nil {
+		return "", "", err
+	}
+	var d struct {
+		Inject string `json:"inject"`
+	}
+	if err := llm.ParseObject(raw, &d, "inject"); err != nil {
+		return "", raw, &llm.ShapeError{Err: err}
+	}
+	return strings.TrimSpace(d.Inject), raw, nil
+}
+
+// promptRules is what the prompt-time judgement may repeat: what the prompt
+// recalls, and every stored rule and preference the session can read. The
+// rules are listed whole because the one that bears on a prompt need not
+// share a word with it: a rule about questions matches no particular question.
+func (p *Pipeline) promptRules(ctx context.Context, prompt string, at site) []memory.Record {
+	if p.Memory == nil {
+		return nil
+	}
+	out := p.recall(ctx, prompt, at, sessionScopes, RecallLimit, 0)
+	seen := make(map[string]bool, len(out))
+	for _, r := range out {
+		seen[r.ID] = true
+	}
+	queries := []memory.Query{{Limit: DigestLimit, Scope: scope.Global}}
+	if at.project != "" {
+		queries = append(queries, memory.Query{Limit: DigestLimit, Scope: scope.Local, Project: at.project, Dir: at.dir})
+	}
+	for _, q := range queries {
+		recs, err := p.Memory.List(ctx, q)
+		if err != nil {
+			p.Log.Info("prompt advice reads recalled facts only; the listing failed", "scope", q.Scope, "err", err)
+			continue
+		}
+		for _, r := range recs {
+			if seen[r.ID] || !governs(r.Category) {
+				continue
+			}
+			seen[r.ID] = true
+			out = append(out, r)
+		}
+	}
+	if len(out) > promptRulesLimit {
+		out = out[:promptRulesLimit]
+	}
+	return out
+}
+
+// governs reports whether a stored category says how work is done, rather
+// than what was found. Older stores hold "constraint" beside "rule".
+func governs(category string) bool {
+	switch strings.ToLower(category) {
+	case "rule", "preference", "constraint":
+		return true
+	}
+	return false
+}
+
+// promptAdvicePrompt renders the prompt and the stored entries for the
+// prompt-time judgement.
+func promptAdvicePrompt(prompt string, rules []memory.Record) string {
+	var b strings.Builder
+	b.WriteString("<prompt>\n")
+	b.WriteString(prompt)
+	b.WriteString("\n</prompt>\n\n<stored>\n")
+	writeRecalled(&b, rules)
+	b.WriteString("</stored>")
+	return b.String()
+}
+
 // retryTrailer is what the second ask adds to the first: the start of the
 // answer that was refused, so the model can see it answered as the editor
 // rather than as the advisor, and the one instruction it missed.
