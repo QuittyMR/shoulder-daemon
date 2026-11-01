@@ -117,9 +117,26 @@ func ParseObject(raw string, v any, keys ...string) error {
 	return nil
 }
 
+// ShapeError is a model answer that arrived but was not a decision: prose, a
+// cut-off object, an object with none of the decision's keys. It is the one
+// failure worth asking again about, because the model is answering; it has
+// answered the wrong thing.
+type ShapeError struct{ Err error }
+
+func (e *ShapeError) Error() string { return e.Err.Error() }
+func (e *ShapeError) Unwrap() error { return e.Err }
+
 // ParseDecision tolerates the things small models do to JSON: code fences,
-// leading prose, trailing commentary.
+// leading prose, trailing commentary. Every error it returns is a *ShapeError.
 func ParseDecision(raw string) (Decision, error) {
+	d, err := parseDecision(raw)
+	if err != nil {
+		return Decision{}, &ShapeError{Err: err}
+	}
+	return d, nil
+}
+
+func parseDecision(raw string) (Decision, error) {
 	s := strings.TrimSpace(raw)
 	if sanitize.IsSilent(s) {
 		return Decision{}, nil

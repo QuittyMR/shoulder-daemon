@@ -800,8 +800,61 @@ func TestARefusedDecisionIsNoticedAsAnError(t *testing.T) {
 	}
 }
 
+// A model that answers the transcript in the editor's voice is asked once
+// more, with what it wrote in front of it. When the second answer is the
+// object, the advice is delivered, no error reaches the editor, and the model
+// is not recorded as failing.
+func TestAProseDecisionIsAskedAgainOnce(t *testing.T) {
+	prose, _ := json.Marshal(map[string]any{
+		"choices": []any{map[string]any{"message": map[string]string{"content": "Analyzing the prompt-preprocessing option: the daemon intercepts…"}}},
+	})
+	var calls atomic.Int32
+	var second atomic.Value
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			_, _ = w.Write(prose)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		second.Store(string(body))
+		_, _ = w.Write([]byte(decisionBody(t, "the marker advice")))
+	}))
+	t.Cleanup(ts.Close)
+	s := newStack(t, ts.URL, 2*time.Second)
+	s.pipe.Notify = notify.New(notify.Defaults())
+
+	s.post(t, "UserPromptSubmit", prompt("s1", "hi"))
+	awaitConsult(t, s)
+
+	if n := calls.Load(); n != 2 {
+		t.Fatalf("model calls = %d, want 2", n)
+	}
+	sent, _ := second.Load().(string)
+	if !strings.Contains(sent, "refused-answer") || !strings.Contains(sent, "Analyzing the prompt-preprocessing option") {
+		t.Fatalf("the second ask must show the model what it wrote: %s", sent)
+	}
+	for _, line := range notify.Lines(s.pipe.Notify.Drain("s1")) {
+		if strings.HasPrefix(line, "error:") {
+			t.Fatalf("a recovered decision must not be noticed as an error: %q", line)
+		}
+	}
+	if got := s.post(t, "UserPromptSubmit", prompt("s1", "next")); !strings.Contains(got, "the marker advice") {
+		t.Fatalf("the second answer must be delivered, got %s", got)
+	}
+	if h := s.pipe.ModelHealth(); h.State != ModelOK {
+		t.Fatalf("health = %+v, want answering", h)
+	}
+	if n := s.srv.Metrics.Get("shoulder_advisor_retry_total"); n != 1 {
+		t.Fatalf("retries = %d, want 1", n)
+	}
+	if n := s.srv.Metrics.Get("shoulder_advisor_error_total"); n != 0 {
+		t.Fatalf("errors = %d, want 0", n)
+	}
+}
+
 // What the model wrote instead of JSON is the only clue to why, so the log
 // keeps it. The editor does not: the notice names the failure and no more.
+// The model is asked twice and refuses twice; the failure is counted once.
 func TestAnUnparseableDecisionIsLoggedVerbatimButNotNoticed(t *testing.T) {
 	body, _ := json.Marshal(map[string]any{
 		"choices": []any{map[string]any{"message": map[string]string{"content": "I will search memory first."}}},
@@ -825,6 +878,9 @@ func TestAnUnparseableDecisionIsLoggedVerbatimButNotNoticed(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(got, "\n"), "search memory") {
 		t.Fatalf("the rejected text must not reach the editor: %v", got)
+	}
+	if n := s.srv.Metrics.Get("shoulder_advisor_error_total"); n != 1 {
+		t.Fatalf("errors = %d, want 1: a refused retry is one failure, not two", n)
 	}
 }
 

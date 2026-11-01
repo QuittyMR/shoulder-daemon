@@ -473,30 +473,29 @@ func (p *Pipeline) consult(ctx context.Context, sessionID string, ask asker) {
 	// The decision is a tool loop rather than one question: an event that says
 	// only "do it" is unreadable without what came before, and the model is the
 	// one that knows whether this is such an event.
-	counted := &countedSteps{Provider: prov, Log: p.Log, Session: sessionID, Slow: slowCall}
-	start := time.Now()
-	raw, err := llm.Run(cctx, counted, prompts.Decision(pick), decisionPrompt(window, recalled),
-		p.decisionTools(sessionID, at), decisionSteps)
-	p.Metrics.ObserveAdvisor(time.Since(start))
-	if err != nil {
-		p.Metrics.Inc("shoulder_advisor_error_total")
-		p.Log.Warn("decision failed; session unaffected", "session", sessionID, "err", err)
-		p.Notify.Push(sessionID, notify.Error, "decision failed: "+notify.OneLine(err.Error()))
-		p.modelFailed(err)
-		return
+	user := decisionPrompt(window, recalled)
+	decision, raw, err := p.decide(cctx, prov, sessionID, prompts.Decision(pick), user, p.decisionTools(sessionID, at))
+	if perr := (*llm.ShapeError)(nil); errors.As(err, &perr) {
+		// A small model that answers the transcript in the editor's voice,
+		// or with an empty object, usually does so once. Telling it what it
+		// wrote and asking again is cheaper than a session that learns nothing
+		// until the next event, so one more round is spent before the failure
+		// is counted against the model.
+		p.Metrics.Inc("shoulder_advisor_retry_total")
+		p.Log.Info("decision was not the object; asked again", "session", sessionID, "err", err,
+			"output", textutil.Clip(notify.OneLine(raw), rejectedOutputChars))
+		decision, raw, err = p.decide(cctx, prov, sessionID, prompts.Decision(pick),
+			user+retryTrailer(raw), p.decisionTools(sessionID, at))
 	}
-	if counted.exhausted(decisionSteps) {
-		p.Metrics.Inc("shoulder_decision_steps_exhausted_total")
-		p.Log.Warn("decision stopped at the step cap still asking for tools", "session", sessionID)
-		p.Notify.Push(sessionID, notify.Warning, "the decision stopped at the step cap, still asking for tools")
-	}
-	decision, err := llm.ParseDecision(raw)
 	if err != nil {
 		p.Metrics.Inc("shoulder_advisor_error_total")
 		// The rejected text goes to the log only. The notice says what failed;
 		// what the model wrote is for whoever reads the log to find out why.
-		p.Log.Warn("decision failed; session unaffected", "session", sessionID, "err", err,
-			"output", textutil.Clip(notify.OneLine(raw), rejectedOutputChars))
+		attrs := []any{"session", sessionID, "err", err}
+		if raw != "" {
+			attrs = append(attrs, "output", textutil.Clip(notify.OneLine(raw), rejectedOutputChars))
+		}
+		p.Log.Warn("decision failed; session unaffected", attrs...)
 		p.Notify.Push(sessionID, notify.Error, "decision failed: "+notify.OneLine(err.Error()))
 		p.modelFailed(err)
 		return
@@ -644,6 +643,33 @@ func (c *countedSteps) exhausted(max int) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.steps >= max && c.pending
+}
+
+// decide runs the tool loop once and reads the answer. The raw text comes back
+// with every error so the caller can log it, or show it to the model.
+func (p *Pipeline) decide(ctx context.Context, prov llm.Provider, sessionID, system, user string, tools []llm.Binding) (llm.Decision, string, error) {
+	counted := &countedSteps{Provider: prov, Log: p.Log, Session: sessionID, Slow: slowCall}
+	start := time.Now()
+	raw, err := llm.Run(ctx, counted, system, user, tools, decisionSteps)
+	p.Metrics.ObserveAdvisor(time.Since(start))
+	if err != nil {
+		return llm.Decision{}, "", err
+	}
+	if counted.exhausted(decisionSteps) {
+		p.Metrics.Inc("shoulder_decision_steps_exhausted_total")
+		p.Log.Warn("decision stopped at the step cap still asking for tools", "session", sessionID)
+		p.Notify.Push(sessionID, notify.Warning, "the decision stopped at the step cap, still asking for tools")
+	}
+	d, err := llm.ParseDecision(raw)
+	return d, raw, err
+}
+
+// retryTrailer is what the second ask adds to the first: the start of the
+// answer that was refused, so the model can see it answered as the editor
+// rather than as the advisor, and the one instruction it missed.
+func retryTrailer(rejected string) string {
+	return "\n\n<refused-answer>\n" + textutil.Clip(notify.OneLine(rejected), rejectedOutputChars) +
+		"\n</refused-answer>\n\nThat was not the decision object. Answer with the JSON object only: no prose before or after it."
 }
 
 // decisionPrompt renders the event and whatever the first search matched.

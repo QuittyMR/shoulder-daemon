@@ -6,6 +6,16 @@ Notable changes to shoulder-daemon. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- A decision answer that is not the decision object is asked for once more
+  before it counts as a failure. The second ask shows the model the start of
+  what it wrote and tells it to answer with the JSON object only. The small
+  Gemini model answers the transcript in the editor's voice now and then,
+  and one such answer flipped the daemon to "model down" until the next
+  event. A refused retry is still one failure, logged and noticed once. The
+  retry is counted in `shoulder_advisor_retry_total`.
+
 ## [0.6.3] - 2026-11-01
 
 ### Changed
