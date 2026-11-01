@@ -20,13 +20,13 @@ func TestAHookThatCannotCarryANoteLeavesIt(t *testing.T) {
 	b := New()
 	b.Push(note("plan", session.LevelPlan, 0))
 
-	if _, ok := b.Take("s1", 0, session.KindToolCall, "", ""); ok {
+	if _, ok := b.Take("s1", 0, time.Now(), session.KindToolCall, "", ""); ok {
 		t.Fatal("a tool call collected context meant for a prompt")
 	}
 	if b.Depth() != 1 {
 		t.Fatalf("the note was consumed by a hook that could not carry it; depth %d", b.Depth())
 	}
-	got, ok := b.Take("s1", 0, session.KindUserPrompt, "", "")
+	got, ok := b.Take("s1", 0, time.Now(), session.KindUserPrompt, "", "")
 	if !ok || got.ID != "plan" {
 		t.Fatalf("the prompt did not collect it: %+v %v", got, ok)
 	}
@@ -43,15 +43,15 @@ func TestTakeReturnsTheFirstNoteTheKindCanCarry(t *testing.T) {
 	b.Push(note("plan-1", session.LevelPlan, 0))
 	b.Push(note("action-2", session.LevelAction, 0))
 
-	got, ok := b.Take("s1", 0, session.KindToolCall, "", "")
+	got, ok := b.Take("s1", 0, time.Now(), session.KindToolCall, "", "")
 	if !ok || got.ID != "action-1" {
 		t.Fatalf("got %+v, want action-1", got)
 	}
-	got, ok = b.Take("s1", 0, session.KindToolCall, "", "")
+	got, ok = b.Take("s1", 0, time.Now(), session.KindToolCall, "", "")
 	if !ok || got.ID != "action-2" {
 		t.Fatalf("got %+v, want action-2", got)
 	}
-	got, ok = b.Take("s1", 0, session.KindUserPrompt, "", "")
+	got, ok = b.Take("s1", 0, time.Now(), session.KindUserPrompt, "", "")
 	if !ok || got.ID != "plan-1" {
 		t.Fatalf("the plan note did not survive two tool calls: %+v", got)
 	}
@@ -63,7 +63,7 @@ func TestExpiredAdviceIsDiscardedOnTheWayPast(t *testing.T) {
 	b.Push(note("old", session.LevelPlan, 0))
 	b.Push(note("fresh", session.LevelPlan, 9))
 
-	got, ok := b.Take("s1", 9, session.KindUserPrompt, "", "")
+	got, ok := b.Take("s1", 9, time.Now(), session.KindUserPrompt, "", "")
 	if !ok || got.ID != "fresh" {
 		t.Fatalf("got %+v, want the note that is still current", got)
 	}
@@ -82,7 +82,7 @@ func TestTheQueueIsBoundedAndDropsTheOldest(t *testing.T) {
 	if b.Depth() != maxPerSession {
 		t.Fatalf("depth %d, want %d", b.Depth(), maxPerSession)
 	}
-	got, _ := b.Take("s1", 0, session.KindUserPrompt, "", "")
+	got, _ := b.Take("s1", 0, time.Now(), session.KindUserPrompt, "", "")
 	if got.ID == "a" {
 		t.Fatal("the newest were dropped instead of the oldest")
 	}
@@ -94,7 +94,7 @@ func TestForgetEmptiesOneSession(t *testing.T) {
 	b.Push(session.Advice{ID: "y", SessionID: "s2", Level: session.LevelPlan, TTLEvents: 4})
 
 	b.Forget("s1")
-	if _, ok := b.Take("s1", 0, session.KindUserPrompt, "", ""); ok {
+	if _, ok := b.Take("s1", 0, time.Now(), session.KindUserPrompt, "", ""); ok {
 		t.Fatal("a forgotten session still had advice")
 	}
 	if b.Depth() != 1 {
@@ -104,7 +104,7 @@ func TestForgetEmptiesOneSession(t *testing.T) {
 
 func TestTakeOnAnUnknownSessionIsQuiet(t *testing.T) {
 	b := New()
-	if _, ok := b.Take("nobody", 0, session.KindUserPrompt, "", ""); ok {
+	if _, ok := b.Take("nobody", 0, time.Now(), session.KindUserPrompt, "", ""); ok {
 		t.Fatal("advice appeared for a session that never had any")
 	}
 }
@@ -121,17 +121,17 @@ func TestAdviceAddressedToAnAgentWaitsForThatAgent(t *testing.T) {
 		b.Push(a)
 	}
 
-	got, ok := b.Take("s1", 0, session.KindToolCall, "", "")
+	got, ok := b.Take("s1", 0, time.Now(), session.KindToolCall, "", "")
 	if !ok || got.ID != "for-anyone" {
 		t.Fatalf("the main thread got %+v %v, want the unaddressed note", got, ok)
 	}
-	if _, taken := b.Take("s1", 0, session.KindToolCall, "agent-b", "explore"); taken {
+	if _, taken := b.Take("s1", 0, time.Now(), session.KindToolCall, "agent-b", "explore"); taken {
 		t.Fatal("another agent collected a note addressed to agent-a")
 	}
 	if b.Depth() != 1 {
 		t.Fatalf("the addressed note was dropped; depth %d", b.Depth())
 	}
-	got, ok = b.Take("s1", 0, session.KindToolCall, "agent-a", "explore")
+	got, ok = b.Take("s1", 0, time.Now(), session.KindToolCall, "agent-a", "explore")
 	if !ok || got.ID != "for-agent-a" {
 		t.Fatalf("agent-a got %+v %v, want its own note", got, ok)
 	}
@@ -142,7 +142,7 @@ func TestAdviceAddressedToAnAgentWaitsForThatAgent(t *testing.T) {
 func TestAnUnaddressedNoteGoesToASubagentToo(t *testing.T) {
 	b := New()
 	b.Push(note("open", session.LevelAction, 0))
-	got, ok := b.Take("s1", 0, session.KindToolCall, "agent-z", "explore")
+	got, ok := b.Take("s1", 0, time.Now(), session.KindToolCall, "agent-z", "explore")
 	if !ok || got.ID != "open" {
 		t.Fatalf("got %+v %v", got, ok)
 	}
@@ -155,17 +155,17 @@ func TestANoteForAnUnnamedSubagentWaitsForOneOfItsType(t *testing.T) {
 	b := New()
 	b.Push(session.Advice{ID: "spawned", SessionID: "s1", Level: session.LevelAction, TTLEvents: 4, SpawnID: "toolu_1", AgentType: "explore"})
 
-	if _, ok := b.Take("s1", 0, session.KindToolCall, "", ""); ok {
+	if _, ok := b.Take("s1", 0, time.Now(), session.KindToolCall, "", ""); ok {
 		t.Fatal("the main thread took a note written for a subagent")
 	}
-	if _, ok := b.Take("s1", 0, session.KindToolCall, "agent-r", "reviewer"); ok {
+	if _, ok := b.Take("s1", 0, time.Now(), session.KindToolCall, "agent-r", "reviewer"); ok {
 		t.Fatal("a subagent of another type took the note")
 	}
 	b.Address("s1", "toolu_1", "agent-a")
-	if _, ok := b.Take("s1", 0, session.KindToolCall, "agent-b", "explore"); ok {
+	if _, ok := b.Take("s1", 0, time.Now(), session.KindToolCall, "agent-b", "explore"); ok {
 		t.Fatal("a sibling of the same type took a note bound to another agent")
 	}
-	got, ok := b.Take("s1", 0, session.KindAgentStart, "agent-a", "Explore")
+	got, ok := b.Take("s1", 0, time.Now(), session.KindAgentStart, "agent-a", "Explore")
 	if !ok || got.ID != "spawned" || got.AgentID != "agent-a" {
 		t.Fatalf("the agent the note was bound to got %+v %v", got, ok)
 	}
@@ -176,10 +176,10 @@ func TestANoteForAnUnnamedSubagentWaitsForOneOfItsType(t *testing.T) {
 func TestANoteTypedByAgentGoesToTheFirstAgentOfThatType(t *testing.T) {
 	b := New()
 	b.Push(session.Advice{ID: "typed", SessionID: "s1", Level: session.LevelAction, TTLEvents: 4, AgentType: "explore"})
-	if _, ok := b.Take("s1", 0, session.KindToolCall, "", ""); ok {
+	if _, ok := b.Take("s1", 0, time.Now(), session.KindToolCall, "", ""); ok {
 		t.Fatal("the main thread took a note written for subagents")
 	}
-	got, ok := b.Take("s1", 0, session.KindToolCall, "agent-b", "explore")
+	got, ok := b.Take("s1", 0, time.Now(), session.KindToolCall, "agent-b", "explore")
 	if !ok || got.ID != "typed" {
 		t.Fatalf("got %+v %v", got, ok)
 	}
@@ -212,7 +212,7 @@ func TestAdviceAlreadyPendingForTheSameAskerIsRefused(t *testing.T) {
 		t.Fatalf("depth %d, want 2", b.Depth())
 	}
 
-	if got, ok := b.Take("s1", 0, session.KindToolCall, "", ""); !ok || got.ID != "first" {
+	if got, ok := b.Take("s1", 0, time.Now(), session.KindToolCall, "", ""); !ok || got.ID != "first" {
 		t.Fatalf("took %+v", got)
 	}
 	if !b.Push(said("after-delivery", "", 0)) {
@@ -220,5 +220,49 @@ func TestAdviceAlreadyPendingForTheSameAskerIsRefused(t *testing.T) {
 	}
 	if !b.Push(said("after-expiry", "", 9)) {
 		t.Fatal("advice was refused because of a note too stale to be delivered")
+	}
+}
+
+// Context written for the next prompt is for that prompt alone. When it
+// arrives, the first note is delivered and the other plan notes go with it;
+// an action note waits for its operation as before.
+func TestAPromptTakesOnePlanNoteAndDropsTheRest(t *testing.T) {
+	b := New()
+	b.Push(note("plan-1", session.LevelPlan, 0))
+	b.Push(note("plan-2", session.LevelPlan, 0))
+	b.Push(note("action-1", session.LevelAction, 0))
+
+	got, ok := b.Take("s1", 1, time.Now(), session.KindUserPrompt, "", "")
+	if !ok || got.ID != "plan-1" {
+		t.Fatalf("took %+v, want plan-1", got)
+	}
+	if b.Depth() != 1 {
+		t.Fatalf("depth %d after the prompt, want the action note alone", b.Depth())
+	}
+	if got, ok := b.Take("s1", 1, time.Now(), session.KindToolCall, "", ""); !ok || got.ID != "action-1" {
+		t.Fatalf("took %+v, want action-1", got)
+	}
+}
+
+// A plan note is about the prompt the session was on when it was written. One
+// that has waited longer than PlanMaxAge is dropped unread, whatever asks;
+// an action note of the same age is still about its operation.
+func TestAPlanNoteOlderThanItsMaxAgeIsDroppedUnread(t *testing.T) {
+	b := New()
+	old := note("old-plan", session.LevelPlan, 0)
+	old.CreatedAt = time.Now().Add(-PlanMaxAge - time.Second)
+	b.Push(old)
+	oldAction := note("old-action", session.LevelAction, 0)
+	oldAction.CreatedAt = old.CreatedAt
+	b.Push(oldAction)
+
+	if got, ok := b.Take("s1", 1, time.Now(), session.KindUserPrompt, "", ""); ok {
+		t.Fatalf("a prompt collected a plan note %v old: %+v", time.Since(old.CreatedAt), got)
+	}
+	if got, ok := b.Take("s1", 1, time.Now(), session.KindToolCall, "", ""); !ok || got.ID != "old-action" {
+		t.Fatalf("the action note of the same age was not delivered: %+v", got)
+	}
+	if b.Depth() != 0 {
+		t.Fatalf("depth %d, want 0", b.Depth())
 	}
 }

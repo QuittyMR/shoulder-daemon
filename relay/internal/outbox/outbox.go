@@ -4,11 +4,17 @@ package outbox
 
 import (
 	"sync"
+	"time"
 
 	"gitlab.com/quittymr/shoulder-daemon/relay/internal/session"
 )
 
 const maxPerSession = 8
+
+// PlanMaxAge is how long context written for "the next prompt" stays valid.
+// A plan note is about the prompt the session was on when it was written;
+// the prompt that arrives a quarter of an hour later is about something else.
+const PlanMaxAge = 2 * time.Minute
 
 type Box struct {
 	mu      sync.Mutex
@@ -47,18 +53,27 @@ func (b *Box) Push(a session.Advice) bool {
 // in the queue rather than dropped: a note meant for the next prompt is passed
 // over by every tool call in between, and is still there when the prompt
 // arrives. Expired entries are discarded on the way past.
-func (b *Box) Take(sessionID string, event uint64, kind session.Kind, agentID, agentType string) (session.Advice, bool) {
+//
+// A prompt is the one event plan-level context was written for, so when the
+// main thread's prompt arrives, every plan note it does not take is dropped
+// with it: the prompt they were about has passed. A plan note older than
+// PlanMaxAge is dropped the same way, whatever event asks.
+func (b *Box) Take(sessionID string, event uint64, now time.Time, kind session.Kind, agentID, agentType string) (session.Advice, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	q := b.pending[sessionID]
 	kept := q[:0:0]
 	var found session.Advice
 	ok := false
+	mainPrompt := kind == session.KindUserPrompt && agentID == ""
 	for _, a := range q {
+		plan := a.Level != session.LevelAction && a.AgentID == "" && a.SpawnID == "" && a.AgentType == ""
 		switch {
+		case a.Expired(event):
+		case plan && stale(a, now):
+		case ok && plan && mainPrompt:
 		case ok:
 			kept = append(kept, a)
-		case a.Expired(event):
 		case kind.Delivers(a.Level) && a.For(agentID, agentType):
 			found, ok = a, true
 		default:
@@ -71,6 +86,10 @@ func (b *Box) Take(sessionID string, event uint64, kind session.Kind, agentID, a
 		b.pending[sessionID] = kept
 	}
 	return found, ok
+}
+
+func stale(a session.Advice, now time.Time) bool {
+	return !a.CreatedAt.IsZero() && now.Sub(a.CreatedAt) > PlanMaxAge
 }
 
 // Address binds every note written for the subagent spawned by spawnID to

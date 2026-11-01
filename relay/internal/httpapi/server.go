@@ -340,7 +340,7 @@ func (s *Server) ingest(ev session.Event) {
 // agentID and agentType name the subagent asking, empty for the main thread.
 func (s *Server) collect(sessionID string, kind session.Kind, agentID, agentType string) (session.Advice, bool) {
 	count := s.Registry.MainEvents(sessionID)
-	a, ok := s.Outbox.Take(sessionID, count, kind, agentID, agentType)
+	a, ok := s.Outbox.Take(sessionID, count, s.Now(), kind, agentID, agentType)
 	if !ok {
 		return session.Advice{}, false
 	}

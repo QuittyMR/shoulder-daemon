@@ -8,6 +8,9 @@ Notable changes to shoulder-daemon. The format follows
 
 ### Changed
 
+- Context written for the next prompt is for that prompt alone: when the
+  prompt arrives, the one note it takes is delivered and the rest are
+  dropped, and a note older than two minutes is dropped unread.
 - A decision answer that is not the decision object is asked for once more
   before it counts as a failure. The second ask shows the model the start of
   what it wrote and tells it to answer with the JSON object only. The small

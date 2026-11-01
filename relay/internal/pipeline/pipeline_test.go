@@ -2317,7 +2317,7 @@ func TestASubagentsPromptIsConsultedAndAdvisedAtItsNextToolCall(t *testing.T) {
 	}
 	awaitConsult(t, s)
 
-	if a, ok := s.pipe.Outbox.Take("s1", 0, session.KindUserPrompt, "", ""); ok {
+	if a, ok := s.pipe.Outbox.Take("s1", 0, time.Now(), session.KindUserPrompt, "", ""); ok {
 		t.Fatalf("advice for a subagent was queued for a prompt it will never submit: %+v", a)
 	}
 	if got := s.post(t, "PreToolUse", `{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"/a"}}`); strings.Contains(got, "the pool is closed") {
@@ -2396,10 +2396,10 @@ func TestAdviceForASubagentIsAddressedToIt(t *testing.T) {
 	s.pipe.Queue <- ev
 	awaitConsult(t, s)
 
-	if a, ok := s.pipe.Outbox.Take("s1", 0, session.KindToolCall, "agent-8", "explore"); ok {
+	if a, ok := s.pipe.Outbox.Take("s1", 0, time.Now(), session.KindToolCall, "agent-8", "explore"); ok {
 		t.Fatalf("a sibling agent took advice addressed to another: %+v", a)
 	}
-	a, ok := s.pipe.Outbox.Take("s1", 0, session.KindToolCall, "agent-7", "explore")
+	a, ok := s.pipe.Outbox.Take("s1", 0, time.Now(), session.KindToolCall, "agent-7", "explore")
 	if !ok {
 		t.Fatal("no advice was queued for the subagent")
 	}
