@@ -6,6 +6,8 @@ Notable changes to shoulder-daemon. The format follows
 
 ## [Unreleased]
 
+
+## [0.7.0-rc] - 2026-11-01
 ### Changed
 
 - The prompt hook asks the model about the prompt before the assistant reads
