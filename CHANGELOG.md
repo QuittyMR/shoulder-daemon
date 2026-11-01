@@ -6,6 +6,8 @@ Notable changes to shoulder-daemon. The format follows
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-11-01
+
 ### Changed
 
 - The licence is the GNU General Public License, version 3, where it was
