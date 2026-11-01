@@ -6,6 +6,8 @@ Notable changes to shoulder-daemon. The format follows
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-11-01
+
 ### Changed
 
 - Every request to the model asks for JSON at the wire: the chat completion
