@@ -266,3 +266,23 @@ func TestDefaultClientDetectsDeadConnections(t *testing.T) {
 		t.Fatalf("a dead connection is noticed after %v, later than the %v client timeout", tr.HTTP2.SendPingTimeout+tr.HTTP2.PingTimeout, defaultClient.Timeout)
 	}
 }
+
+// Every request asks the provider for JSON at the wire. Nothing this daemon
+// sends wants prose, and a model told so by the API echoes far less.
+func TestEveryRequestAsksForJSON(t *testing.T) {
+	c, got := serve(t, `{"choices":[{"message":{"content":"{}"}}]}`)
+
+	if _, err := c.Complete(context.Background(), "sys", "usr"); err != nil {
+		t.Fatal(err)
+	}
+	if rf, _ := (*got)["response_format"].(map[string]any); rf["type"] != "json_object" {
+		t.Errorf("Complete must ask for json_object, payload = %v", *got)
+	}
+
+	if _, err := c.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if rf, _ := (*got)["response_format"].(map[string]any); rf["type"] != "json_object" {
+		t.Errorf("Chat must ask for json_object, payload = %v", *got)
+	}
+}

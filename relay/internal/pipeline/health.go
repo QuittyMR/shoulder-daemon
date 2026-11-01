@@ -126,7 +126,7 @@ func (p *Pipeline) ProbeModel(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 	msgs := []llm.Message{
-		{Role: "system", Content: "Answer with the single word: ok"},
+		{Role: "system", Content: `Answer with JSON only: {"ok":true}`},
 		{Role: "user", Content: "ok?"},
 	}
 	m, err := prov.Chat(ctx, msgs, nil)

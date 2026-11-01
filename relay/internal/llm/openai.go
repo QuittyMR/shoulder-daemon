@@ -93,11 +93,16 @@ type chatResponse struct {
 	} `json:"choices"`
 }
 
+// payload is the body every request shares. response_format is always set: no
+// call this daemon makes wants prose, and a model asked for JSON at the wire is
+// far less likely to echo a tool result or a stored fact as its whole answer.
+// Extra is applied last, so a preset that needs a different value can set one.
 func (c *OpenAICompatible) payload(msgs []wireMessage) map[string]any {
 	p := map[string]any{
-		"model":       c.Model,
-		"temperature": c.Temperature,
-		"messages":    msgs,
+		"model":           c.Model,
+		"temperature":     c.Temperature,
+		"messages":        msgs,
+		"response_format": map[string]string{"type": "json_object"},
 	}
 	if c.MaxTokens > 0 {
 		p["max_tokens"] = c.MaxTokens

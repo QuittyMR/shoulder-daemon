@@ -6,6 +6,15 @@ Notable changes to shoulder-daemon. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Every request to the model asks for JSON at the wire: the chat completion
+  payload carries `response_format: {"type":"json_object"}` for the
+  decision, the tidying pass, `learn`, `message`, `digest` and the start-up
+  probe. A model that answered with a stored fact or a tool result instead
+  of the decision object did so after a tool call; told at the API level
+  that only JSON is accepted, it is far less likely to.
+
 ## [0.6.2] - 2026-11-01
 
 ### Changed
