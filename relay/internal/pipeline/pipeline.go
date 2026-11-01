@@ -366,6 +366,10 @@ const (
 	// converging and the session is better served by whatever it has already said.
 	decisionSteps = 4
 
+	// rejectedOutputChars is how much of an unparseable model answer the log
+	// keeps. Enough to see what the model said instead of JSON; not a transcript.
+	rejectedOutputChars = 400
+
 	// searchToolLimit caps what the model may ask its own search for. The
 	// number arrives from the model and sizes the next prompt, so an unbounded
 	// one lets a single tool call spend the whole context window.
@@ -489,7 +493,10 @@ func (p *Pipeline) consult(ctx context.Context, sessionID string, ask asker) {
 	decision, err := llm.ParseDecision(raw)
 	if err != nil {
 		p.Metrics.Inc("shoulder_advisor_error_total")
-		p.Log.Warn("decision failed; session unaffected", "session", sessionID, "err", err)
+		// The rejected text goes to the log only. The notice says what failed;
+		// what the model wrote is for whoever reads the log to find out why.
+		p.Log.Warn("decision failed; session unaffected", "session", sessionID, "err", err,
+			"output", textutil.Clip(notify.OneLine(raw), rejectedOutputChars))
 		p.Notify.Push(sessionID, notify.Error, "decision failed: "+notify.OneLine(err.Error()))
 		p.modelFailed(err)
 		return

@@ -12,6 +12,14 @@ Notable changes to shoulder-daemon. The format follows
   MIT: the repository, the Claude Code plugin, the OpenCode plugin and the
   container image say so.
 
+### Fixed
+
+- A decision the daemon could not read as JSON was logged with the error
+  alone, and what the model had written instead was thrown away. The
+  `decision failed` log line now carries the first 400 characters of it,
+  on one line, as `output`. The notice in the editor is unchanged: the
+  text is for the log, not the harness.
+
 ## [0.6.1] - 2026-10-30
 
 ### Added

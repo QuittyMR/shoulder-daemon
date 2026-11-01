@@ -779,6 +779,33 @@ func TestARefusedDecisionIsNoticedAsAnError(t *testing.T) {
 	}
 }
 
+// What the model wrote instead of JSON is the only clue to why, so the log
+// keeps it. The editor does not: the notice names the failure and no more.
+func TestAnUnparseableDecisionIsLoggedVerbatimButNotNoticed(t *testing.T) {
+	body, _ := json.Marshal(map[string]any{
+		"choices": []any{map[string]any{"message": map[string]string{"content": "I will search memory first."}}},
+	})
+	ts := advisorServer(t, 0, string(body))
+	s := newStack(t, ts.URL, 2*time.Second)
+	var buf strings.Builder
+	s.pipe.Log = slog.New(slog.NewTextHandler(&buf, nil))
+	s.pipe.Notify = notify.New(notify.Defaults())
+
+	s.post(t, "UserPromptSubmit", prompt("s1", "hi"))
+	awaitConsult(t, s)
+
+	out := buf.String()
+	if !strings.Contains(out, "no JSON object") || !strings.Contains(out, `output="I will search memory first."`) {
+		t.Fatalf("the rejected text must be in the log: %q", out)
+	}
+	got := notify.Lines(s.pipe.Notify.Drain("s1"))
+	if len(got) < 1 || got[0] != "error: decision failed: no JSON object in model output" {
+		t.Fatalf("notices = %v", got)
+	}
+	if strings.Contains(strings.Join(got, "\n"), "search memory") {
+		t.Fatalf("the rejected text must not reach the editor: %v", got)
+	}
+}
 func TestLocalFactIsStoredUnderTheSessionsProject(t *testing.T) {
 	dir := t.TempDir()
 	ts := atAnswerEnd(t, decisionBody(t, "",
