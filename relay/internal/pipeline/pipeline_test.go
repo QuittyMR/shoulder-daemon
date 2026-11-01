@@ -806,6 +806,7 @@ func TestAnUnparseableDecisionIsLoggedVerbatimButNotNoticed(t *testing.T) {
 		t.Fatalf("the rejected text must not reach the editor: %v", got)
 	}
 }
+
 func TestLocalFactIsStoredUnderTheSessionsProject(t *testing.T) {
 	dir := t.TempDir()
 	ts := atAnswerEnd(t, decisionBody(t, "",
