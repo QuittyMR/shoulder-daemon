@@ -110,8 +110,8 @@ func (f *fakeMemory) asked() []memory.Query {
 	return append([]memory.Query(nil), f.queries...)
 }
 
-// fakeLLM answers by which job it was given: the two CLI prompts want prose,
-// the decision prompt wants the extraction JSON.
+// fakeLLM answers by which job it was given: the two CLI prompts want their
+// one-field object around prose, the decision prompt wants the extraction JSON.
 type fakeLLM struct {
 	mu       sync.Mutex
 	seen     []string
@@ -142,7 +142,15 @@ func (f *fakeLLM) Complete(_ context.Context, system, _ string) (string, error) 
 	case prompts.Learn:
 		return f.learn, nil
 	}
-	return f.prose, nil
+	field := "answer"
+	if system == prompts.Digest {
+		field = "digest"
+	}
+	body, err := json.Marshal(map[string]string{field: f.prose})
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
 }
 
 // Chat exists so the fake still satisfies Provider. The CLI paths ask one

@@ -88,6 +88,35 @@ func Unfence(s string) string {
 	return s
 }
 
+// ParseObject reads one JSON object into v. It is for the answers that are one
+// object and nothing else: a message, a digest. A fence is stripped because a
+// model asked for JSON at the wire still wraps one on occasion; prose around
+// the object is not tolerated, because every prompt forbids it and the wire
+// asks for JSON, so prose is the model refusing the shape rather than decorating it.
+// Every key listed must be present: valid JSON of the wrong shape is a refusal.
+func ParseObject(raw string, v any, keys ...string) error {
+	s := strings.TrimSpace(Unfence(strings.TrimSpace(raw)))
+	if !strings.HasPrefix(s, "{") {
+		return fmt.Errorf("no JSON object in model output")
+	}
+	if err := json.Unmarshal([]byte(s), v); err != nil {
+		return fmt.Errorf("model output JSON: %w", err)
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	var present map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(s), &present); err != nil {
+		return fmt.Errorf("model output JSON: %w", err)
+	}
+	for _, k := range keys {
+		if _, ok := present[k]; !ok {
+			return fmt.Errorf("model output JSON lacks key %q", k)
+		}
+	}
+	return nil
+}
+
 // ParseDecision tolerates the things small models do to JSON: code fences,
 // leading prose, trailing commentary.
 func ParseDecision(raw string) (Decision, error) {
@@ -121,6 +150,17 @@ func ParseDecision(raw string) (Decision, error) {
 		}
 		return Decision{}, fmt.Errorf("decision JSON: %w", err)
 	}
+	var present map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(s[start:end+1]), &present); err != nil {
+		return Decision{}, fmt.Errorf("decision JSON: %w", err)
+	}
+	_, hasInject := present["inject"]
+	_, hasFacts := present["facts"]
+	_, hasKeywords := present["keywords"]
+	if !hasInject && !hasFacts && !hasKeywords {
+		return Decision{}, fmt.Errorf("decision JSON has none of the expected keys inject, facts, keywords")
+	}
+
 	d.Inject = strings.TrimSpace(d.Inject)
 	if sanitize.IsSilent(d.Inject) {
 		d.Inject = ""

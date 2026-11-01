@@ -210,7 +210,7 @@ func TestSessionNoteIsSupersededNotDuplicated(t *testing.T) {
 // one.
 func TestSessionNoteStaysOutOfRecallAndDigest(t *testing.T) {
 	dir := t.TempDir()
-	ts := sequencedAdvisor(t, keywordBody(t, "parser"), keywordBody(t, "parser"), proseBody(t, "A paragraph."))
+	ts := sequencedAdvisor(t, keywordBody(t, "parser"), keywordBody(t, "parser"), digestBody(t, "A paragraph."))
 	s := newStack(t, ts.URL, 2*time.Second)
 	mem := &fakeMemory{listed: map[scope.Scope][]memory.Record{
 		scope.Global: {{ID: "g1", Content: "prefers terse answers", Scope: scope.Global}},

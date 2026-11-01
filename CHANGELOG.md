@@ -14,6 +14,13 @@ Notable changes to shoulder-daemon. The format follows
   probe. A model that answered with a stored fact or a tool result instead
   of the decision object did so after a tool call; told at the API level
   that only JSON is accepted, it is far less likely to.
+- `message` and `digest` answer inside JSON, `{"answer":""}` and
+  `{"digest":""}`, and the daemon reads the field. A prose answer is refused
+  with `no JSON object in model output`, counted on the existing error
+  metric and logged with the first 400 characters of what the model wrote.
+- A decision object with none of the expected keys, `inject`, `facts` or
+  `keywords`, and a `message` or `digest` object without its field, are
+  refused with an error instead of being read as an empty answer.
 
 ## [0.6.2] - 2026-11-01
 

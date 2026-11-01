@@ -145,8 +145,9 @@ func projectOf(t *testing.T, dir string) string {
 	return project
 }
 
-// proseBody wraps a plain answer as a chat completion, which is what the model
-// returns for a message or a digest.
+// proseBody wraps a plain answer as a chat completion. It is what a model
+// that ignored the JSON shape returns, and the tests use it to prove that
+// answer is refused.
 func proseBody(t *testing.T, text string) string {
 	t.Helper()
 	b, err := json.Marshal(map[string]any{
@@ -156,6 +157,26 @@ func proseBody(t *testing.T, text string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// answerBody is a message reply in the shape the message prompt asks for.
+func answerBody(t *testing.T, text string) string {
+	t.Helper()
+	b, err := json.Marshal(map[string]string{"answer": text})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return proseBody(t, string(b))
+}
+
+// digestBody is a digest reply in the shape the digest prompt asks for.
+func digestBody(t *testing.T, text string) string {
+	t.Helper()
+	b, err := json.Marshal(map[string]string{"digest": text})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return proseBody(t, string(b))
 }
 
 // sequencedAdvisor serves one body per call, repeating the last. A message is
@@ -906,7 +927,7 @@ func TestMessageRefusesWithoutAScope(t *testing.T) {
 
 func TestMessageAnswersFromWhatIsStored(t *testing.T) {
 	ts := sequencedAdvisor(t,
-		proseBody(t, "main branch is master"),
+		answerBody(t, "main branch is master"),
 		decisionBody(t, ""))
 	s := newStack(t, ts.URL, 2*time.Second)
 	s.pipe.Memory = &fakeMemory{recalled: map[scope.Scope][]memory.Record{
@@ -929,7 +950,7 @@ func TestMessageAnswersFromWhatIsStored(t *testing.T) {
 
 func TestMessageUpdateNeverWritesNothing(t *testing.T) {
 	ts := sequencedAdvisor(t,
-		proseBody(t, "main branch is master"),
+		answerBody(t, "main branch is master"),
 		decisionBody(t, "", map[string]any{"content": "the main branch is master", "category": "structure", "scope": "global"}))
 	s := newStack(t, ts.URL, 2*time.Second)
 	mem := &fakeMemory{}
@@ -951,7 +972,7 @@ func TestMessageUpdateNeverWritesNothing(t *testing.T) {
 }
 
 func TestMessageUpdateAutoDefersToTheModel(t *testing.T) {
-	ts := sequencedAdvisor(t, proseBody(t, "Nothing much."), decisionBody(t, ""))
+	ts := sequencedAdvisor(t, answerBody(t, "Nothing much."), decisionBody(t, ""))
 	s := newStack(t, ts.URL, 2*time.Second)
 	mem := &fakeMemory{}
 	s.pipe.Memory = mem
@@ -967,11 +988,22 @@ func TestMessageUpdateAutoDefersToTheModel(t *testing.T) {
 	}
 }
 
+func TestMessageRefusesAnswerWithoutItsField(t *testing.T) {
+	ts := sequencedAdvisor(t, proseBody(t, `{"digest":"x"}`))
+	s := newStack(t, ts.URL, 2*time.Second)
+	s.pipe.Memory = &fakeMemory{}
+
+	_, err := s.pipe.Message(context.Background(), MessageRequest{Text: "hello", Scope: scope.Global})
+	if err == nil || !strings.Contains(err.Error(), `lacks key "answer"`) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 // --update is the user saying "record this". A model that found the exchange
 // unremarkable does not get to overrule them.
 func TestMessageUpdateForceWritesEvenWhenTheModelFoundNothing(t *testing.T) {
 	dir := t.TempDir()
-	ts := sequencedAdvisor(t, proseBody(t, "Noted."), decisionBody(t, ""))
+	ts := sequencedAdvisor(t, answerBody(t, "Noted."), decisionBody(t, ""))
 	s := newStack(t, ts.URL, 2*time.Second)
 	mem := &fakeMemory{}
 	s.pipe.Memory = mem
@@ -1005,7 +1037,7 @@ func TestMessageUpdateForceWritesEvenWhenTheModelFoundNothing(t *testing.T) {
 // fact does, rather than landing beside the version it corrects.
 func TestMessageFactSupersedesTheStoredVersionOfItself(t *testing.T) {
 	ts := sequencedAdvisor(t,
-		proseBody(t, "Noted."),
+		answerBody(t, "Noted."),
 		decisionBody(t, "", map[string]any{"content": "the main branch is master", "category": "correction", "scope": "global"}))
 	s := newStack(t, ts.URL, 2*time.Second)
 	mem := &fakeMemory{recalled: map[scope.Scope][]memory.Record{
@@ -1081,7 +1113,7 @@ func TestDigestPresentsBothScopesSeparately(t *testing.T) {
 			}
 		}
 		mu.Unlock()
-		_, _ = w.Write([]byte(proseBody(t, "Two paragraphs of narrative prose.")))
+		_, _ = w.Write([]byte(digestBody(t, "Two paragraphs of narrative prose.")))
 	}))
 	t.Cleanup(ts.Close)
 
@@ -1249,7 +1281,7 @@ func TestRecallKeepsBothScopesWhenNothingIsRanked(t *testing.T) {
 // statement the user made about themselves.
 func TestMessageKeepsAGlobalFactGlobalWhenAskedInsideAProject(t *testing.T) {
 	dir := t.TempDir()
-	ts := sequencedAdvisor(t, proseBody(t, "Noted."),
+	ts := sequencedAdvisor(t, answerBody(t, "Noted."),
 		decisionBody(t, "", map[string]any{
 			"content":  "the user always wants terse answers, in every project",
 			"category": "preference", "scope": "global",
@@ -1277,7 +1309,7 @@ func TestMessageKeepsAGlobalFactGlobalWhenAskedInsideAProject(t *testing.T) {
 // The CLI path drops an undecided scope exactly as the session path does; the
 // request's scope is not a default waiting to be applied.
 func TestMessageDropsAFactTheModelLeftUnscoped(t *testing.T) {
-	ts := sequencedAdvisor(t, proseBody(t, "Noted."),
+	ts := sequencedAdvisor(t, answerBody(t, "Noted."),
 		decisionBody(t, "", map[string]any{"content": "a durable fact about the deploy", "category": "decision"}))
 	s := newStack(t, ts.URL, 2*time.Second)
 	mem := &fakeMemory{}
@@ -2608,5 +2640,37 @@ func TestRunWaitsForEveryConsultOfASession(t *testing.T) {
 	}
 	if n := held.finished.Load(); n != 2 {
 		t.Fatalf("Run returned with %d of the session's 2 consults finished", n)
+	}
+}
+
+// A message or a digest answered in prose is refused, not printed: the model
+// is asked for JSON at the wire and in every prompt, and prose is it refusing.
+func TestMessageRefusesAProseAnswer(t *testing.T) {
+	ts := sequencedAdvisor(t, proseBody(t, "main branch is master"), decisionBody(t, ""))
+	s := newStack(t, ts.URL, 2*time.Second)
+	s.pipe.Memory = &fakeMemory{}
+
+	_, err := s.pipe.Message(context.Background(), MessageRequest{Text: "which branch", Scope: scope.Global})
+	if err == nil || !strings.Contains(err.Error(), "no JSON object") {
+		t.Fatalf("a prose answer must be refused, got %v", err)
+	}
+	if s.srv.Metrics.Get("shoulder_cli_message_error_total") == 0 {
+		t.Error("the refusal must be counted")
+	}
+}
+
+func TestDigestRefusesAProseAnswer(t *testing.T) {
+	ts := advisorServer(t, 0, proseBody(t, "Two paragraphs."))
+	s := newStack(t, ts.URL, 2*time.Second)
+	s.pipe.Memory = &fakeMemory{listed: map[scope.Scope][]memory.Record{
+		scope.Global: {{ID: "g1", Content: "prefers terse answers", Category: "preference", Scope: scope.Global}},
+	}}
+
+	_, err := s.pipe.Digest(context.Background(), DigestRequest{Scope: scope.Global})
+	if err == nil || !strings.Contains(err.Error(), "no JSON object") {
+		t.Fatalf("a prose digest must be refused, got %v", err)
+	}
+	if s.srv.Metrics.Get("shoulder_cli_digest_error_total") == 0 {
+		t.Error("the refusal must be counted")
 	}
 }

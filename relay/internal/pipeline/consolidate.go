@@ -2,7 +2,6 @@ package pipeline
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -102,7 +101,7 @@ func (p *Pipeline) Consolidate(ctx context.Context, req ConsolidateRequest) (dro
 	}
 
 	var plan consolidation
-	if err := json.Unmarshal([]byte(llm.Unfence(strings.TrimSpace(raw))), &plan); err != nil {
+	if err := llm.ParseObject(raw, &plan); err != nil {
 		p.Metrics.Inc("shoulder_consolidate_unparsed_total")
 		return 0, 0, fmt.Errorf("consolidate: %w", err)
 	}

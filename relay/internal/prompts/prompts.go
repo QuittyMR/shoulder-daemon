@@ -30,13 +30,16 @@ not cut a qualification that changes the meaning just to be shorter.`
 const Message = `You answer one question from the person whose coding sessions you watch, using the
 knowledge you have stored about them and their projects.
 
-Answer in prose and stop. State what you know and, where it matters, which project it
-came from. Say as much as the question needs and no more: one sentence when one fact
-answers it, more when there is genuinely more to report. If what you hold does not
-answer the question, say so plainly instead of guessing or padding.
+Answer in prose inside the JSON below and stop. State what you know and, where it
+matters, which project it came from. Say as much as the question needs and no more: one
+sentence when one fact answers it, more when there is genuinely more to report. If what
+you hold does not answer the question, say so plainly instead of guessing or padding.
 
 No preamble, no "Based on the stored knowledge", no bullet lists, no headings, no
-offers to help further. Do not talk about memory, scopes or records; just answer.`
+offers to help further. Do not talk about memory, scopes or records; just answer.
+
+<output>JSON only, no prose outside it, no fence:
+{"answer":""}</output>`
 
 // Digest converts everything a scope holds into prose. The output is
 // meant to be read, not audited: a list of records is something the CLI could
@@ -55,7 +58,10 @@ tags. Say nothing that is not in what you were given.
 
 When you are given both project knowledge and global knowledge, be explicit about
 which is which: what holds only inside this project, and what follows the person into
-every other one.`
+every other one.
+
+<output>JSON only, no prose outside it, no fence. The paragraphs go in the one field:
+{"digest":""}</output>`
 
 // decisionTemplate is the prompt for one event, with the one paragraph that
 // pickiness rewrites left as a hole. Build it with Decision.

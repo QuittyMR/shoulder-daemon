@@ -143,3 +143,59 @@ func TestParseDecisionWithoutKeywords(t *testing.T) {
 		t.Fatalf("keywords = %q", d.Keywords)
 	}
 }
+
+func TestParseObjectTakesOneObjectAndNothingElse(t *testing.T) {
+	var v struct {
+		Answer string `json:"answer"`
+	}
+	for _, raw := range []string{
+		`{"answer":"yes"}`,
+		"  {\"answer\":\"yes\"}\n",
+		"```json\n{\"answer\":\"yes\"}\n```",
+	} {
+		v.Answer = ""
+		if err := ParseObject(raw, &v); err != nil || v.Answer != "yes" {
+			t.Errorf("%q: got %q err %v", raw, v.Answer, err)
+		}
+	}
+	for _, raw := range []string{
+		"",
+		"yes",
+		`Sure: {"answer":"yes"}`,
+		`{"answer":"yes"`,
+	} {
+		if err := ParseObject(raw, &v); err == nil {
+			t.Errorf("%q must be refused", raw)
+		}
+	}
+}
+
+func TestParseDecisionRefusesAnObjectWithNoExpectedKey(t *testing.T) {
+	if _, err := ParseDecision(`{"fact":"x"}`); err == nil {
+		t.Fatal(`{"fact":"x"} must be refused`)
+	}
+}
+
+func TestParseDecisionAcceptsAnyOneExpectedKey(t *testing.T) {
+	for _, raw := range []string{`{"inject":""}`, `{"facts":[]}`, `{"keywords":[]}`} {
+		if _, err := ParseDecision(raw); err != nil {
+			t.Errorf("%s: %v", raw, err)
+		}
+	}
+}
+
+func TestParseObjectRequiresTheNamedKeys(t *testing.T) {
+	var v struct {
+		Answer string `json:"answer"`
+	}
+	err := ParseObject(`{}`, &v, "answer")
+	if err == nil || !strings.Contains(err.Error(), `lacks key "answer"`) {
+		t.Fatalf("{} must be refused for the missing key, got %v", err)
+	}
+	if err := ParseObject(`{"answer":""}`, &v, "answer"); err != nil {
+		t.Errorf("key present: %v", err)
+	}
+	if err := ParseObject(`{}`, &v); err != nil {
+		t.Errorf("no required keys: %v", err)
+	}
+}

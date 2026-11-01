@@ -1594,7 +1594,15 @@ func (p *Pipeline) Message(ctx context.Context, req MessageRequest) (MessageRepl
 		p.Metrics.Inc("shoulder_cli_message_error_total")
 		return MessageReply{}, fmt.Errorf("message: %w", err)
 	}
-	reply := strings.TrimSpace(raw)
+	var answer struct {
+		Answer string `json:"answer"`
+	}
+	if err := llm.ParseObject(raw, &answer, "answer"); err != nil {
+		p.Metrics.Inc("shoulder_cli_message_error_total")
+		p.Log.Warn("message answer was not JSON", "err", err, "output", textutil.Clip(notify.OneLine(raw), rejectedOutputChars))
+		return MessageReply{}, fmt.Errorf("message: %w", err)
+	}
+	reply := strings.TrimSpace(answer.Answer)
 
 	if req.Update == UpdateNever {
 		return MessageReply{Reply: reply}, nil
@@ -1689,7 +1697,15 @@ func (p *Pipeline) Digest(ctx context.Context, req DigestRequest) (string, error
 		p.Metrics.Inc("shoulder_cli_digest_error_total")
 		return "", fmt.Errorf("digest: %w", err)
 	}
-	return strings.TrimSpace(raw), nil
+	var digest struct {
+		Digest string `json:"digest"`
+	}
+	if err := llm.ParseObject(raw, &digest, "digest"); err != nil {
+		p.Metrics.Inc("shoulder_cli_digest_error_total")
+		p.Log.Warn("digest answer was not JSON", "err", err, "output", textutil.Clip(notify.OneLine(raw), rejectedOutputChars))
+		return "", fmt.Errorf("digest: %w", err)
+	}
+	return strings.TrimSpace(digest.Digest), nil
 }
 
 // listFor reads each requested scope in full. Unlike a recall, a failure here
