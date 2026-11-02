@@ -159,9 +159,10 @@ func latestRelease(ctx context.Context) (string, error) {
 // latestCandidate asks the module proxy for every tag and returns the newest,
 // release candidates included. The proxy's own "latest" never names a
 // candidate while a release exists, which is right for everyone who did not
-// ask for one.
+// ask for one. Only `update --rc` asks, never doctor, so the proxy may take
+// the seconds a list it has not cached needs.
 func latestCandidate(ctx context.Context) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, listURL, nil)
 	if err != nil {
