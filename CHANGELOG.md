@@ -6,6 +6,18 @@ Notable changes to shoulder-daemon. The format follows
 
 ## [Unreleased]
 
+## [0.7.1-rc] - 2026-11-03
+
+### Fixed
+
+- A candidate's npm package is published under the `rc` dist-tag. npm
+  refuses a pre-release version without one, so the v0.7.0-rc npm job
+  failed; and `latest` is what a plain install reads, so a candidate must
+  not take it.
+- `shoulderd update --rc` gives the module proxy ten seconds to list the
+  tags instead of two. The first ask after a tag fetches a list the proxy
+  has not cached, and that took longer than two seconds.
+
 ## [0.7.0-rc] - 2026-11-01
 
 ### Added
