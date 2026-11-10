@@ -2,7 +2,6 @@ package pipeline
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -64,7 +63,6 @@ func (p *Pipeline) modelAnswered() {
 	p.health.last = ModelHealth{State: ModelOK, Since: time.Now()}
 	if was.State == ModelFailing {
 		p.Log.Info("decision model answers again", "after", was.Failures)
-		p.Notify.PushAll(p.liveSessions(), notify.Error, fmt.Sprintf("the decision model answers again, after %d refused calls", was.Failures))
 	}
 }
 
