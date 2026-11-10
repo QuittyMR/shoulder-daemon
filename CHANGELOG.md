@@ -6,6 +6,13 @@ Notable changes to shoulder-daemon. The format follows
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-10
+
+### Changed
+
+- The assistant is no longer told that the decision model answers again after
+  refused calls. The recovery is still written to the log.
+
 ## [0.7.1-rc] - 2026-11-03
 
 ### Fixed
