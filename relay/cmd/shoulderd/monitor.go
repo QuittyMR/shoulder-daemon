@@ -20,8 +20,8 @@ import (
 
 const monitorUsage = `usage: shoulderd monitor [--log=PATH] [--all] [--no-follow] [--json]
 
-Watch facts move: stored, superseded, merged, dropped, refused, and advice
-queued and injected. Everything else in the log is left out.
+Watch facts move: stored, superseded, merged, dropped, deleted, refused, and
+advice queued and injected. Everything else in the log is left out.
 
   --log PATH   the daemon's log file (default: SHOULDER_LOG, or
                ~/.local/share/shoulder-daemon/shoulderd.log)
@@ -49,6 +49,7 @@ var movements = map[string]string{
 	"fact superseded":                  "superseded",
 	"facts merged":                     "merged",
 	"fact dropped as no longer a rule": "dropped",
+	"fact deleted":                     "deleted",
 	"dry run: would store fact":        "dry-run",
 	"advice queued":                    "queued",
 	"advice injected":                  "injected",

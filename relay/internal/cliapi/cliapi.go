@@ -187,8 +187,10 @@ func (s *Server) handleFacts(w http.ResponseWriter, r *http.Request) {
 		s.listFacts(w, r)
 	case http.MethodPost, http.MethodPatch:
 		s.writeFact(w, r)
+	case http.MethodDelete:
+		s.deleteFact(w, r)
 	default:
-		s.fail(w, http.StatusMethodNotAllowed, errors.New("use GET to list, POST to add, PATCH to update"))
+		s.fail(w, http.StatusMethodNotAllowed, errors.New("use GET to list, POST to add, PATCH to update, DELETE to delete"))
 	}
 }
 
@@ -286,6 +288,58 @@ func (s *Server) listFacts(w http.ResponseWriter, r *http.Request) {
 		found = []memory.Record{}
 	}
 	writeJSON(w, http.StatusOK, FactsResponse{Facts: found})
+}
+
+// deleteFact removes one fact the user named. The record is looked up in the
+// scope they passed before anything is removed: the store treats an id it does
+// not hold there as already gone, and a person who typed the wrong scope would
+// be told a fact was deleted that is still recalled.
+func (s *Server) deleteFact(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	id := strings.TrimSpace(q.Get("id"))
+	if id == "" {
+		s.fail(w, http.StatusBadRequest, errors.New("no id to delete: pass --id"))
+		return
+	}
+	project := q.Get("project")
+	sc, err := requireScope(q.Get("scope"), project)
+	if err != nil {
+		s.fail(w, http.StatusBadRequest, err)
+		return
+	}
+	where := memory.Query{Scope: sc}
+	if sc == scope.Local {
+		where.Project, where.Dir = project, q.Get("dir")
+	}
+	wctx, done := pipeline.Decided(r.Context())
+	defer done()
+	held, err := s.Pipe.Memory.List(wctx, where)
+	if err != nil {
+		s.failed(w, err)
+		return
+	}
+	var target *memory.Record
+	for i := range held {
+		if held[i].ID == id {
+			target = &held[i]
+			break
+		}
+	}
+	if target == nil {
+		s.Pipe.Metrics.Inc("shoulder_cli_fact_wrong_scope_total")
+		writeJSON(w, http.StatusNotFound, map[string]string{
+			"error": fmt.Sprintf("nothing was deleted: fact %s is not in %s scope; `fact list` shows the ids that are", id, sc),
+		})
+		return
+	}
+	if err := s.Pipe.Memory.Forget(wctx, id, where); err != nil {
+		s.failed(w, err)
+		return
+	}
+	s.Pipe.Metrics.Inc("shoulder_cli_fact_deleted_total")
+	s.Pipe.Log.Info("fact deleted", "id", id, "origin", "cli", "scope", sc,
+		"project", scope.Label(where.Project), "category", target.Category, "content", target.Content)
+	writeJSON(w, http.StatusOK, FactResponse{ID: id})
 }
 
 type DigestRequest struct {

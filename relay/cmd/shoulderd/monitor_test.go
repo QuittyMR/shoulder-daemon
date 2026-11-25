@@ -22,6 +22,7 @@ const sampleLog = `{"time":"2026-09-05T10:00:00.000Z","level":"INFO","msg":"shou
 {"time":"2026-09-05T10:00:09.000Z","level":"WARN","msg":"decision failed; session unaffected","session":"s1","err":"gemini status 400: [{\n  \"error\": {\n    \"message\": \"Please pass a valid API key\"\n  }\n}]"}
 {"time":"2026-09-05T10:00:10.000Z","level":"WARN","msg":"decision model stopped answering; nothing is learned until it does","err":"timeout"}
 {"time":"2026-09-05T10:00:11.000Z","level":"INFO","msg":"decision model answers again","after":3}
+{"time":"2026-09-05T10:00:12.000Z","level":"INFO","msg":"fact deleted","id":"mem_3","origin":"cli","scope":"global","project":"","category":"preference","content":"long answers"}
 `
 
 func TestMonitorFiltersToMovements(t *testing.T) {
@@ -35,8 +36,8 @@ func TestMonitorFiltersToMovements(t *testing.T) {
 		t.Fatalf("exit %d, stderr %q", code, errOut.String())
 	}
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
-	if len(lines) != 10 {
-		t.Fatalf("want 10 movements, got %d:\n%s", len(lines), out.String())
+	if len(lines) != 11 {
+		t.Fatalf("want 11 movements, got %d:\n%s", len(lines), out.String())
 	}
 	for _, unwanted := range []string{"listening", "hook received"} {
 		if strings.Contains(out.String(), unwanted) {
@@ -62,6 +63,7 @@ func TestMonitorFiltersToMovements(t *testing.T) {
 		`failed      session s1                err=gemini status 400: [{ "error": { "message": "Please pass a valid API key" } }]  (decision failed; session unaffected)`,
 		`model down   err=timeout  (decision model stopped answering; nothing is learned until it does)`,
 		`model up     after=3`,
+		`deleted     global                   [cli]  (preference) "long answers"  id=mem_3`,
 	} {
 		if !strings.Contains(lines[i], want) {
 			t.Errorf("line %d\n got %q\nwant it to contain %q", i, lines[i], want)

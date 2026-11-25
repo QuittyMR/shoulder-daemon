@@ -99,6 +99,7 @@ const usage = `usage:
   shoulderd fact add    --local|--global [--category=C] [--tag=T]... [--private] "content"
   shoulderd fact update --local|--global --id=ID [--category=C] [--tag=T]... [--private] "content"
   shoulderd fact list   [--local|--global] [--limit=N]
+  shoulderd fact delete --local|--global --id=ID
   shoulderd digest      [--local|--global]
   shoulderd consolidate --local|--global
   shoulderd learn --local|--global [--replace] [PATH...]       read the docs already written
@@ -204,7 +205,20 @@ With neither flag this shows this project alone, so a fact added with --global
 is missing from it until you ask for --global.
 ` + projectIs
 
-const factUsage = factAddUsage + "\n" + factUpdateUsage + "\n" + factListUsage
+const factDeleteUsage = `usage: shoulderd fact delete --local|--global --id=ID [--addr=URL]
+
+Delete a stored fact. This cannot be undone.
+
+  --local      this project only          } exactly one is required;
+  --global     you, in every project      } there is no default
+  --id ID      the fact to delete; required. ` + "`fact list`" + ` shows the ids
+  --addr URL   relay base URL (default http://127.0.0.1:8787)
+
+The named fact must be in the scope you pass: a fact that is not there is
+reported, and nothing is deleted.
+` + projectIs
+
+const factUsage = factAddUsage + "\n" + factUpdateUsage + "\n" + factListUsage + "\n" + factDeleteUsage
 
 const digestUsage = `usage: shoulderd digest [--local|--global] [--addr=URL]
 
@@ -449,7 +463,7 @@ func (c *cli) message(args []string) int {
 
 func (c *cli) fact(args []string) int {
 	if len(args) == 0 {
-		return c.reject(errors.New("fact needs a verb: add, update or list"))
+		return c.reject(errors.New("fact needs a verb: add, update, list or delete"))
 	}
 	switch args[0] {
 	case "add":
@@ -458,11 +472,13 @@ func (c *cli) fact(args []string) int {
 		return c.factWrite("update", http.MethodPatch, args[1:])
 	case "list":
 		return c.factList(args[1:])
+	case "delete":
+		return c.factDelete(args[1:])
 	case "help", "-h", "-help", "--help":
 		fmt.Fprint(c.out, factUsage)
 		return 0
 	}
-	return c.reject(fmt.Errorf("unknown fact verb %q: use add, update or list", args[0]))
+	return c.reject(fmt.Errorf("unknown fact verb %q: use add, update, list or delete", args[0]))
 }
 
 func (c *cli) factWrite(verb, method string, args []string) int {
@@ -608,6 +624,43 @@ func (c *cli) digest(args []string) int {
 		return code
 	}
 	fmt.Fprintln(c.out, reply.Digest)
+	return 0
+}
+
+func (c *cli) factDelete(args []string) int {
+	fs := c.flags("fact delete", factDeleteUsage)
+	addr := bindAddr(fs)
+	var sf scopeFlags
+	sf.bind(fs)
+	id := fs.String("id", "", "id of the fact to delete")
+	if code := c.parse(fs, args); code >= 0 {
+		return code
+	}
+	if fs.NArg() > 0 {
+		return c.reject(fmt.Errorf("fact delete takes no arguments, got %q; name the fact with --id", fs.Arg(0)))
+	}
+	if *id == "" {
+		return c.reject(errors.New("fact delete needs --id=ID: `fact list` shows the ids"))
+	}
+	// The scope is never guessed, as for a write: deletion is the one verb
+	// with nothing to fall back on.
+	sc, project, err := sf.forWriting()
+	if err != nil {
+		return c.reject(err)
+	}
+
+	q := url.Values{"scope": {string(sc)}, "id": {*id}}
+	if project != "" {
+		q.Set("project", project)
+	}
+	if dir := cwd(); dir != "" {
+		q.Set("dir", dir)
+	}
+	var reply cliapi.FactResponse
+	if code := c.call(*addr, http.MethodDelete, "/v1/cli/facts?"+q.Encode(), nil, &reply); code != 0 {
+		return code
+	}
+	fmt.Fprintln(c.out, "deleted")
 	return 0
 }
 

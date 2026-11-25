@@ -193,6 +193,7 @@ func TestFactWritesRefuseToPickAScope(t *testing.T) {
 	for _, args := range [][]string{
 		{"fact", "add", "a fact"},
 		{"fact", "update", "--id", "x", "a fact"},
+		{"fact", "delete", "--id", "x"},
 	} {
 		t.Run(args[1], func(t *testing.T) {
 			d := newDaemon(t, `{"id":"mem_1"}`)
@@ -315,6 +316,53 @@ func TestFactUpdatePatches(t *testing.T) {
 	}
 }
 
+func TestFactDeleteNeedsAnID(t *testing.T) {
+	d := newDaemon(t, `{"id":"mem_1"}`)
+	code, _, stderr := run(t, "fact", "delete", "--addr", d.URL, "--global")
+	if code != 2 {
+		t.Fatalf("exit %d, want 2: %s", code, stderr)
+	}
+	if !strings.Contains(stderr, "--id") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+	if d.req().calls != 0 {
+		t.Fatal("a delete that names no fact reached the daemon")
+	}
+}
+
+func TestFactDeleteSendsTheIDAndTheScope(t *testing.T) {
+	d := newDaemon(t, `{"id":"mem_2"}`)
+	code, stdout, stderr := run(t, "fact", "delete", "--addr", d.URL, "--global", "--id", "mem_2")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	got := d.req()
+	if got.method != http.MethodDelete {
+		t.Fatalf("method = %s", got.method)
+	}
+	if got.query.Get("id") != "mem_2" || got.query.Get("scope") != "global" {
+		t.Fatalf("query = %v", got.query)
+	}
+	if got.query.Get("project") != "" {
+		t.Fatalf("a global delete named project %q", got.query.Get("project"))
+	}
+	if stdout != "deleted\n" {
+		t.Fatalf("stdout = %q", stdout)
+	}
+}
+
+func TestFactDeleteOfAFactThatIsNotThereFails(t *testing.T) {
+	d := newDaemon(t, `{"error":"nothing was deleted: fact mem_2 is not in global scope"}`)
+	d.status = http.StatusNotFound
+	code, stdout, stderr := run(t, "fact", "delete", "--addr", d.URL, "--global", "--id", "mem_2")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1: %s", code, stderr)
+	}
+	if stdout != "" || !strings.Contains(stderr, "nothing was deleted") {
+		t.Fatalf("stdout = %q, stderr = %q", stdout, stderr)
+	}
+}
+
 func TestFactList(t *testing.T) {
 	d := newDaemon(t, `{"facts":[{"id":"a","content":"one","category":"structure"},{"id":"b","content":"two"}]}`)
 	code, stdout, stderr := run(t, "fact", "list", "--addr", d.URL, "--global", "--limit", "3")
@@ -383,7 +431,7 @@ func TestUnknownSubcommandPrintsEveryCommand(t *testing.T) {
 	if code != 2 {
 		t.Fatalf("exit %d, want 2", code)
 	}
-	for _, want := range []string{"remember", "doctor", "message", "fact add", "fact update", "fact list", "digest", "learn", "memory migrate"} {
+	for _, want := range []string{"remember", "doctor", "message", "fact add", "fact update", "fact list", "fact delete", "digest", "learn", "memory migrate"} {
 		if !strings.Contains(stderr, want) {
 			t.Fatalf("usage does not mention %q:\n%s", want, stderr)
 		}
@@ -467,10 +515,11 @@ func TestSubcommandHelpTeachesTheScopeContract(t *testing.T) {
 		args []string
 		want []string
 	}{
-		{[]string{"fact", "--help"}, []string{"fact add", "fact update", "fact list"}},
+		{[]string{"fact", "--help"}, []string{"fact add", "fact update", "fact list", "fact delete"}},
 		{[]string{"fact", "add", "--help"}, []string{"--local", "--global", "required", `"content"`}},
 		{[]string{"fact", "update", "--help"}, []string{"--id ID", "required", "never moves it"}},
 		{[]string{"fact", "list", "--help"}, []string{"(default)", "--global"}},
+		{[]string{"fact", "delete", "--help"}, []string{"--id ID", "required", "cannot be undone"}},
 		{[]string{"message", "--help"}, []string{"(default)", "--no-update"}},
 		{[]string{"digest", "--help"}, []string{"covers both"}},
 		{[]string{"learn", "--help"}, []string{"--local", "--global", "required", "--replace", "docs/"}},

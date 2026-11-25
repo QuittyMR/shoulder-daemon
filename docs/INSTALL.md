@@ -444,6 +444,7 @@ shoulderd fact add  --local  --private --category=structure "postgres listens on
 shoulderd fact add  --global --category=preference --tag=style "prefers terse answers"
 shoulderd fact update --local  --id=<id> "the integration tests need a live Postgres on 5544"
 shoulderd fact list  --local  --limit=20
+shoulderd fact delete --local --id=<id>
 
 shoulderd digest              # both scopes, as prose
 shoulderd digest --local
@@ -479,7 +480,7 @@ is refused by name. It never deletes a document that produced nothing, one the m
 the daemon's own files. `--keep-old` is the default spelled out. Expect minutes, not seconds: it is one model
 call per section of every document, bounded by `LEARN_TIMEOUT_SECONDS` (1800).
 
-`fact add`, `fact update` and `learn` require `--local` or `--global`; omitting it is an error that
+`fact add`, `fact update`, `fact delete` and `learn` require `--local` or `--global`; omitting it is an error that
 names both. `message` and `fact list` default to the project you are standing in, and a bare `digest`
 covers both scopes. The project is the root of the git worktree, or the working directory itself
 when that is not a checkout.
@@ -528,7 +529,7 @@ shoulderd monitor --json          # the raw records
 ```
 
 It reads the log file from section 5 - `--log=PATH` names another - and keeps the lines about
-facts: stored, superseded, merged and dropped by the tidying pass, refused or failed writes, and
+facts: stored, superseded, deleted, merged and dropped by the tidying pass, refused or failed writes, and
 advice queued and injected. Each line carries the time, the scope and project or the session, the
 category and the text, and the ids involved. A fact typed with `shoulderd fact add` shows as
 `[cli]`. A daemon on `SHOULDER_LOG=stderr` writes no file, so there is nothing for `monitor` to

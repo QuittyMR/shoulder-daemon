@@ -206,6 +206,7 @@ $ shoulderd fact add --global "I prefer terse answers with no preamble"
 $ shoulderd fact add --local --category=fact "integration tests need a live Postgres"
 $ shoulderd fact add --local --private "postgres listens on 5433 on this machine"
 $ shoulderd fact list --local
+$ shoulderd fact delete --local --id=<id>
 $ shoulderd digest                      # narrative summary; --local or --global to narrow
 $ shoulderd learn --local               # read the docs this repository already has
 ```
@@ -272,7 +273,7 @@ shoulderd monitor
 ```
 
 This follows the daemon's log and shows only the facts moving: stored,
-superseded, merged, dropped, refused, and advice queued and injected, one line
+superseded, merged, dropped, deleted, refused, and advice queued and injected, one line
 each with the text, and every decision the model refused, since that is what
 stops the rest. It opens on the last twenty and waits for more; `--all`
 shows the whole file, `--no-follow` prints and exits, `--json` passes the raw

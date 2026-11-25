@@ -6,6 +6,12 @@ Notable changes to shoulder-daemon. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `shoulderd fact delete --local|--global --id=ID` deletes one stored fact.
+  The scope is required, and an id that is not in that scope is reported and
+  nothing is deleted. `shoulderd monitor` shows the deletion as `deleted`.
+
 ## [0.7.1] - 2026-11-10
 
 ### Changed

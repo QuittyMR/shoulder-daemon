@@ -300,6 +300,7 @@ func TestUnscopedRequestsNameTheFlag(t *testing.T) {
 		{"fact add", http.MethodPost, "/v1/cli/facts", `{"content":"a fact"}`},
 		{"fact update", http.MethodPatch, "/v1/cli/facts", `{"id":"x","content":"a fact"}`},
 		{"fact list", http.MethodGet, "/v1/cli/facts", ""},
+		{"fact delete", http.MethodDelete, "/v1/cli/facts?id=x", ""},
 		{"memory migrate", http.MethodPost, "/v1/cli/migrate", `{}`},
 		{"learn", http.MethodPost, "/v1/cli/learn", `{}`},
 	}
@@ -413,6 +414,87 @@ func TestFactUpdateNeedsAnID(t *testing.T) {
 	}
 }
 
+func TestFactDeleteForgetsInTheScopeItWasGiven(t *testing.T) {
+	h, mem, m := newTestServer(t, "", &fakeLLM{})
+	mem.held[scope.Local] = []memory.Record{{ID: "l1", Content: "the tests need docker", Scope: scope.Local, Project: "/p"}}
+
+	rec := do(t, h, http.MethodDelete, "/v1/cli/facts?scope=local&project=/p&id=l1", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := decode[FactResponse](t, rec).ID; got != "l1" {
+		t.Fatalf("id = %q", got)
+	}
+	if q := mem.asked()[0]; q.Scope != scope.Local || q.Project != "/p" {
+		t.Fatalf("the id was looked for in %+v, not the scope the caller claimed", q)
+	}
+	if len(mem.forgotten) != 1 || mem.forgotten[0] != "l1" {
+		t.Fatalf("forgotten %v", mem.forgotten)
+	}
+	if m.Get("shoulder_cli_fact_deleted_total") != 1 {
+		t.Fatal("the delete was not counted")
+	}
+}
+
+func TestFactDeleteNeedsAnID(t *testing.T) {
+	h, mem, _ := newTestServer(t, "", &fakeLLM{})
+	rec := do(t, h, http.MethodDelete, "/v1/cli/facts?scope=global", "")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+	if msg := errorOf(t, rec); !strings.Contains(msg, "--id") {
+		t.Fatalf("error %q does not name the flag", msg)
+	}
+	if len(mem.forgotten) != 0 {
+		t.Fatalf("forgotten %v", mem.forgotten)
+	}
+}
+
+func TestFactDeleteRefusesAnIDThatIsNotInTheScope(t *testing.T) {
+	cases := []struct {
+		name string
+		held map[scope.Scope][]memory.Record
+		path string
+		want string
+	}{
+		{
+			name: "a global preference deleted as one project's",
+			held: map[scope.Scope][]memory.Record{scope.Global: {{ID: "g1", Content: "prefers terse answers", Scope: scope.Global}}},
+			path: "/v1/cli/facts?scope=local&project=/p&id=g1",
+			want: "not in local scope",
+		},
+		{
+			name: "another project's record deleted from here",
+			held: map[scope.Scope][]memory.Record{scope.Local: {{ID: "a1", Content: "the tests need docker", Scope: scope.Local, Project: "/a"}}},
+			path: "/v1/cli/facts?scope=local&project=/b&id=a1",
+			want: "not in local scope",
+		},
+		{
+			name: "an id nothing holds",
+			held: map[scope.Scope][]memory.Record{},
+			path: "/v1/cli/facts?scope=global&id=typo",
+			want: "not in global scope",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h, mem, _ := newTestServer(t, "", &fakeLLM{})
+			mem.held = c.held
+
+			rec := do(t, h, http.MethodDelete, c.path, "")
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("status %d, want 404: %s", rec.Code, rec.Body.String())
+			}
+			if msg := errorOf(t, rec); !strings.Contains(msg, c.want) || !strings.Contains(msg, "nothing was deleted") {
+				t.Fatalf("error %q does not say the fact is not in this scope", msg)
+			}
+			if len(mem.forgotten) != 0 {
+				t.Fatalf("a record outside the scope was deleted: %v", mem.forgotten)
+			}
+		})
+	}
+}
+
 func TestFactListReadsOneScope(t *testing.T) {
 	h, mem, _ := newTestServer(t, "", &fakeLLM{})
 	mem.held[scope.Local] = []memory.Record{{ID: "a", Content: "one", Scope: scope.Local, Project: "/p"}}
@@ -498,8 +580,8 @@ func TestWrongMethodIsRefused(t *testing.T) {
 			t.Fatalf("GET %s = %d, want 405", path, rec.Code)
 		}
 	}
-	if rec := do(t, h, http.MethodDelete, "/v1/cli/facts", ""); rec.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("DELETE /v1/cli/facts = %d, want 405", rec.Code)
+	if rec := do(t, h, http.MethodPut, "/v1/cli/facts", ""); rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("PUT /v1/cli/facts = %d, want 405", rec.Code)
 	}
 }
 
