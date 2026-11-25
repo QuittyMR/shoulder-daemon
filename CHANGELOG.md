@@ -6,6 +6,8 @@ Notable changes to shoulder-daemon. The format follows
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-11-25
+
 ### Added
 
 - `shoulderd fact delete --local|--global --id=ID` deletes one stored fact.
