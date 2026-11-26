@@ -96,6 +96,34 @@ func TestAnExplicitModelBeatsTheEnvironment(t *testing.T) {
 	}
 }
 
+// OpenCode Go refuses a request that carries no session id, and the id has to
+// stay the same from one call to the next.
+func TestOpenCodeGoSendsOneSessionIDAndItsOwnUserAgent(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("OPENCODE_API_KEY", "k")
+	p, err := Configure("opencode-go", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := p.(*OpenAICompatible).Headers
+	if len(h["x-opencode-session"]) != 32 {
+		t.Fatalf("x-opencode-session = %q, want 32 hex characters", h["x-opencode-session"])
+	}
+	if h["User-Agent"] != "shoulder-daemon" {
+		t.Fatalf("User-Agent = %q, want shoulder-daemon", h["User-Agent"])
+	}
+
+	clearEnv(t)
+	t.Setenv("GEMINI_API_KEY", "k")
+	p, err = Configure("gemini", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h := p.(*OpenAICompatible).Headers; len(h) != 0 {
+		t.Fatalf("gemini headers = %v, want none", h)
+	}
+}
+
 // With no model asked for anywhere, the preset's own default is the answer.
 func TestAProviderFallsBackToItsOwnDefaultModel(t *testing.T) {
 	clearEnv(t)

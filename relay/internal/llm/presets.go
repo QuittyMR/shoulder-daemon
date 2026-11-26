@@ -1,6 +1,8 @@
 package llm
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
@@ -15,6 +17,12 @@ type Preset struct {
 	DefaultModel string
 	KeyEnv       string
 	Extra        map[string]any
+	// SessionHeader names a header the provider wants a stable id in. The id
+	// is drawn once per built provider, so every call of one daemon shares it.
+	SessionHeader string
+	// UserAgent replaces the Go HTTP library's own, for a provider that
+	// refuses or throttles a generic one.
+	UserAgent string
 }
 
 var presets = map[string]Preset{
@@ -72,6 +80,10 @@ var presets = map[string]Preset{
 		BaseURL:      "https://opencode.ai/zen/go/v1",
 		DefaultModel: "glm-5.3-flash",
 		KeyEnv:       "OPENCODE_API_KEY",
+		// The gateway answers 400 MissingSessionID without the session
+		// header, and asks a client to name itself.
+		SessionHeader: "x-opencode-session",
+		UserAgent:     "shoulder-daemon",
 	},
 	"local": {
 		BaseURL:      "http://127.0.0.1:11434/v1",
@@ -192,8 +204,23 @@ func build(name string, allowOverrides bool, model string) (Provider, error) {
 		model = p.DefaultModel
 	}
 
+	var headers map[string]string
+	if p.UserAgent != "" {
+		headers = map[string]string{"User-Agent": p.UserAgent}
+	}
+	if p.SessionHeader != "" {
+		id := make([]byte, 16)
+		if _, err := rand.Read(id); err != nil {
+			return nil, fmt.Errorf("provider %q: session id: %w", name, err)
+		}
+		if headers == nil {
+			headers = map[string]string{}
+		}
+		headers[p.SessionHeader] = hex.EncodeToString(id)
+	}
+
 	return &OpenAICompatible{
 		Label: name, BaseURL: base, APIKey: key, Model: model,
-		MaxTokens: 1200, Temperature: 0.2, Extra: p.Extra,
+		MaxTokens: 1200, Temperature: 0.2, Extra: p.Extra, Headers: headers,
 	}, nil
 }

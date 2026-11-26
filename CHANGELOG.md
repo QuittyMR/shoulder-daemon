@@ -6,6 +6,13 @@ Notable changes to shoulder-daemon. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- The `opencode-go` provider works again. OpenCode Go now answers
+  `400 MissingSessionID` to a request without an `x-opencode-session`
+  header. The daemon sends one id for all its calls, and names itself
+  `shoulder-daemon` in the user agent.
+
 ## [0.7.2] - 2026-11-25
 
 ### Added
