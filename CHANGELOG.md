@@ -6,6 +6,8 @@ Notable changes to shoulder-daemon. The format follows
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-11-26
+
 ### Fixed
 
 - The `opencode-go` provider works again. OpenCode Go now answers
