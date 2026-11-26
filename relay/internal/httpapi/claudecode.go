@@ -17,6 +17,8 @@ type claudeEvent struct {
 	// smaller set than the events the relay accepts: PreCompact only fires
 	// around a context compaction and PostToolUseFailure only when a tool
 	// errors, so never having seen either proves nothing about the install.
+	// SessionEnd is not routine either: the daemon stops when the last session
+	// ends, so one that is running has usually not seen any.
 	routine bool
 	// agent marks an event that only ever fires from inside a subagent.
 	agent bool
@@ -44,7 +46,7 @@ var claudeEvents = map[string]claudeEvent{
 	"SubagentStart": {kind: session.KindAgentStart, agent: true},
 	"SubagentStop":  {kind: session.KindAnswerEnd, agent: true},
 	"PreCompact":    {kind: session.KindCompact},
-	"SessionEnd":    {kind: session.KindSessionEnd, routine: true},
+	"SessionEnd":    {kind: session.KindSessionEnd},
 }
 
 // RoutineEvents lists, in a stable order, the events doctor expects to have

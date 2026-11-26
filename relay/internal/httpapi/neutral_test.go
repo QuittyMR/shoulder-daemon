@@ -22,7 +22,7 @@ func postNeutral(h http.Handler, body string, token ...string) *httptest.Respons
 
 func TestRoutineEventsAreTheOnesAWorkingInstallMustHaveSeen(t *testing.T) {
 	got := RoutineEvents()
-	want := []string{"PostToolUse", "PreToolUse", "SessionEnd", "Stop", "UserPromptSubmit"}
+	want := []string{"PostToolUse", "PreToolUse", "Stop", "UserPromptSubmit"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("RoutineEvents = %v, want %v (sorted, without the events a session may never produce)", got, want)
 	}

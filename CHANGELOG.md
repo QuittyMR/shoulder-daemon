@@ -12,6 +12,9 @@ Notable changes to shoulder-daemon. The format follows
   `400 MissingSessionID` to a request without an `x-opencode-session`
   header. The daemon sends one id for all its calls, and names itself
   `shoulder-daemon` in the user agent.
+- `shoulderd doctor` no longer fails because `SessionEnd` never fired. The
+  daemon stops when the last session ends, so a running daemon has usually
+  seen none.
 
 ## [0.7.2] - 2026-11-25
 
