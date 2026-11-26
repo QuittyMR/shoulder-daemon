@@ -259,7 +259,9 @@ func stop(sid, text string) string {
 // TestAdviceIsDeliveredOnTheNextHook is the core mechanism: Stop captures and
 // triggers, and the advice arrives on whichever hook fires next.
 func TestAdviceIsDeliveredOnTheNextHook(t *testing.T) {
-	ts := advisorServer(t, 0, decisionBody(t, "the marker advice"))
+	// Silent at the prompt: a consult that answers before the prompt's own
+	// hook has collected would be delivered on that prompt, not the next.
+	ts := atAnswerEnd(t, decisionBody(t, "the marker advice"))
 	s := newStack(t, ts.URL, 2*time.Second)
 
 	s.post(t, "UserPromptSubmit", prompt("s1", "do the thing"))
@@ -402,7 +404,9 @@ func BenchmarkHookRoundTrip(b *testing.B) {
 // silently discarded advice a fraction of a second before the next prompt
 // collected it, so the whole pipeline looked healthy and injected nothing.
 func TestAdviceSurvivesSessionEnd(t *testing.T) {
-	ts := advisorServer(t, 0, decisionBody(t, "the marker advice"))
+	// Silent at the prompt: a consult that answers before the prompt's own
+	// hook has collected would be delivered on that prompt, not after the end.
+	ts := atAnswerEnd(t, decisionBody(t, "the marker advice"))
 	s := newStack(t, ts.URL, 2*time.Second)
 
 	s.promptAndAnswer(t, prompt("resumed", "first prompt"), stop("resumed", "done"))
